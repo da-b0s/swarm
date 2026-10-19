@@ -1,7 +1,7 @@
 # How Swarm was built in Arc Studio
 
-Project: _pending — from `arc-studio apps --json`_
-Turns: _in progress, from 19 October 2026_
+Project: https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9
+Turns: in progress, from 19 October 2026
 
 Every turn below was run through the Arc Studio CLI (`@circle-fin/arc-studio-cli`
 v1.2.1) with `--output json`. The exact prompt for each turn is committed under
@@ -42,10 +42,81 @@ instead of a mock.
 ## Turn 1 — core contracts
 
 Prompt: [`studio/prompts/turn-01-contracts.md`](studio/prompts/turn-01-contracts.md)
+Result: [`studio/runs/turn-01.json`](studio/runs/turn-01.json) · status `needs_input`
 
-_Studio generated:_ _pending_
-_What I kept:_ _pending_
-_What I corrected:_ _pending_
+**Studio generated** four contracts — `SwarmTypes.sol`, `DealFactory.sol`,
+`DemandPool.sol`, `Settler.sol` (18 / 144 / 173 / 143 lines). It started from an
+OpenZeppelin scaffold, used manual owner logic rather than importing `Ownable`,
+and ran two auditors plus a structure digest over its own output before replying.
+
+**What it got right without being asked.** Custom errors rather than require
+strings. Swap-and-pop buyer removal with the index map kept consistent, including
+the case where the withdrawer is the last element. `claimable` accumulating across
+deals rather than per deal. A settler-only `setDealState` enforcing `0 → 1` or
+`0 → 2` and nothing else. It also honoured every Arc-specific constraint in the
+prompt: no `msg.value`, no `block.prevrandao`, `block.timestamp` for deadline
+comparison only, and the 6-decimal ERC-20 interface throughout.
+
+**What it got wrong, and I caught in review.**
+
+- `commit()` never emitted `TierBroken`. The downward break is the entire product
+  and it produced no event at all; `withdraw()` emitted it for upward moves only.
+  Both the frontend and `/proof` key off that event.
+- `withdraw()` pushed USDC directly with `USDC.transfer(msg.sender, amount)`.
+  Arc reverts transfers to blocklisted addresses, so a blocklisted buyer could not
+  withdraw at all — and the prompt had asked for pull payments everywhere.
+- The conservation check was a bare `assert`, which raises `Panic(0x01)` and burns
+  all remaining gas, turning a detectable accounting bug into an expensive
+  mystery.
+
+**What it found that I had also found independently.** Its functional auditor
+reached the withdrawal squeeze: a withdrawal raises the live price, so a buyer who
+committed at high volume can owe more at settlement than they escrowed, and
+`paid - cp` underflows. I had reached the same failure from the other direction,
+by modelling the mechanism in `tools/model.mjs` and fuzzing it — it arises in about
+0.5% of random commit/withdraw sequences. Two independent routes to the same bug is
+the most reassuring thing that happened all day.
+
+Its reasoning is worth reading in full
+([`studio/runs/turn-01.finalText.md`](studio/runs/turn-01.finalText.md)): it
+cycles through top-up-on-withdrawal, `refund = paid > cp ? paid - cp : 0`,
+deducting the shortfall from supplier credit, and capping the clearing price at the
+minimum escrow, rejecting each in turn — "no, that breaks the spec", "but then
+supplier doesn't get a uniform clearing price", "but that violates conservation" —
+before implementing per-buyer `min(escrowed, cp)` and stopping to ask rather than
+deciding for me. Stopping to ask was the right call and it is the single most
+useful thing Studio did in this turn.
+
+**Where I disagreed with its answer.** Per-buyer `min(escrowed, cp)` is solvent and
+does prevent the fund-lock, but it means different buyers pay different amounts for
+the same deal, which forfeits the single-clearing-price property the entire product
+and the whole "why Arc" argument rest on. I was not willing to make that claim
+99.5% true. My own candidate — clamping the clearing price to the lowest escrow —
+keeps one price but I then found it gameable: commit at the bottom tier,
+mass-withdraw, and settlement drags to the bottom tier for everyone at the
+supplier's expense ($12.50 instead of $18.75 on the campaign curve).
+
+So neither of our fixes was good enough, and the answer was to remove the failure
+rather than handle it. See Turn 1b.
+
+## Turn 1b — uniform top-tier collateral
+
+Prompt: [`studio/prompts/turn-01b-fixes.md`](studio/prompts/turn-01b-fixes.md)
+
+Answered the planning question with `fix_first` and specified the mechanism change:
+every buyer escrows `tiers[0].price` — the top of the curve — whenever they commit,
+and is refunded down to the clearing price at settlement.
+
+This deviates from the brief, which says commit "escrows the CURRENT tier price".
+The deviation is deliberate and it is the most substantive engineering decision in
+the project: under uniform collateral nobody can be underwater, so the clearing
+price is always the volume-unlocked tier price, every refund is identical, there is
+no per-buyer rounding, withdrawals need no restrictions, and conservation is
+trivially exact. It also removes a race in gasless commits that neither the brief
+nor Studio had spotted — an EIP-3009 authorization is signed for a fixed amount, so
+a commit price that moves between signing and relaying would invalidate it.
+
+_Result:_ _pending_
 
 ## Turn 2 — tests
 
