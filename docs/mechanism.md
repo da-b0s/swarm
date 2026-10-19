@@ -92,11 +92,80 @@ correct expected numbers, asserted individually. Had we passed the blueprint's
 wording to Studio, we would have got either a failing test or — much worse — a
 contract quietly bent to satisfy a wrong expectation.
 
+## The pricing point, decided
+
+A buyer pays the tier price at the buyer count **including their own commit**. On
+the campaign curve, buyer 25 pays $0.75 and buyer 24 pays $1.00 — so "buyer 25
+exactly triggers tier 2" is literally true, which is how the brief words its
+boundary test.
+
+This is economically immaterial (the difference is refunded at settlement either
+way) but it changes every expected number, so it is pinned here: 51 buyers split
+**24 / 25 / 2** across the three tiers, commits total **$43.75**, refunds
+**$18.25**, supplier **$25.50**.
+
+## The withdrawal squeeze — a fund-locking bug in the mechanism as specified
+
+The brief requires that "a tier must be able to un-break": a withdrawal lowers
+volume, so the live price goes back **up**. That interacts badly with the refund
+calculation, and the interaction is not mentioned anywhere in the brief.
+
+A buyer who commits when volume is high escrows a **low** tier price. If enough
+earlier buyers then withdraw, the final clearing price can end up **above** what
+that buyer escrowed. The natural refund expression `paid - clearing` then
+underflows:
+
+```
+curve 10@$1.00  25@$0.75  50@$0.50, min 10
+
+50 buyers commit         -> buyer 50 escrows $0.50
+25 earliest withdraw     -> volume 25, tier price back to $0.75
+settle()                 -> buyer 50: 500000 - 750000  ->  underflow, revert
+```
+
+In Solidity 0.8 that reverts. `settle()` then reverts **forever**, and
+`refundAll()` also reverts because 25 buyers is still above the minimum of 10. The
+deal has no exit and **every participant's escrow is permanently stuck**.
+
+It is not a corner case. Fuzzing random commit/withdraw sequences, the condition
+arises in **about 0.5%** of them:
+
+```
+$ node tools/scenarios.mjs
+pass  the squeeze is reachable  — 25 buyers remain, tier price $0.75
+pass  an underwater buyer exists  — b49 escrowed $0.5 but clearing is $0.75
+pass  UNCLAMPED settlement breaks conservation  — short by $0.25
+pass  CLAMPED settlement is solvent  — $18.5 == $18.5
+      the squeeze arose naturally in 235 of 50000 sequences (0.5%)
+```
+
+### The fix
+
+**Settlement never clears above the lowest price actually escrowed.** The contract
+cannot charge a buyer more after the fact, so:
+
+```
+clearing = min( tierPrice(finalCount), min(escrowed) )
+```
+
+With no withdrawals the two terms are equal and nothing changes. Conservation
+still holds exactly, because every buyer has escrowed at least the clearing price:
+
+```
+sum(paid) = clearing x n + sum(paid - clearing)
+```
+
+The alternative — letting the price rise and demanding the difference — is not
+available, because nothing can compel a buyer to top up after committing. Clamping
+is the only solvent option, and it is the one that keeps the all-or-nothing promise
+honest.
+
 ## Edge cases the contract must get right
 
 | Case | Required behaviour |
 |---|---|
 | Withdrawal un-breaks a tier | Live price goes back **up**. A tier is not sticky. |
+| Clearing after withdrawals | Never above the lowest price escrowed — see the squeeze above. |
 | Buyer removal from the middle | Swap-and-pop; no stale index, no array corruption. |
 | Boundary | `n >= tier.minBuyers`, not `>`. Buyer 25 exactly triggers tier 2. |
 | Below minimum | `refundAll` returns every commit in full; supplier gets nothing. |
