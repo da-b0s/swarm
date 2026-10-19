@@ -1,0 +1,15 @@
+{
+  "name": "swarm-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Offchain tooling for Swarm: economics checks and onchain proof generation.",
+  "scripts": {
+    "curve": "node curve.mjs",
+    "fuzz": "node curve.mjs --fuzz 20000",
+    "proof": "node proof.mjs"
+  },
+  "dependencies": {
+    "viem": "2.21.55"
+  }
+}

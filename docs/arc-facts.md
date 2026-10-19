@@ -43,6 +43,15 @@ Mainnet is documented with full setup details. The docs never print the words
 StableFX (`FxEscrow`) is permissioned; USYC is institution-only with a $100k
 minimum. Neither belongs in Swarm.
 
+## Measured on testnet, 19 Oct 2026
+
+| Fact | Value | Why it matters |
+|---|---|---|
+| Block time | **~0.506 s** | Confirms the "sub-second" claim with a number we measured, not quoted. A 48h campaign spans ~342,000 blocks. |
+| Head block (testnet) | 67,981,885 | The chain is tens of millions of blocks deep. **Never scan logs from genesis** — record the deploy block and scan from there. |
+| `eth_getLogs` max range | **~6,000-12,000 blocks** on the public RPC | Wider ranges are rejected. `tools/proof.mjs` halves its window on rejection and defaults to 5,000. |
+| Log history | not pruned | A one-off `pruned history unavailable` on the public RPC turned out to be transient; genesis-range queries succeed. Expect the occasional spurious failure and retry. |
+
 ## Gotchas that will bite
 
 | Trap | Rule |
