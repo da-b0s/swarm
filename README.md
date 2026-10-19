@@ -31,7 +31,7 @@ the opposite: it aggregates **many buyers into one price**.
 ```
 postDeal(tiers[], minBuyers, deadline, cap)   supplier posts the curve
         │
-commit(dealId)        buyer escrows the CURRENT tier price
+commit(dealId)        buyer escrows the TOP tier price as collateral
         │             live price recomputed → everyone sees the tier break
         │
 withdraw(dealId)      exit before deadline; a tier can UN-break
@@ -41,29 +41,31 @@ withdraw(dealId)      exit before deadline; a tier can UN-break
      committed >= minBuyers  →  settle()
         │
 settle(dealId)   clearing = lowest tier price unlocked by final volume
-                 for each buyer: claimable[b] += paid − clearing
+                 every buyer: claimable[b] += collateral − clearing
                  claimable[supplier] += clearing × buyerCount
                  ── ALL IN ONE TRANSACTION ──
         │
 claim()          buyers pull refunds, supplier pulls proceeds
 ```
 
-A buyer pays the tier price in force when **they** commit. Everyone settles at the
-clearing price the **final** volume unlocked. The difference comes back.
+Every buyer locks up the **same** collateral — the highest price on the curve —
+whenever they commit. Everyone settles at the clearing price the **final** volume
+unlocked, and the difference comes back. One price for everybody,
+unconditionally; see [why collateral](#why-collateral-and-not-pay-as-you-commit).
 
 ### Worked example
 
 Curve: **$10 each at 10 buyers, $8 at 25, $6 at 50**. Minimum 10, deadline 48h.
 51 buyers commit.
 
+- Every buyer escrows **$10**, the top of the curve, whenever they join
+- At 25 buyers the price breaks to **$8**; at 50 it breaks to **$6**
 - Clearing price: **$6**
-- Buyers 1–25 paid $10 → refunded **$4** each
-- Buyers 26–50 paid $8 → refunded **$2** each
-- Buyer 51 paid $6 → refunded nothing
+- Every buyer refunded **$4** — the same amount for all 51
 - Supplier credited 51 × $6 = **$306**
-- Commits in: $456. Refunds out: $150. Supplier: $306. **$306 + $150 = $456.**
+- Commits in: $510. Refunds out: $204. Supplier: $306. **$306 + $204 = $510.**
 
-Nobody had to trust anybody.
+Nobody had to trust anybody, and nobody paid a different price from anybody else.
 
 > v1 caps unit price at 5 USDC, so the live campaign runs a curve of the same shape
 > inside that cap ($1.00 / $0.75 / $0.50). The $10/$8/$6 numbers above are easier to
@@ -83,6 +85,42 @@ $ node tools/curve.mjs --fuzz 20000
 conservation failures: 0
 invariant holds: supplier credit + refunds == sum of commits, exactly
 ```
+
+## Why collateral, and not pay-as-you-commit
+
+The obvious design is to escrow whatever the price is when you commit. It does not
+survive contact with the withdrawal rule.
+
+A withdrawal lowers volume, so the live price goes back **up**. A buyer who
+committed while volume was high escrowed a **low** price — and can end up owing
+more at settlement than they ever escrowed. Nothing can compel them to top up
+after the fact, so settlement has no solvent move: the natural `paid − clearing`
+refund underflows, `settle()` reverts permanently, and `refundAll()` also reverts
+because the deal is still above its minimum. Every participant's funds are stuck.
+Fuzzing random commit/withdraw sequences, that state arises in about **0.5%** of
+them.
+
+Patching it per-buyer (`min(escrowed, clearing)`) is solvent but means different
+buyers pay different amounts, which forfeits the single-clearing-price property
+this whole design rests on. Clamping the clearing price down to the lowest escrow
+keeps one price but hands a coalition a lever: commit at the bottom tier,
+mass-withdraw, and drag settlement to the bottom for everyone at the supplier's
+expense.
+
+Uniform top-tier collateral removes the failure instead of handling it. Nobody can
+be underwater, so the clearing price is always affordable, every refund is
+identical, withdrawals need no restrictions, and the invariant is trivially exact:
+
+```
+collateral × n  ==  clearing × n  +  (collateral − clearing) × n
+```
+
+It also removes a race in gasless commits: an EIP-3009 authorization is signed for
+a fixed amount, so a commit price that moves between signing and relaying would
+invalidate it. Fixed collateral cannot race.
+
+The reasoning and all three rejected alternatives are reproducible:
+`node tools/scenarios.mjs`.
 
 ## Why this needs Arc
 
@@ -139,7 +177,10 @@ docs/arc-facts.md        chain IDs, predeploys, gotchas - verified against live 
 docs/mechanism.md        the spec Studio implements, and defects found in the brief
 studio/prompts/          the exact prompts driving each Arc Studio turn
 studio/runs/             Studio result documents, kept as provenance
+tools/model.mjs          the mechanism as pure integer arithmetic
 tools/curve.mjs          economics checker: clearing price, refunds, conservation
+tools/scenarios.mjs      edge cases, and why the escrow design changed
+tools/proof.mjs          reads chain events into the PROOF.md tables
 onchain/                 contracts pulled from Studio
 web/                     frontend pulled from Studio
 STUDIO.md                how this was built in Arc Studio, turn by turn

@@ -40,15 +40,28 @@ export function validateCurve(tiers, minBuyers, capPrice = 5n * UNIT, capBuyers 
  * Replay a commit/withdraw sequence, then settle.
  *
  * ops: [{type:'commit'|'withdraw', who}]
- * opts.pricingPoint:
- *   'after'  — the buyer pays clearingPrice(countIncludingThem).   <- chosen
- *   'before' — the buyer pays clearingPrice(countBeforeThem).
- * opts.clampClearing:
- *   true  — clearing price may not exceed the lowest price actually escrowed.
- *   false — reproduce the unclamped behaviour, to demonstrate the failure.
+ *
+ * opts.escrow — how much a buyer locks up when they commit:
+ *   'topTier'    — tiers[0].price, the highest price on the curve.   <- CHOSEN
+ *                  Nobody can be underwater, so settlement always clears at
+ *                  clearingPrice(finalCount) and every refund is identical.
+ *   'commitTime' — clearingPrice(count at their commit). The brief's wording,
+ *                  rejected: see tools/scenarios.mjs for the three reasons.
+ *
+ * opts.pricingPoint (only with 'commitTime'):
+ *   'after'  — pays clearingPrice(countIncludingThem).
+ *   'before' — pays clearingPrice(countBeforeThem).
+ *
+ * opts.clampClearing (only with 'commitTime'):
+ *   true  — clearing may not exceed the lowest price escrowed (one price, gameable).
+ *   false — unclamped, to demonstrate the underflow/fund-lock.
  */
 export function run(tiers, minBuyers, ops, opts = {}) {
-  const { pricingPoint = 'after', clampClearing = true, capBuyers = 100 } = opts;
+  const {
+    escrow = 'topTier', pricingPoint = 'after',
+    clampClearing = true, capBuyers = 100,
+  } = opts;
+  const topTier = tiers[0].price;
 
   const paidBy = new Map(); // who -> price escrowed
   const order = [];         // buyer array, as the contract keeps it
@@ -60,8 +73,12 @@ export function run(tiers, minBuyers, ops, opts = {}) {
       if (paidBy.has(op.who)) continue;      // one commit per address
       if (order.length >= capBuyers) continue;
       order.push(op.who);
-      const n = pricingPoint === 'after' ? order.length : order.length - 1;
-      paidBy.set(op.who, clearingPrice(tiers, n));
+      if (escrow === 'topTier') {
+        paidBy.set(op.who, topTier);
+      } else {
+        const n = pricingPoint === 'after' ? order.length : order.length - 1;
+        paidBy.set(op.who, clearingPrice(tiers, n));
+      }
     } else {
       if (!paidBy.has(op.who)) continue;
       paidBy.delete(op.who);
@@ -85,10 +102,12 @@ export function run(tiers, minBuyers, ops, opts = {}) {
   const tierPrice = clearingPrice(tiers, committed);
   const lowestEscrowed = [...paidBy.values()].reduce((a, b) => (b < a ? b : a));
 
-  // A withdrawal can push the volume-unlocked price back UP, above what a late
-  // buyer escrowed. The contract cannot charge a buyer more after the fact, so
-  // settlement can never clear above the lowest price actually escrowed.
-  const clearing = clampClearing && lowestEscrowed < tierPrice ? lowestEscrowed : tierPrice;
+  // With top-tier collateral every buyer escrowed the highest price on the curve,
+  // so the volume-unlocked price is always affordable and no clamp is needed.
+  // With commit-time escrow a withdrawal can push the price above what a late
+  // buyer locked up, and the contract cannot charge them more after the fact.
+  const clamp = escrow === 'commitTime' && clampClearing && lowestEscrowed < tierPrice;
+  const clearing = clamp ? lowestEscrowed : tierPrice;
   const clamped = clearing !== tierPrice;
 
   const refunds = new Map();

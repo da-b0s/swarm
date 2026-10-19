@@ -1,19 +1,37 @@
-Write Foundry tests for Swarm covering:
+Write Foundry tests for Swarm. Use the curve (10 buyers @ $1.00, 25 @ $0.75, 50 @ $0.50) with minBuyers 10 throughout unless a test says otherwise. Remember every buyer collateralizes the top tier, $1.00, whenever they commit.
 
-1. A three-tier happy path on the curve (10 buyers @ $1.00, 25 @ $0.75, 50 @ $0.50), minBuyers 10, with 51 buyers committing in order. A buyer pays the tier price at the buyer count INCLUDING their own commit, so the expected outcome is exactly: clearing price $0.50; buyers 1-24 paid $1.00 and are refunded $0.50 each; buyers 25-49 paid $0.75 and are refunded $0.25 each; buyers 50-51 paid $0.50 and are refunded nothing; supplier credited $25.50; refunds total $18.25; commits total $43.75. Assert each of those numbers individually.
-2. A conservation property test (fuzz/invariant) asserting supplier credit plus all refunds exactly equals the sum of commits for any random commit sequence, including sequences with withdrawals interleaved.
-3. A deal below the minimum refunding everyone in full, supplier credited nothing.
-4. A deal exactly at the minimum, settling at tier 1.
-5. Buyer number 25 exactly triggering tier 2 - assert the boundary is >= and not >.
-6. Withdrawal before the deadline un-breaking a tier: 25 commits break tier 2, one withdraws, the live price returns to tier 1, a new commit breaks it again.
-7. Double commit from the same address reverting.
-8. Settling before the deadline reverting.
-9. Double settlement reverting, and settle-after-refundAll and refundAll-after-settle both reverting.
-10. 100 buyers settling within the block gas limit - print the gas used.
-11. 6-decimal rounding leaving no stranded dust: assert the contract's USDC balance is exactly zero after every participant claims.
-12. A blocklisted buyer being unable to block other buyers' refunds. Use the known blocklisted testnet address 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 rather than a mock where possible.
-13. Reentrancy on claim via a malicious receiver that re-enters: cannot drain.
-14. pause() halting postDeal and commit while settle, refundAll and claim still work.
-15. THE WITHDRAWAL SQUEEZE - this one is load-bearing. 50 buyers commit, so the last of them escrows the bottom $0.50 tier. Then 25 of the earliest buyers withdraw. Volume falls to 25, so the volume-unlocked tier price climbs back to $0.75 - above the $0.50 that the late buyers escrowed. Assert that settle() still succeeds, that it clears at $0.50 (never above the lowest price actually escrowed), that conservation holds exactly, and that every participant can claim. A naive `paid - clearingPrice` underflows here, which would revert settle() forever while refundAll() also reverts for being above the minimum - locking every participant's funds. Assert the deal cannot reach that state.
+1. Happy path, three tiers, 51 buyers committing in order. Assert each of these individually: every buyer escrowed exactly $1.00; the clearing price is $0.50; every buyer is refunded exactly $0.50, the same amount for all of them; the supplier is credited exactly $25.50; refunds total $25.50; commits total $51.00.
 
-Run them and show the full output, including gas for test 10.
+2. Conservation property test (fuzz or invariant): supplier credit plus all refunds exactly equals the sum of all commits, for any random sequence of commits and withdrawals. This is the project's flagship test - make it a real fuzz test over sequence length and withdrawal placement, not a fixed case.
+
+3. A deal below the minimum: refundAll returns every buyer their full $1.00 collateral and the supplier is credited nothing.
+
+4. A deal exactly at the minimum, 10 buyers: settles at tier 1, clearing $1.00, every refund zero.
+
+5. Tier boundary: assert clearingPrice is $1.00 at 24 buyers and $0.75 at 25 buyers. The boundary is >=, not >.
+
+6. Withdrawal un-breaks a tier: 25 commits take the live price to $0.75, one buyer withdraws, the live price returns to $1.00, a further commit breaks it to $0.75 again. The withdrawer gets their full $1.00 back as claimable.
+
+7. Double commit from the same address reverts.
+
+8. Settling before the deadline reverts.
+
+9. Double settlement reverts; settle after refundAll reverts; refundAll after settle reverts.
+
+10. Gas bound: 100 buyers settle in a single transaction within the block gas limit. Print the gas used.
+
+11. Gasless commit: a wallet with zero native balance commits via EIP-3009 and the gas is billed to the relayer.
+
+12. Rounding and dust: after every participant claims, the contracts' USDC balance is exactly zero. Assert conservation to the wei, not to the cent.
+
+13. Pull safety: a blocklisted buyer cannot block any other buyer's refund or the supplier's proceeds. Use the known blocklisted testnet address 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 against the real blocklist rather than a mock where that is possible.
+
+14. Reentrancy on claim: a malicious receiver that re-enters claim() cannot drain.
+
+15. pause() halts postDeal and commit while settle, refundAll and claim all still work.
+
+16. The withdrawal squeeze - this is the test that justifies the collateral design, so assert it precisely. 50 buyers commit, taking the live price to $0.50. Then the 25 earliest buyers withdraw, so volume falls to 25 and the live price climbs back to $0.75. Assert that settle() succeeds, that it clears at $0.75, that each of the 25 remaining buyers is refunded exactly $0.25, that the supplier is credited $18.75, that commits totalled $25.00, and that conservation is exact. Under commit-time escrow this sequence would leave a buyer who had escrowed $0.50 facing a $0.75 clearing price, underflowing the refund and reverting settle() permanently while refundAll() also reverted for being above the minimum. Assert that no state exists in which both settle() and refundAll() revert for a deal past its deadline.
+
+17. Withdrawals are never restricted: a buyer can withdraw at any point before the deadline regardless of what it does to the live price, and always recovers exactly $1.00.
+
+Run the full suite and show the output, including the gas figure from test 10.
