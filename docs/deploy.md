@@ -109,6 +109,44 @@ arc-cast send $POOL    'setSettler(address)'    $SETTLER --rpc-url $RPC --privat
 On mainnet add `--gas-price 25gwei` or higher. Never below 20 gwei: beneath the floor
 a transaction vanishes with no error and no receipt.
 
+## Gotchas that cost time
+
+**`--create` is a subcommand of `arc-cast send`, not a flag.** Every option must
+come before it; anything after it is consumed as constructor arguments. So
+`arc-cast send --create $CODE $SIG $ARGS --rpc-url $RPC` fails with
+"unexpected argument '--rpc-url'". Correct form:
+
+```bash
+arc-cast send --rpc-url $RPC --private-key $KEY --json --create $CODE $SIG $ARGS
+```
+
+**Prefer `arc-forge create` over `arc-cast send --create`.** Both work, but on
+testnet the same three deploys plus three wiring calls cost **1.865 USDC** through
+`arc-cast send --create` and **0.072 USDC** through `arc-forge create` — roughly 25x,
+because of how each sets the gas price by default. On mainnet that is the difference
+between a rounding error and a noticeable share of the budget. `arc-forge create`
+also compiles from source, so the deployed bytecode provably matches the repo.
+
+**Foundry does not auto-remap `node_modules` here.** Studio's `foundry.toml`
+declares only `libs = ["lib"]`, and `lib/` holds just `forge-std` — OpenZeppelin
+comes from `node_modules`. Building outside the sandbox needs the remapping passed
+explicitly, or every import fails to resolve:
+
+```bash
+npm install --no-save @openzeppelin/contracts@5.1.0
+arc-forge test --remappings "@openzeppelin/=node_modules/@openzeppelin/" -vv
+```
+
+**Shell scripts edited on Windows get CRLF**, and `bash` then rejects line 7 with
+`set: pipefail: invalid option name`, which looks like a Foundry problem and is not.
+Normalize before running:
+
+```bash
+python -c "p='x.sh';b=open(p,'rb').read();open(p,'wb').write(b.replace(b'
+',b'
+'))"
+```
+
 ## Verify before recording anything
 
 Nothing goes into `README.md`, `.env` or `PROOF.md` until this agrees:

@@ -34,3 +34,32 @@ Display rules, which matter on Arc specifically: every contract value is 6-decim
 Committing needs an ERC-20 approval for the amount being escrowed. Handle the approve-then-commit sequence as one flow with clear progress, and remember the live price can move between the two.
 
 The page must work logged out: a stranger sees the live price, the buyer count and the countdown with no wallet connected, and is only asked for a wallet at the moment they commit.
+
+DEPLOYED CONTRACTS — point the app at these for the live preview
+
+Arc testnet, chain 5042002, all three wired and verified from chain:
+
+```
+DealFactory  0x5b646D21e0b4a21364b226edFCDc5E5F4e6E110f
+DemandPool   0x2Eab29C0d1F9FF0B0ba9385324611BbC2670CfEB
+Settler      0xB4dFC8b4Baa856eB9B6bB7087Ed72615452874C5
+deployed at  block 68162131
+```
+
+These were deployed and wired outside Studio from a deployer wallet I control, so do not redeploy or try to wire them. Read the ABIs from the contracts in the workspace.
+
+Make the network and the three addresses configuration, not constants buried in components — mainnet is a different chain id and a different set of addresses, and the app has to switch to chain 5042 for the real launch without a rewrite. Default to mainnet config with testnet selectable, so the production build is the default rather than an afterthought.
+
+Event signatures as deployed, for the /proof page:
+
+```
+DealPosted(uint256 indexed dealId, address indexed supplier, uint32 minBuyers, uint64 deadline, uint64 startPrice)
+Committed(uint256 indexed dealId, address indexed buyer, uint64 pricePaid, uint64 livePrice, uint32 buyerCount)
+Withdrawn(uint256 indexed dealId, address indexed buyer, uint64 amountReturned, uint64 livePrice, uint32 buyerCount)
+TierBroken(uint256 indexed dealId, uint32 newBuyerCount, uint64 newPrice)
+Settled(uint256 indexed dealId, uint64 clearingPrice, uint32 buyerCount, uint256 totalRefunds)
+Refunded(uint256 indexed dealId, address indexed buyer, uint256 amount)
+Claimed(address indexed claimant, uint256 amount)
+```
+
+One measured constraint: the public Arc RPC rejects an `eth_getLogs` range that is too wide, and its limit depends on how many topics you filter on — with seven event types, windows of about 2,000 blocks work and 6,000 do not. Page the scan and narrow on rejection rather than assuming a fixed window.

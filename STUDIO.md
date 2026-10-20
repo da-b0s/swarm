@@ -237,14 +237,74 @@ in a specification, the first move should be to look for the narrowest change th
 satisfies it, not to replace the mechanism. Two Studio turns went into collateral and
 this one unwinds them.
 
-_Result:_ _pending_
+Result: [`studio/runs/turn-01d.json`](studio/runs/turn-01d.json) · status `needs_input`
 
-## Turn 2 — tests
+The revert landed, and the withdrawal precondition is implemented well. Rather than
+loop the buyer array on every withdrawal, it keeps a per-deal tally of how many
+buyers sit at each tier price and scans tiers from cheapest upward for the first
+with a remaining buyer — bounded by tier count, not buyer count. Measured later at
+**58,088 gas for a withdrawal out of 60 buyers**, flat rather than linear.
 
-Prompt: [`studio/prompts/turn-02-tests.md`](studio/prompts/turn-02-tests.md)
+Its functional auditor flagged the precondition as wrong; Studio worked through the
+scenario, concluded the finding was a false positive, and explained why. Checked
+against the model independently at 24, 25, 26 and the test-6 case, its reasoning was
+correct — which is worth recording, because an agent that can defend its own code
+against a bad review is more useful than one that changes it on every complaint.
 
-_Tests generated:_ _pending_
-_Failed on first run:_ _pending_
+It then added a `block.chainid != 5042002` guard to all three constructors as a
+"security improvement". **That would have made the mainnet deploy revert in the
+constructor**, on chain 5042, which is the entire point of the project. Caught in
+review; removal requested in the next turn. Running the suite locally afterwards
+proved the guard was breaking the tests too — `setUp()` reverted `WrongChain()` at
+Foundry's chain id 31337.
+
+**Why this turn ended in `needs_input`.** It deployed three contracts, could not
+wire them, and asked to create a **Standard Developer API Key on the Circle account,
+granting access to all developer products**, written into the project. Declined.
+The underlying constraint is structural: Studio deploys from a Circle-managed SCP
+wallet whose key its sandbox does not hold, so it can create contracts but cannot
+send the three owner transactions that connect them. That is why deployment moved
+out of Studio entirely — see [`docs/deploy.md`](docs/deploy.md).
+
+## Turn 2 — chain guard removal and the test suite
+
+Prompt: [`studio/prompts/turn-02-guard-and-tests.md`](studio/prompts/turn-02-guard-and-tests.md)
+Result: [`studio/runs/turn-02.json`](studio/runs/turn-02.json) · status `completed`
+
+Removed all three `WrongChain` guards and wrote the suite: `SwarmTest.t.sol` plus
+three mock helpers (`MockERC20`, `MockBlocklistedERC20`, `MockReentrantERC20`).
+
+**It reported "Tests complete" with no output at all.** The workspace said otherwise:
+`cache/test-failures` named `test_ReentrancyOnClaim`, and there was a persisted fuzz
+counterexample for `testFuzz_Conservation` with args `55, 60`. Both turned out to be
+**stale artifacts** from earlier in the same turn rather than the final state — the
+suite was in fact green — but there was no way to know that from the reply, which is
+the problem. A suite reported green without evidence is worth nothing.
+
+## Turn 2b — the actual test output
+
+Prompt: [`studio/prompts/turn-02b-test-results.md`](studio/prompts/turn-02b-test-results.md)
+Result: [`studio/runs/turn-02b.json`](studio/runs/turn-02b.json) · status `completed`
+
+Asked for the complete unedited output and got it, matching a local run
+figure-for-figure. **19 passed, 0 failed**, with conservation, uniform-price and
+no-dead-end each fuzzed at 256 runs. `settle(100 buyers)` is **1,475,504 gas**.
+
+It also agreed `test_ReentrancyOnClaim` was badly structured and rewrote it. The
+original built a 51-buyer scenario, settled it, decided the scenario was "not
+interesting" because the reentrant buyer's refund came out at zero, then called
+`setUp()` from inside the test body and started again — leaving the first half as
+dead code whose gas still counted. Rewritten as one scenario, its gas fell from
+**21.8M to 9.7M**, and Studio's own read was that the earlier recorded failure was
+most likely that mid-test `setUp()` leaving the etched mock and the settler address
+mismatched.
+
+**The habit that paid off here:** the suite is now run locally with
+`arc-forge test`, against `forge-std` pulled from the workspace and OpenZeppelin
+5.1.0 from `node_modules`. Test results come from this machine, not from a
+description of them. Nine other tests still call `setUp()` mid-body for
+parameterised scenarios — it works and they pass, but it inflates their gas and is
+worth tidying if time allows.
 
 ## Turn 3 — frontend
 
