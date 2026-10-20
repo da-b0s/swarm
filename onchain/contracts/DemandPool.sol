@@ -65,7 +65,6 @@ contract DemandPool is ReentrancyGuard {
     error SettlerAlreadySet();
     error TransferFailed();
     error Paused();
-    error WrongChain();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
@@ -73,7 +72,6 @@ contract DemandPool is ReentrancyGuard {
     }
 
     constructor(address dealFactory, address _owner) {
-        if (block.chainid != 5042002) revert WrongChain();
         if (dealFactory == address(0) || _owner == address(0)) revert InvalidAddress();
         factory = DealFactory(dealFactory);
         owner = _owner;

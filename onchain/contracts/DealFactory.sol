@@ -47,7 +47,6 @@ contract DealFactory {
     error InvalidAddress();
     error AlreadySet();
     error InvalidStateTransition();
-    error WrongChain();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
@@ -55,7 +54,6 @@ contract DealFactory {
     }
 
     constructor(address _owner) {
-        if (block.chainid != 5042002) revert WrongChain();
         if (_owner == address(0)) revert InvalidAddress();
         owner = _owner;
     }

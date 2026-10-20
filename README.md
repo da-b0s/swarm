@@ -72,6 +72,30 @@ Nobody had to trust anybody, and everybody ended up paying the same $6.
 > inside that cap ($1.00 / $0.75 / $0.50). The $10/$8/$6 numbers above are easier to
 > read; the mechanism is identical. See [docs/mechanism.md](docs/mechanism.md).
 
+## Tests
+
+19 Foundry tests, all passing, including three fuzz properties at 256 runs each:
+
+```
+testFuzz_Conservation   256 runs   supplier credit + refunds == commits, exactly
+testFuzz_UniformPrice   256 runs   supplier credit == clearing x buyerCount
+testFuzz_NoDeadEnd      256 runs   exactly one of settle/refundAll always succeeds
+
+settle(100 buyers)            1,475,504 gas
+withdraw(buyer 50 of 60)         58,088 gas
+```
+
+The settlement figure matters because it is the design's one real constraint: v1
+caps a deal at 100 buyers so the loop fits in a block, and 1.48M gas shows the cap
+has room to spare. The withdrawal figure matters because the strand check walks
+tiers rather than buyers — it is flat in buyer count, not linear.
+
+Run them:
+
+```bash
+cd onchain && arc-forge test --remappings "@openzeppelin/=node_modules/@openzeppelin/" -vv
+```
+
 ## The invariant
 
 ```
@@ -162,10 +186,15 @@ transaction is the whole mechanism.
 
 | Contract | Arc Mainnet (5042) | Arc Testnet (5042002) |
 |---|---|---|
-| `DealFactory` | _pending_ | _pending_ |
-| `DemandPool` | _pending_ | _pending_ |
-| `Settler` | _pending_ | _pending_ |
+| `DealFactory` | _pending_ | [`0x5b646D21…6E110f`](https://explorer.testnet.arc.io/address/0x5b646D21e0b4a21364b226edFCDc5E5F4e6E110f) |
+| `DemandPool` | _pending_ | [`0x2Eab29C0…70CfEB`](https://explorer.testnet.arc.io/address/0x2Eab29C0d1F9FF0B0ba9385324611BbC2670CfEB) |
+| `Settler` | _pending_ | [`0xB4dFC8b4…2874C5`](https://explorer.testnet.arc.io/address/0xB4dFC8b4Baa856eB9B6bB7087Ed72615452874C5) |
 | `CommitRelayer` | _pending_ | _pending_ |
+
+Testnet deployed at block 68,162,131 and wired. Every claim above is checked from
+chain rather than taken from a deploy log — `node tools/verify-deploy.mjs` confirms
+bytecode, all three owner wiring calls, the constructor links in both directions,
+the USDC predeploy address and that the factory is unpaused holding zero escrow.
 
 Chain facts, predeploys and gotchas: [docs/arc-facts.md](docs/arc-facts.md).
 

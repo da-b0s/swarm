@@ -43,7 +43,6 @@ contract Settler is ReentrancyGuard, ISettler {
     error Unauthorized();
     error InvalidAddress();
     error ConservationViolation();
-    error WrongChain();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
@@ -51,7 +50,6 @@ contract Settler is ReentrancyGuard, ISettler {
     }
 
     constructor(address dealFactory, address demandPool, address _owner) {
-        if (block.chainid != 5042002) revert WrongChain();
         if (dealFactory == address(0) || demandPool == address(0) || _owner == address(0)) revert InvalidAddress();
         factory = DealFactory(dealFactory);
         pool = DemandPool(demandPool);
