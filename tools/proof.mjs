@@ -45,9 +45,18 @@ if (addresses.length === 0) {
 }
 
 // ---- abi: prefer the real one pulled from Studio ---------------------------
+// Only Swarm's own events. The compiled artifacts also carry Ownable/pause/wiring
+// events, and they repeat across all three contracts - merging them naively
+// produced 15 topic filters with duplicates, which the public RPC rejects as
+// "requested range too large" however small the block window is.
+const SWARM_EVENT_NAMES = new Set([
+  'DealPosted', 'Committed', 'Withdrawn', 'TierBroken', 'Settled', 'Refunded', 'Claimed',
+]);
+
 function discoverAbi(dir) {
   if (!existsSync(dir)) return null;
   const out = [];
+  const seen = new Set();
   const walk = (d) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const p = d + '/' + e.name;
@@ -56,7 +65,14 @@ function discoverAbi(dir) {
         try {
           const j = JSON.parse(readFileSync(p, 'utf8'));
           const abi = Array.isArray(j) ? j : j.abi;
-          if (Array.isArray(abi)) out.push(...abi.filter((x) => x.type === 'event'));
+          if (!Array.isArray(abi)) continue;
+          for (const e of abi) {
+            if (e.type !== 'event' || !SWARM_EVENT_NAMES.has(e.name)) continue;
+            const sig = e.name + '(' + (e.inputs || []).map((i) => i.type).join(',') + ')';
+            if (seen.has(sig)) continue;   // same event declared in several artifacts
+            seen.add(sig);
+            out.push(e);
+          }
         } catch { /* not a contract artifact */ }
       }
     }
@@ -112,7 +128,7 @@ if (span > 5_000_000n) {
 // Adaptive windowing: start wide, halve on a provider range/limit error.
 const logs = [];
 for (const address of addresses) {
-  let step = BigInt(arg('--step', '5000'));
+  let step = BigInt(arg('--step', '2000'));
   let b = fromBlock;
   while (b <= toBlock) {
     const last = b + step - 1n > toBlock ? toBlock : b + step - 1n;
@@ -120,8 +136,8 @@ for (const address of addresses) {
       logs.push(...await client.getLogs({ address, events: abi, fromBlock: b, toBlock: last }));
       b = last + 1n;
     } catch (e) {
-      if (step <= 1000n) throw e;
-      step /= 2n;
+      if (step <= 25n) throw e;   // genuinely stuck, not just a wide window
+      step = step / 2n > 0n ? step / 2n : 1n;
       console.error('window too wide at block ' + b + ', retrying with ' + step + ' blocks');
     }
   }
@@ -162,10 +178,13 @@ if (has('--chart')) {
 
 // ---- report ----------------------------------------------------------------
 const wallets = new Set(
-  [...commits.map((l) => l.args.buyer), ...claims.map((l) => l.args.account)]
+  [...commits.map((l) => l.args.buyer), ...claims.map((l) => l.args.claimant)]
     .filter(Boolean).map((a) => a.toLowerCase())
 );
-const moved = sumOf(commits, 'pricePaid') + sumOf(claims, 'amount');
+const escrowIn = sumOf(commits, 'pricePaid');
+const claimedOut = sumOf(claims, 'amount');
+const withdrawnOut = sumOf(withdrawals, 'amountReturned');
+const moved = escrowIn + claimedOut;
 
 console.log('# Proof - read from chain ' + new Date().toISOString().slice(0, 10) + '\n');
 console.log('Chain ' + net.id + ' - blocks ' + fromBlock + '-' + toBlock + ' - explorer: ' + net.explorer + '\n');
@@ -174,6 +193,9 @@ console.log('## Totals\n');
 console.log('| Metric | Value |');
 console.log('|---|---|');
 console.log('| USDC moved | ' + usd(moved) + ' |');
+console.log('| ... escrowed in | ' + usd(escrowIn) + ' |');
+console.log('| ... claimed out | ' + usd(claimedOut) + ' |');
+console.log('| ... withdrawn before deadline | ' + usd(withdrawnOut) + ' |');
 console.log('| Distinct wallets | ' + wallets.size + ' |');
 console.log('| Commits | ' + commits.length + ' |');
 console.log('| Withdrawals | ' + withdrawals.length + ' |');
@@ -207,6 +229,15 @@ for (const s of settles) {
   if (!ok) broken = true;
   console.log('| ' + id + ' | ' + usd(inSum) + ' | ' + usd(supplier) + ' | ' + usd(refSum) +
     ' | ' + (ok ? '**yes**' : 'NO (off by ' + usd(inSum - supplier - refSum) + ')') + ' |');
+
+  // The contract reports its own refund total in Settled. It must agree with the
+  // sum of the per-buyer credits we see, or one of the two is lying.
+  const claimedTotal = s.args.totalRefunds;
+  if (claimedTotal !== undefined && claimedTotal !== refSum) {
+    broken = true;
+    console.log('|   ^ | Settled.totalRefunds ' + usd(claimedTotal) +
+      ' disagrees with the sum of credits ' + usd(refSum) + ' | | | **NO** |');
+  }
 }
 
 if (broken) {
