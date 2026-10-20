@@ -49,6 +49,9 @@ minimum. Neither belongs in Swarm.
 |---|---|---|
 | Block time | **~0.506 s** | Confirms the "sub-second" claim with a number we measured, not quoted. A 48h campaign spans ~342,000 blocks. |
 | Head block (testnet) | 67,981,885 | The chain is tens of millions of blocks deep. **Never scan logs from genesis** — record the deploy block and scan from there. |
+| **Mainnet is live** | chain 5042, head 26,921,861 | Reached directly with `arc-cast`. The docs describe mainnet fully but never state it is live; it is. |
+| **Mainnet gas price** | **25 gwei** | Only just above the documented 20 gwei floor, so the floor is not spare headroom. A relayer that estimates downward will lose transactions silently. |
+| Mainnet USDC interface | `symbol() == "USDC"`, `decimals() == 6` | Confirmed by direct call at `0x3600…0000`, not taken from the docs. |
 | `eth_getLogs` max range | **~6,000-12,000 blocks** on the public RPC | Wider ranges are rejected. `tools/proof.mjs` halves its window on rejection and defaults to 5,000. |
 | Log history | not pruned | A one-off `pruned history unavailable` on the public RPC turned out to be transient; genesis-range queries succeed. Expect the occasional spurious failure and retry. |
 
@@ -70,22 +73,21 @@ minimum. Neither belongs in Swarm.
 | Tool | Status on this machine | Notes |
 |---|---|---|
 | `arc-studio` CLI | **installed, v1.2.1** | `npm i -g @circle-fin/arc-studio-cli`. Needs `arc-studio login --paste` once. |
-| Arc Foundry (`arc-forge`, `arc-cast`, `arc-anvil`) | **not installed** | No npm package. Tarballs from `github.com/circlefin/arc-foundry/releases`. **Windows is not supported — needs WSL.** WSL Ubuntu is present on this machine. |
+| Arc Foundry (`arc-forge`, `arc-cast`, `arc-anvil`) | **installed in WSL, v0.8.0-2** | No npm package and no Windows build. Installed to `~/.local/bin` in WSL Ubuntu 24.04 from the x86_64 tarball, sha256-verified. See [deploy.md](deploy.md). |
 | Node | v24.12.0 | Studio CLI documents Node 20+; v24 installed and working. |
 
-Arc Foundry install, inside WSL:
+Installed and verified — see [deploy.md](deploy.md) for the runbook.
 
-```bash
-tar -xzf arc-foundry-<version>-<target>.tar.gz
-mkdir -p ~/.local/bin
-mv forge ~/.local/bin/arc-forge
-mv cast  ~/.local/bin/arc-cast
-mv anvil ~/.local/bin/arc-anvil
-export PATH="$HOME/.local/bin:$PATH"
-arc-forge --version
-```
+**Studio cannot deploy for us.** It deploys from a Circle-managed SCP wallet whose
+key its sandbox does not hold, so it can create contracts but cannot send the three
+owner transactions that wire them together. It reported a successful deploy with the
+wiring undone, then asked to provision a broad-scope Circle API key to work around
+it, which was declined. Deployment is ours, from our own deployer wallet.
 
-Only needed from D5 (mainnet deploy). Arc Studio deploys to testnet by itself.
+**Calling WSL from here:** always through a script file.
+`wsl -- bash -lc "…"` is unreliable — Git Bash rewrites `/mnt/...` paths and bare
+URLs into Windows paths, and PowerShell expands `$VAR` before WSL sees it. Write a
+`.sh` and run `wsl -d Ubuntu -- bash /mnt/c/…/script.sh` from PowerShell.
 
 ## Corrections to the blueprint
 

@@ -6,18 +6,14 @@ import {SwarmTypes} from "./SwarmTypes.sol";
 
 contract DealFactory {
     // Key constraints:
-    // - ReentrancyGuard on ALL functions that move USDC: commit, withdraw, pullForSettler, claim, settle, refundAll
-    // - All math in uint64 / uint256 in 6-decimal USDC micro-units
-    // - No msg.value anywhere
-    // - No block.prevrandao (Arc returns 0 for it)
-    // - block.timestamp used only for deadline comparison
-    // - Deal state machine: 0=Open → 1=Settled XOR 0=Open → 2=Refunded, no other transitions
-    // - settle and refundAll are mutually exclusive (both check state==0 first)
-    // - Owner pause() halts postDeal and commit ONLY — never settle, refundAll, claim
-    // - Conservation: assert(totalEscrowed == supplierCredit + totalRefunds) in settle
-    // - claimable accumulates across deals (never reset between deals)
-    // - One commit per address per deal
-    // - Swap-and-pop for buyer removal to avoid gaps or stale indices
+    // - All math in 6-decimal USDC micro-units; no msg.value anywhere
+    // - No block.prevrandao (Arc always returns 0)
+    // - Owner pause() halts postDeal and commit (via DemandPool) ONLY
+    // - Tiers: strictly ascending minBuyers, strictly descending pricePerUnit > 0
+    // - Cap: tiers[0].pricePerUnit <= 5 USDC, buyers in [1, 100], minBuyers >= 1, minBuyers <= cap
+    // - tiers[last].minBuyers <= cap (every tier is reachable)
+    // - Deal state machine: 0=Open -> 1=Settled or 0=Open -> 2=Refunded (setDealState, settler-only)
+    // - postDeal has no runtime dependency on DemandPool
 
     IERC20 public constant USDC = IERC20(0x3600000000000000000000000000000000000000);
 
@@ -30,7 +26,7 @@ contract DealFactory {
     address public demandPool;
     address public settler;
 
-    event DealPosted(uint256 indexed dealId, address indexed supplier, uint32 minBuyers, uint64 deadline);
+    event DealPosted(uint256 indexed dealId, address indexed supplier, uint32 minBuyers, uint64 deadline, uint64 startPrice);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event PausedContract(address indexed account);
     event UnpausedContract(address indexed account);
@@ -45,11 +41,13 @@ contract DealFactory {
     error PriceCapExceeded();
     error BuyerCapExceeded();
     error InvalidConfiguration();
+    error ZeroTierPrice();
     error Paused();
     error Unauthorized();
     error InvalidAddress();
     error AlreadySet();
     error InvalidStateTransition();
+    error WrongChain();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
@@ -57,6 +55,7 @@ contract DealFactory {
     }
 
     constructor(address _owner) {
+        if (block.chainid != 5042002) revert WrongChain();
         if (_owner == address(0)) revert InvalidAddress();
         owner = _owner;
     }
@@ -71,6 +70,7 @@ contract DealFactory {
         if (tiers.length == 0) revert InvalidTierCount();
 
         for (uint256 i = 0; i < tiers.length; i++) {
+            if (tiers[i].pricePerUnit == 0) revert ZeroTierPrice();
             if (tiers[i].pricePerUnit > 5_000_000) revert PriceCapExceeded();
             if (i > 0) {
                 if (tiers[i].minBuyers <= tiers[i - 1].minBuyers) revert TiersNotAscending();
@@ -79,6 +79,7 @@ contract DealFactory {
         }
 
         if (tiers[0].minBuyers > minBuyers) revert FirstTierTooHigh();
+        if (minBuyers == 0) revert InvalidConfiguration();
         if (deadline <= block.timestamp) revert DeadlineNotFuture();
         if (cap == 0) revert BuyerCapExceeded();
         if (cap > 100) revert BuyerCapExceeded();
@@ -98,7 +99,7 @@ contract DealFactory {
             deal.tiers.push(tiers[i]);
         }
 
-        emit DealPosted(dealId, msg.sender, minBuyers, deadline);
+        emit DealPosted(dealId, msg.sender, minBuyers, deadline, tiers[0].pricePerUnit);
     }
 
     function pause() external onlyOwner {
