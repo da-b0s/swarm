@@ -42,11 +42,12 @@ export function validateCurve(tiers, minBuyers, capPrice = 5n * UNIT, capBuyers 
  * ops: [{type:'commit'|'withdraw', who}]
  *
  * opts.escrow — how much a buyer locks up when they commit:
- *   'topTier'    — tiers[0].price, the highest price on the curve.   <- CHOSEN
- *                  Nobody can be underwater, so settlement always clears at
- *                  clearingPrice(finalCount) and every refund is identical.
  *   'commitTime' — clearingPrice(count at their commit). The brief's wording,
- *                  rejected: see tools/scenarios.mjs for the three reasons.
+ *                  and the CHOSEN design. Solvent only together with
+ *                  withdrawGuard; see tools/scenarios.mjs.
+ *   'topTier'    — tiers[0].price for everyone. Solvent on its own, but it
+ *                  changes what the brief says commit() pulls, so it is kept
+ *                  only to show what was weighed.
  *
  * opts.pricingPoint (only with 'commitTime'):
  *   'after'  — pays clearingPrice(countIncludingThem).
@@ -55,13 +56,20 @@ export function validateCurve(tiers, minBuyers, capPrice = 5n * UNIT, capBuyers 
  * opts.clampClearing (only with 'commitTime'):
  *   true  — clearing may not exceed the lowest price escrowed (one price, gameable).
  *   false — unclamped, to demonstrate the underflow/fund-lock.
+ *
+ * opts.withdrawGuard (only with 'commitTime'):
+ *   true  — reject a withdrawal that would leave a remaining buyer below the new
+ *           clearing price. Keeps the document's commit-time escrow AND its
+ *           settlement maths (supplier credited clearing x buyerCount) solvent,
+ *           at the cost of some withdrawals being refused.
  */
 export function run(tiers, minBuyers, ops, opts = {}) {
   const {
-    escrow = 'topTier', pricingPoint = 'after',
-    clampClearing = true, capBuyers = 100,
+    escrow = 'commitTime', pricingPoint = 'after',
+    clampClearing = false, withdrawGuard = true, capBuyers = 100,
   } = opts;
   const topTier = tiers[0].price;
+  let blockedWithdrawals = 0;
 
   const paidBy = new Map(); // who -> price escrowed
   const order = [];         // buyer array, as the contract keeps it
@@ -81,6 +89,21 @@ export function run(tiers, minBuyers, ops, opts = {}) {
       }
     } else {
       if (!paidBy.has(op.who)) continue;
+
+      if (withdrawGuard) {
+        // Would this exit strand anyone still in? The remaining buyers' lowest
+        // escrow must still cover the price the reduced volume unlocks.
+        const newPrice = clearingPrice(tiers, order.length - 1);
+        let lowestRemaining = null;
+        for (const [who, paid] of paidBy)
+          if (who !== op.who && (lowestRemaining === null || paid < lowestRemaining))
+            lowestRemaining = paid;
+        if (lowestRemaining !== null && lowestRemaining < newPrice) {
+          blockedWithdrawals++;
+          continue; // refused; the buyer stays in and settles at the clearing price
+        }
+      }
+
       paidBy.delete(op.who);
       order.splice(order.indexOf(op.who), 1); // swap-and-pop in Solidity
     }
@@ -96,6 +119,7 @@ export function run(tiers, minBuyers, ops, opts = {}) {
     return {
       outcome: 'refundAll', committed, totalIn, clearing: null, clamped: false,
       supplierCredit: 0n, refunds: new Map(paidBy), breaks, order, paidBy,
+      blockedWithdrawals,
     };
   }
 
@@ -121,6 +145,7 @@ export function run(tiers, minBuyers, ops, opts = {}) {
   return {
     outcome: 'settle', committed, totalIn, clearing, clamped, tierPrice, underwater,
     supplierCredit: clearing * BigInt(committed), refunds, breaks, order, paidBy,
+    blockedWithdrawals,
   };
 }
 

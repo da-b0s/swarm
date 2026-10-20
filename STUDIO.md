@@ -179,6 +179,63 @@ Turn 1c enriches all six events.
 ## Turn 1c — residual fixes, event payloads, testnet deploy
 
 Prompt: [`studio/prompts/turn-01c-events-and-deploy.md`](studio/prompts/turn-01c-events-and-deploy.md)
+Result: [`studio/runs/turn-01c.json`](studio/runs/turn-01c.json) · status `completed`
+
+All three fixes applied, all six events enriched, and the first successful deploy to
+Arc testnet. Verified independently with `viem` rather than taken from the result
+document — the three addresses hold 4297, 5212 and 4265 bytes of code, and
+`DealFactory.demandPool`, `DealFactory.settler` and `DemandPool.settlerSet` all read
+back empty, which confirms its own report that the wiring had not run.
+
+Two operational notes worth carrying forward: it **deployed twice**, producing two
+complete sets of contracts in one turn, and the **wiring did not get done** — it
+reported the testnet RPC timing out and handed back three calls for me to send
+manually, leaving the deployment unusable. Both are now called out explicitly in the
+next prompt.
+
+## Turn 1d — reverting to the specification
+
+Prompt: [`studio/prompts/turn-01d-revert-to-spec.md`](studio/prompts/turn-01d-revert-to-spec.md)
+
+**This turn exists because the collateral decision was wrong, and it is worth being
+straight about why.**
+
+The withdrawal squeeze is a genuine contradiction in the brief: `commit` escrows the
+current tier price, *and* a tier must be able to un-break — and any un-break leaves
+the newest buyer owing more than they escrowed. Having found it, I replaced the
+escrow model with uniform top-tier collateral. That is solvent, but it was the wrong
+instinct: it changed what `commit` pulls, flattened the tiered refunds the brief's
+own worked example describes, and discarded the "you pay what you see" property —
+all to fix something that needed one precondition.
+
+The smaller fix keeps every sentence of the spec and adds a precondition to
+withdrawal: **a buyer may not exit if their exit would leave someone still in the
+deal below the resulting clearing price.** Modelled before asking Studio for
+anything, it holds up:
+
+- The brief's test 6 passes as written — the marginal buyer withdraws, the tier
+  un-breaks, a new commit re-breaks it.
+- `claimable[supplier] += clearing * buyers.length` is preserved, which the brief
+  writes out as code, and which the collateral version also kept but Studio's
+  `min(escrowed, clearing)` did not.
+- The precondition binds **only when the buyer count sits exactly on a tier
+  threshold** — refused at 25 and 50, free at 24, 26, 30 and 51. Fuzzed, 1.8% of
+  withdrawal attempts are refused, and one further commit clears a refusal.
+- Over 50,000 random sequences: no conservation failures, no stranded buyers, no
+  deviation from `clearing × buyerCount`.
+
+A fourth candidate was ruled out along the way and is worth recording because it
+looks safe and is not. Clamping the clearing price down to the lowest escrow keeps a
+single price and is solvent, but it is sybil-exploitable: commit 50 sybils to unlock
+the bottom tier, commit for real at that price, then withdraw the sybils. The clamp
+drags settlement to the bottom tier for everyone — the supplier takes $12.50 instead
+of $18.75 on the campaign curve — and the sybils are refunded in full, so the attack
+costs only gas.
+
+The lesson, recorded because it is the honest one: having found a real contradiction
+in a specification, the first move should be to look for the narrowest change that
+satisfies it, not to replace the mechanism. Two Studio turns went into collateral and
+this one unwinds them.
 
 _Result:_ _pending_
 

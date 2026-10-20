@@ -31,41 +31,42 @@ the opposite: it aggregates **many buyers into one price**.
 ```
 postDeal(tiers[], minBuyers, deadline, cap)   supplier posts the curve
         │
-commit(dealId)        buyer escrows the TOP tier price as collateral
+commit(dealId)        buyer escrows the CURRENT tier price
         │             live price recomputed → everyone sees the tier break
         │
 withdraw(dealId)      exit before deadline; a tier can UN-break
+        │             (refused only if your exit would strand another buyer)
         │
    at deadline:
      committed <  minBuyers  →  refundAll()   every buyer whole, nothing ships
      committed >= minBuyers  →  settle()
         │
 settle(dealId)   clearing = lowest tier price unlocked by final volume
-                 every buyer: claimable[b] += collateral − clearing
+                 for each buyer: claimable[b] += escrowed − clearing
                  claimable[supplier] += clearing × buyerCount
                  ── ALL IN ONE TRANSACTION ──
         │
 claim()          buyers pull refunds, supplier pulls proceeds
 ```
 
-Every buyer locks up the **same** collateral — the highest price on the curve —
-whenever they commit. Everyone settles at the clearing price the **final** volume
-unlocked, and the difference comes back. One price for everybody,
-unconditionally; see [why collateral](#why-collateral-and-not-pay-as-you-commit).
+A buyer escrows the tier price live at the moment **they** commit. Everyone settles
+at the clearing price the **final** volume unlocked, and the difference comes back.
+One price for everybody, and you never pay more than the price you saw.
 
 ### Worked example
 
 Curve: **$10 each at 10 buyers, $8 at 25, $6 at 50**. Minimum 10, deadline 48h.
 51 buyers commit.
 
-- Every buyer escrows **$10**, the top of the curve, whenever they join
 - At 25 buyers the price breaks to **$8**; at 50 it breaks to **$6**
 - Clearing price: **$6**
-- Every buyer refunded **$4** — the same amount for all 51
+- Buyers 1–25 escrowed $10 → refunded **$4** each
+- Buyers 26–50 escrowed $8 → refunded **$2** each
+- Buyer 51 escrowed $6 → refunded nothing
 - Supplier credited 51 × $6 = **$306**
 - Commits in: $510. Refunds out: $204. Supplier: $306. **$306 + $204 = $510.**
 
-Nobody had to trust anybody, and nobody paid a different price from anybody else.
+Nobody had to trust anybody, and everybody ended up paying the same $6.
 
 > v1 caps unit price at 5 USDC, so the live campaign runs a curve of the same shape
 > inside that cap ($1.00 / $0.75 / $0.50). The $10/$8/$6 numbers above are easier to
@@ -75,52 +76,50 @@ Nobody had to trust anybody, and nobody paid a different price from anybody else
 
 ```
 supplier credit + sum(all refunds) == sum(all commits)
+supplier credit == clearingPrice(finalCount) * buyerCount
 ```
 
-Exactly, to the wei, for any sequence of commits and withdrawals. It is a Foundry
-fuzz test, and it is independently verified outside Solidity:
+Both exactly, to the wei, for any sequence of commits and withdrawals. The first is
+solvency; the second is what makes "every buyer settles at one clearing price"
+literally true rather than nearly true. They are Foundry fuzz tests, and they are
+independently verified outside Solidity:
 
 ```
-$ node tools/curve.mjs --fuzz 20000
-conservation failures: 0
-invariant holds: supplier credit + refunds == sum of commits, exactly
+$ node tools/scenarios.mjs
+pass  conservation holds over 50000 random sequences  — 0 failures
+pass  no sequence strands a buyer  — 0 found
+pass  supplier is always credited clearing x buyerCount  — 0 deviations
 ```
 
-## Why collateral, and not pay-as-you-commit
+## The one place the spec needed help
 
-The obvious design is to escrow whatever the price is when you commit. It does not
-survive contact with the withdrawal rule.
+The design asks for two things that cannot both hold unconditionally: a buyer
+escrows the price live when they commit, *and* a tier can un-break when someone
+withdraws. A withdrawal pushes the price back **up**, and the newest buyer escrowed
+the *lowest* price — so any un-break leaves them owing more than they ever escrowed.
+Settlement then has no solvent move: the refund underflows, `settle()` reverts
+permanently, and `refundAll()` also reverts because the deal is still above its
+minimum. Every participant's funds are stuck. Fuzzed, that arises in about 0.5% of
+random commit/withdraw sequences.
 
-A withdrawal lowers volume, so the live price goes back **up**. A buyer who
-committed while volume was high escrowed a **low** price — and can end up owing
-more at settlement than they ever escrowed. Nothing can compel them to top up
-after the fact, so settlement has no solvent move: the natural `paid − clearing`
-refund underflows, `settle()` reverts permanently, and `refundAll()` also reverts
-because the deal is still above its minimum. Every participant's funds are stuck.
-Fuzzing random commit/withdraw sequences, that state arises in about **0.5%** of
-them.
+The fix is one precondition, not a redesign: **a withdrawal is refused if it would
+leave someone still in the deal below the resulting clearing price.** It binds only
+when the buyer count sits exactly on a tier threshold — 1.8% of withdrawal attempts
+in fuzzing — and one further commit clears it. Everything else stays as specified,
+including `claimable[supplier] += clearing * buyers.length`, so every buyer really
+does settle at one shared price.
 
-Patching it per-buyer (`min(escrowed, clearing)`) is solvent but means different
-buyers pay different amounts, which forfeits the single-clearing-price property
-this whole design rests on. Clamping the clearing price down to the lowest escrow
-keeps one price but hands a coalition a lever: commit at the bottom tier,
-mass-withdraw, and drag settlement to the bottom for everyone at the supplier's
-expense.
-
-Uniform top-tier collateral removes the failure instead of handling it. Nobody can
-be underwater, so the clearing price is always affordable, every refund is
-identical, withdrawals need no restrictions, and the invariant is trivially exact:
+Three alternatives were weighed and rejected: clamping the clearing price to the
+lowest escrow is sybil-exploitable (commit sybils, commit for real at the bottom
+tier, withdraw the sybils, and everyone settles at the bottom — the supplier takes
+$12.50 instead of $18.75); per-buyer `min(escrowed, clearing)` abandons the
+`clearing × buyerCount` formula and the single shared price; uniform top-tier
+collateral works but changes what `commit` pulls, which is a bigger change than the
+problem requires. All four are reproducible side by side:
 
 ```
-collateral × n  ==  clearing × n  +  (collateral − clearing) × n
+node tools/scenarios.mjs
 ```
-
-It also removes a race in gasless commits: an EIP-3009 authorization is signed for
-a fixed amount, so a commit price that moves between signing and relaying would
-invalidate it. Fixed collateral cannot race.
-
-The reasoning and all three rejected alternatives are reproducible:
-`node tools/scenarios.mjs`.
 
 ## Why this needs Arc
 

@@ -2,19 +2,19 @@
 
 ## The rule that decides everything
 
-**Every buyer escrows the same collateral — the top tier price — whenever they
-commit. Everyone settles at the clearing price unlocked by the final volume. The
-difference is refunded, identically, to all of them.**
+**A buyer escrows the tier price live at the moment they commit. Everyone settles
+at the clearing price unlocked by the final volume. The difference is refunded.**
 
-The brief says commit "escrows the CURRENT tier price". That was changed, and the
-change is the most substantive engineering decision in the project; the reasoning
-is under "the withdrawal squeeze" below.
-
-Clearing price is a pure function of the final buyer count:
+This is the brief's wording, unchanged. Clearing price is a pure function of the
+final buyer count:
 
 ```
 clearingPrice(n) = lowest tier price whose minBuyers <= n
 ```
+
+The price a buyer escrows is `clearingPrice(count including their own commit)`, so
+on the campaign curve buyer 24 escrows $1.00 and buyer 25 escrows $0.75 — "buyer 25
+exactly triggers tier 2", as the brief's boundary test words it.
 
 ## The invariant
 
@@ -23,191 +23,170 @@ supplier credit + sum(all refunds) == sum(all commits)
 ```
 
 Exactly, to the wei, for any sequence of commits and withdrawals. This is the
-project's credibility and it is Foundry test 2 (fuzz/invariant).
-
-Verified independently of Solidity by `tools/curve.mjs`:
-
-```
-$ node tools/curve.mjs --fuzz 20000
-fuzz: 20000 random sequences (commits interleaved with withdrawals)
-conservation failures: 0
-invariant holds: supplier credit + refunds == sum of commits, exactly
-```
-
-## Two defects found in the blueprint
-
-Both were caught by modelling the mechanism in `tools/curve.mjs` before writing
-any Solidity. Both would have cost real time.
-
-### 1. The headline worked example cannot be posted under the blueprint's own v1 rules
-
-The blueprint's example curve is **$10 at 10 buyers / $8 at 25 / $6 at 50**, but
-its own v1 spec **caps unit price at 5 USDC**. Worse, 51 buyers at $10 means
-**$456 of peak escrow** against a stated working-capital budget of $15–25.
-
-**Resolution.** Keep the 5 USDC cap — it is the right risk control. Use $10/$8/$6
-only as an *illustration* in the write-up (clearer numbers for a reader), and run
-the real campaign on a curve inside the cap. The shape is identical, so every
-argument in the write-up still holds.
-
-Real campaign curve: **$1.00 at 10 buyers / $0.75 at 25 / $0.50 at 50**, min 10.
+project's credibility and it is Foundry test 2. Alongside it, a second property
+that matters just as much:
 
 ```
-$ node tools/curve.mjs
-clearing   $0.5
-tier breaks @25: $1->$0.75   @50: $0.75->$0.5
-   25 buyers  refunded $0.5
-   25 buyers  refunded $0.25
-    1 buyers  refunded $0
-supplier credit  $25.5   refunds $18.75   commits $44.25
-conservation     OK, exact
-peak escrow      $44.25
+supplier credit == clearingPrice(finalCount) * buyerCount
 ```
 
-$44.25 of peak escrow, paid in by real buyers, settling to $25.50 for the
-supplier. That fits the budget and still produces ~103 mainnet transactions from
-a single deal.
+The brief writes that formula out as code, and it is what makes "every buyer
+settles at the single clearing price" literally true rather than nearly true.
 
-### 2. The blueprint's test 1 asserts the wrong refund split
+Both are verified independently of Solidity by `tools/model.mjs`:
 
-The blueprint specifies test 1 as *"51 buyers clear at the lowest tier and **the
-first 8** are refunded the full difference"*, and its worked example says
-*"the first 8 refunded $4 each, the next 19 refunded $2 each, the last 24 refunded
-$0"*.
-
-That 8/19/24 split comes from the **narrative timeline** in the example (8 buyers
-commit in hours 0–6, 19 more by hour 20, 24 more by hour 44) — not from the
-**curve thresholds**. Under the stated curve, what matters is the buyer count when
-each person commits, which lands at 25/50:
-
-| Buyers | Count when they commit | Paid | Refunded |
-|---|---|---|---|
-| 1–25 | 0–24, below the 25 threshold | tier 1 | tier1 − tier3 |
-| 26–50 | 25–49, below the 50 threshold | tier 2 | tier2 − tier3 |
-| 51 | 50, at the last threshold | tier 3 | nothing |
-
-So the correct split is **25 / 25 / 1**, not 8 / 19 / 24.
-
-The blueprint's own figures are internally consistent ($306 + $70 = $376), but
-only against an implied curve breaking at 9 and 28 buyers — which is not the curve
-it states.
-
-**Resolution.** `studio/prompts/turn-02-tests.md` now specifies test 1 with the
-correct expected numbers, asserted individually. Had we passed the blueprint's
-wording to Studio, we would have got either a failing test or — much worse — a
-contract quietly bent to satisfy a wrong expectation.
+```
+$ node tools/scenarios.mjs
+pass  conservation holds over 50000 random sequences  — 0 failures
+pass  no sequence strands a buyer  — 0 found
+pass  supplier is always credited clearing x buyerCount  — 0 deviations
+```
 
 ## The numbers, pinned
 
 Campaign curve $1.00 at 10 buyers / $0.75 at 25 / $0.50 at 50, minimum 10,
-51 buyers, collateral $1.00:
+51 buyers:
 
 | Quantity | Value |
 |---|---|
-| Collateral per buyer | $1.00 |
 | Clearing price | $0.50 |
-| Refund per buyer | $0.50, identical for all 51 |
+| Buyers 1–24 | escrowed $1.00, refunded $0.50 |
+| Buyers 25–49 | escrowed $0.75, refunded $0.25 |
+| Buyers 50–51 | escrowed $0.50, refunded nothing |
 | Supplier credited | $25.50 |
-| Refunds total | $25.50 |
-| Commits total | $51.00 |
-| Peak escrow | $51.00 |
+| Refunds total | $18.25 |
+| Commits total | $43.75 |
+| Peak escrow | $43.75 |
 
-The tier boundary is `>=`: `clearingPrice` is $1.00 at 24 buyers and $0.75 at 25.
+## The withdrawal squeeze, and how the spec was kept
 
-## The withdrawal squeeze — a fund-locking bug in the mechanism as specified
+The brief asks for two things that cannot both hold unconditionally:
 
-The brief requires that "a tier must be able to un-break": a withdrawal lowers
-volume, so the live price goes back **up**. That interacts badly with the refund
-calculation, and the interaction is not mentioned anywhere in the brief.
+> `commit(dealId)` escrows the **CURRENT tier price**
+>
+> `withdraw(dealId)` before the deadline returns the commit and recomputes — **a
+> tier must be able to un-break**
 
-A buyer who commits when volume is high escrows a **low** tier price. If enough
-earlier buyers then withdraw, the final clearing price can end up **above** what
-that buyer escrowed. The natural refund expression `paid - clearing` then
-underflows:
+A withdrawal lowers volume, so the live price goes back **up**. The newest buyer
+escrowed the *lowest* price, so **any** un-break leaves them owing more than they
+ever escrowed. At 25 buyers the 25th escrowed $0.75; one exit drops the count to 24,
+the clearing price returns to $1.00, and `escrowed - cp` underflows:
 
 ```
 curve 10@$1.00  25@$0.75  50@$0.50, min 10
 
-50 buyers commit         -> buyer 50 escrows $0.50
-25 earliest withdraw     -> volume 25, tier price back to $0.75
-settle()                 -> buyer 50: 500000 - 750000  ->  underflow, revert
+50 buyers commit       -> buyer 50 escrows $0.50
+25 earliest withdraw   -> volume 25, clearing price back to $0.75
+settle()               -> buyer 50: 500000 - 750000  ->  underflow, revert
 ```
 
 In Solidity 0.8 that reverts. `settle()` then reverts **forever**, and
 `refundAll()` also reverts because 25 buyers is still above the minimum of 10. The
-deal has no exit and **every participant's escrow is permanently stuck**.
+deal has no exit and **every participant's escrow is stuck**. Fuzzed, the condition
+arises in about 0.5% of random commit/withdraw sequences.
 
-It is not a corner case. Fuzzing random commit/withdraw sequences, the condition
-arises in **about 0.5%** of them:
+This is a contradiction inside the brief, not a reason to redesign around it. The
+resolution keeps both sentences and adds a precondition to one of them.
 
-```
-$ node tools/scenarios.mjs
-pass  the squeeze is reachable  — 25 buyers remain, tier price $0.75
-pass  an underwater buyer exists  — b49 escrowed $0.5 but clearing is $0.75
-pass  UNCLAMPED settlement breaks conservation  — short by $0.25
-pass  CLAMPED settlement is solvent  — $18.5 == $18.5
-      the squeeze arose naturally in 235 of 50000 sequences (0.5%)
-```
+### The fix: a withdrawal may not strand anyone
 
-### Three candidate fixes, and why two were rejected
+`withdraw(dealId)` is refused when the caller's exit would leave a remaining buyer
+escrowed below the resulting clearing price. Everything else stays exactly as the
+brief specifies — including `claimable[supplier] += clearing * buyers.length`.
 
-**(a) Per-buyer `min(escrowed, clearing)`.** What Studio implemented on its own
-initiative. Solvent, no fund-lock — but different buyers then pay different
-amounts for the same deal. That forfeits the single-clearing-price property the
-product is built on, and would have to be disclosed as a known limitation on the
-one claim the write-up leads with. Rejected.
-
-**(b) Clamp the clearing price to the lowest escrow.** Keeps one price and is
-solvent. But it is gameable: commit while volume is high to escrow the bottom
-tier, then mass-withdraw, and the clamp drags settlement to the bottom tier for
-everyone at the supplier's expense. Measured on the campaign curve, 25 honest
-buyers pay the supplier $18.75, while the same 25 reached through a mass
-withdrawal pay $12.50. Rejected.
-
-**(c) Uniform top-tier collateral.** Every buyer escrows `tiers[0].price`
-regardless of when they commit, and is refunded down to the clearing price.
-**Chosen.**
-
-Under (c) the failure cannot occur rather than being handled:
-
-- No buyer can be underwater, so no refund subtraction can underflow.
-- The clearing price is always `tierPrice(finalCount)` — one price, unconditionally.
-- Every refund is identical, so there is no per-buyer rounding and no dust.
-- Withdrawals need no restrictions at all; a tier un-breaks freely.
-- Conservation is trivially exact: `collateral × n == clearing × n + (collateral − clearing) × n`.
-- It removes a race in gasless commits that neither the brief nor Studio spotted:
-  an EIP-3009 authorization is signed for a fixed amount, so a commit price that
-  moves between signing and relaying invalidates the authorization. Fixed
-  collateral cannot race.
-
-The cost is more capital locked up per buyer ($1.00 rather than as little as
-$0.50) and a slightly higher peak escrow ($51.00 rather than $43.75) — paid in by
-buyers, not by us. In exchange the emotional hook gets stronger, not weaker:
-everyone escrows the top price and watches a single shared refund grow as volume
-builds.
-
-All three are reproducible side by side:
+**It binds only when the buyer count sits exactly on a tier threshold**, where one
+exit would strand the newest buyer. Off a threshold there is slack, and the exit is
+free:
 
 ```
-$ node tools/scenarios.mjs
-pass  reason 1 — an underwater buyer appears  — b49 escrowed $0.5, clearing $0.75
-pass  reason 1 — settlement is insolvent  — short by $0.25
-pass  reason 2 — but a coalition cuts the supplier's take  — 25 honest buyers pay
-      the supplier $18.75; the same 25 after a mass withdrawal pay $12.5
-pass  no sequence can produce an underwater buyer  — 0 found
+count 24: earliest buyer's exit is allowed   — off-threshold, exit is free
+count 25: earliest buyer's exit is refused   — count is exactly on a tier threshold
+count 26: earliest buyer's exit is allowed   — off-threshold, exit is free
+count 30: earliest buyer's exit is allowed   — off-threshold, exit is free
+count 50: earliest buyer's exit is refused   — count is exactly on a tier threshold
+count 51: earliest buyer's exit is allowed   — off-threshold, exit is free
 ```
+
+Fuzzing random sequences, **1.8% of withdrawal attempts are refused**, always on a
+threshold. A refusal is temporary: one more commit clears it.
+
+The brief's own test 6 still passes as written — with 25 buyers, the 25th (who
+escrowed $0.75) withdraws successfully, the tier un-breaks to $1.00, and a new
+commit re-breaks it to $0.75. The buyer whose exit is blocked is an *earlier*,
+higher-paying buyer, and being held in means settling at a price better than the
+one they agreed to.
+
+**Implementation note.** Do not find the minimum escrow by looping the buyer array
+— that is O(n) on every withdrawal and a griefing vector at 100 buyers. Keep a
+per-deal tally of how many buyers sit at each tier price, incremented on commit and
+decremented on withdrawal; the lowest escrowed price among the remainder is then
+found by scanning the deal's tiers, which is bounded by tier count rather than
+buyer count.
+
+### What else was weighed
+
+| Approach | Solvent | Supplier gets `clearing × n` | One shared price | Verdict |
+|---|---|---|---|---|
+| No guard (the brief as literally written) | **no** — funds lock | — | — | the bug |
+| Clamp clearing to the lowest escrow | yes | no | yes | **sybil-exploitable** |
+| Per-buyer `min(escrowed, clearing)` | yes | **no** | **no** | changes the brief's formula |
+| Uniform top-tier collateral | yes | yes | yes | changes what `commit` pulls |
+| **Withdrawal precondition** | **yes** | **yes** | **yes** | **chosen** |
+
+The clamp deserves its own note, because it looks safe and is not. Commit 50 sybils
+to unlock the bottom tier, commit for real at that bottom price, then withdraw the
+sybils: the clamp drags settlement to the bottom tier for everyone. On the campaign
+curve, 25 honest buyers pay the supplier $18.75, while the same 25 reached by
+sybil-and-withdraw pay $12.50. The sybils are refunded in full, so the attack costs
+only gas.
+
+Uniform top-tier collateral is sound and was implemented for two turns before being
+reverted. It is a bigger change than the problem requires: it alters what `commit`
+pulls, flattens the tiered refunds the brief's worked example describes, and removes
+the "you pay what you see" property. Its one genuine advantage is noted under
+[gasless commits](#gasless-commits-and-the-authorization-race).
+
+## Gasless commits and the authorization race
+
+An EIP-3009 authorization is signed for a **fixed amount**. Under commit-time
+escrow the live price can fall between a buyer signing and the relayer submitting,
+which invalidates the authorization and fails the commit.
+
+This is a real problem and it belongs to the relayer, not the contract. The relayer
+must sign for the price it quotes and resubmit against the new price if the tier
+breaks underneath it, surfacing that as a retry rather than a failure. Budget for it
+in Turn 4; it is the one place where the collateral design would have been simpler.
 
 ## Edge cases the contract must get right
 
 | Case | Required behaviour |
 |---|---|
 | Withdrawal un-breaks a tier | Live price goes back **up**. A tier is not sticky. |
-| Clearing after withdrawals | Always `tierPrice(finalCount)`. Affordable by construction, since everyone escrowed the top tier. |
+| Withdrawal would strand a buyer | Refused with a named error. Binds only on a tier threshold. |
 | Buyer removal from the middle | Swap-and-pop; no stale index, no array corruption. |
 | Boundary | `n >= tier.minBuyers`, not `>`. Buyer 25 exactly triggers tier 2. |
-| Below minimum | `refundAll` returns every commit in full; supplier gets nothing. |
+| Below minimum | `refundAll` returns each buyer their own escrow in full. |
 | State machine | `Open → Settled` or `Open → Refunded`. Mutually exclusive, each once. |
+| No dead ends | No deal past its deadline may have both `settle` and `refundAll` reverting. |
 | Blocklisted participant | Credited to `claimable`; cannot block anyone else. Pull, never push. |
-| Dust | Contract USDC balance is exactly 0 after all claims. Uniform refunds mean no per-buyer rounding. |
+| Dust | Contract USDC balance is exactly 0 after all claims. |
 | Pause | Halts `postDeal` and `commit`. Never `settle`, `refundAll` or `claim`. |
 | Randomness | None needed. `block.prevrandao` is always 0 on Arc — say so in the write-up. |
+
+## Other defects found in the brief
+
+**The headline worked example cannot be posted under the brief's own v1 rules.**
+Its example curve is $10 / $8 / $6, but its v1 spec caps unit price at 5 USDC, and
+51 buyers at $10 means $456 of peak escrow against a stated working-capital budget
+of $15–25. Keep the cap and run the campaign on the same curve shape inside it
+($1.00 / $0.75 / $0.50). The $10/$8/$6 numbers stay in the write-up as an
+illustration, where clearer round numbers help a reader.
+
+**The brief's test 1 asserts the wrong refund split.** It says "51 buyers clear at
+the lowest tier and **the first 8** are refunded the full difference", and its
+worked example says 8 / 19 / 24. That split comes from the example's narrative
+timeline, not from the curve's thresholds. Under the stated curve what matters is
+the buyer count when each person commits, which lands at 25 / 50 — so the split is
+**24 / 25 / 2**. The brief's figures are internally consistent ($306 + $70 = $376)
+but only against an implied curve breaking at 9 and 28 buyers, which is not the
+curve it states.
