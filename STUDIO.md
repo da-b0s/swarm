@@ -116,6 +116,70 @@ trivially exact. It also removes a race in gasless commits that neither the brie
 nor Studio had spotted — an EIP-3009 authorization is signed for a fixed amount, so
 a commit price that moves between signing and relaying would invalidate it.
 
+Result: [`studio/runs/turn-01b.json`](studio/runs/turn-01b.json)
+
+Studio confirmed `claimable` accumulates across deals and is never reset, applied
+all five changes, and then **found two more bugs on its own** while re-auditing —
+both real:
+
+- `commit()` and `withdraw()` had no guard for the window before `setSettler` had
+  been called. A buyer could be removed from the buyer array while the credit for
+  their collateral was silently dropped, because `withdraw()` now routes the
+  refund through the settler. It added a `SettlerNotConfigured` error to both.
+- `postDeal` allowed `minBuyers > cap`, which makes settlement permanently
+  unreachable — the deal can only ever refund. It added `InvalidConfiguration`.
+
+The second one is the kind of thing a human reviewer skims past, and it found it by
+running its functional auditor against its own output twice in a row.
+
+**What went wrong operationally.** The CLI lost the response stream
+(`Lost the response stream (terminated)`), which cancels an attached turn
+server-side. The contract edits had already landed but the testnet deploy never
+ran. The fix is `--detach` plus `arc-studio attach`, which is what every
+subsequent turn uses. Worth knowing before trusting a 20-minute deploy turn to a
+live connection.
+
+**Review of the pulled contracts** (`onchain/contracts/`, 477 lines across four
+files — pulled rather than read from the chat, because the result document's prose
+is not evidence):
+
+The collateral redesign is implemented correctly. `Settler.settle` reads
+`collateral(dealId)`, credits every buyer an identical `top - cp`, credits the
+supplier `cp × buyerCount`, and checks conservation with a named
+`ConservationViolation` error. `withdraw()` routes through
+`ISettler.creditWithdrawal` rather than pushing USDC. `TierBroken` now fires from
+both `commit()` and `withdraw()` whenever the live price moves.
+
+`DealFactory.postDeal` validation is genuinely thorough: non-empty tiers, the
+5 USDC price cap per tier, strictly ascending `minBuyers`, strictly descending
+prices, a reachable first tier, a future deadline, `cap` within 1–100,
+`minBuyers <= cap`, and the bottom tier reachable within `cap`. That strict descent
+is now load-bearing for solvency — it is what guarantees `tiers[0].pricePerUnit` is
+the maximum, so the `uint64` subtraction `top - cp` in `settle` cannot underflow.
+
+Three residual defects I found in review, carried into Turn 1c:
+
+- A zero tier price is accepted. Strict descent means only the bottom tier can be
+  zero, but that is a deal which settles while paying the supplier nothing.
+- `minBuyers == 0` is accepted and creates a permanently wedged deal: `refundAll`
+  can never run because `buyers.length >= 0` always holds, while `settle` with zero
+  buyers reads `collateral` as 0 and underflows `top - cp`. Both exits revert. No
+  funds at risk, but it falsifies the property that no deal past its deadline can
+  have both exits revert.
+- `collateral[dealId]` is set lazily on the first `commit`, which is the root cause
+  of the above and also reads as zero for a posted deal nobody has joined — the
+  frontend needs it before the first buyer arrives.
+
+And one thing the prompt should have specified and did not: the events do not carry
+the amounts. `Committed` emits only `livePrice`, never the collateral actually
+pulled, and `Refunded` emits only a buyer count. So USDC moved could not be totalled
+from logs alone, which defeats the point of a `/proof` page that reads from chain.
+Turn 1c enriches all six events.
+
+## Turn 1c — residual fixes, event payloads, testnet deploy
+
+Prompt: [`studio/prompts/turn-01c-events-and-deploy.md`](studio/prompts/turn-01c-events-and-deploy.md)
+
 _Result:_ _pending_
 
 ## Turn 2 — tests
