@@ -309,8 +309,87 @@ worth tidying if time allows.
 ## Turn 3 — frontend
 
 Prompt: [`studio/prompts/turn-03-frontend.md`](studio/prompts/turn-03-frontend.md)
+Result: [`studio/runs/turn-03.json`](studio/runs/turn-03.json) · status `completed`
 
-_pending_
+**The turn outlived the CLI.** The attached run hit the 30-minute timeout and the
+local log ends with "It may still be running". It was: the turn had finished
+server-side, and `arc-studio ls` showed the whole `src/swarm/` tree sitting in the
+workspace. Nothing had to be re-run. Worth knowing that a CLI timeout says nothing
+about whether the work completed — check `ls` before spending another turn.
+
+**Studio generated** 19 files, ~4,400 lines: `DealRoom`, `PriceHero`,
+`TierProgress`, `CommitFlow`, `SupplierView`, `ProofPage`, plus `config`, `abis`,
+`hooks`, `useEventLog` and `utils`. tsc and oxlint clean in the sandbox.
+
+**What it got right, including the hard part.** The withdrawal precondition is
+replicated client-side correctly — `computeClearingPrice` and the lowest-escrow
+scan in `utils.ts` match `_clearingPriceAt` and `_lowestEscrowedExcluding` branch
+for branch, including the `newCount == 0` guard. The button is disabled with a
+plain-language reason before anything is signed, which is what the prompt asked
+for and the thing most likely to have been fudged. All seven event signatures
+match the compiled ABIs exactly, checked against `out/*.json` rather than against
+the prompt. `SupplierView` mirrors every one of `postDeal`'s validation rules.
+Configuration is centralised rather than buried in components, and the log scanner
+pages with backoff.
+
+**What it got wrong, and I caught in review.**
+
+- **The network configuration was inverted, and it is the worst defect in the
+  project so far.** The verified testnet addresses were recorded as `mainnet`,
+  while the `testnet` entry held `0x70e334…`, `0x257d…`, `0x9c5cfe…` — Studio's
+  own sandbox deployment from Turn 1d, the one it could not wire — labelled
+  "v3 testnet deployment (wired externally)". It had read its own `deployments`
+  list and treated it as fact. Combined with `ACTIVE_NETWORK` defaulting to
+  `'mainnet'`, the app shipped pointing at chain 5042 at three addresses holding
+  **zero bytecode**, where the first thing a visitor is asked to do is approve
+  USDC. Verified from chain in both directions: the real set passes all 15
+  `verify-deploy` checks on testnet, Studio's set fails the four wiring checks
+  (`settlerSet: false`, so `commit` and `withdraw` revert), and the default
+  config fails all 14 on mainnet. Mainnet is now explicitly `deployed: false`
+  with zero addresses, the default is testnet, and a banner plus a
+  `DEPLOYMENT_READY` flag refuses the undeployed case.
+- **`useBlockCountdown` read the browser clock** — the prompt said block
+  timestamps specifically, the function was named for them, and its comment
+  rationalised the shortcut ("the deadline IS a unix timestamp"). But the contract
+  decides with `block.timestamp`, so a viewer whose clock runs fast sees "Ended"
+  while commits still succeed, and one running slow is offered a button that
+  reverts. Replaced with `useChainNow`, which anchors on the latest block and
+  ticks from measured elapsed time rather than the clock's absolute value.
+  `SupplierView` had the same bug where it mattered more — it set each deal's
+  deadline from `Date.now()`, so a skewed clock would have skewed the real
+  duration of every campaign.
+- **`approve()` was for the exact price on screen.** The contract escrows the
+  live price when the commit lands, and a withdrawal can un-break a tier and push
+  that price *up* between the two transactions — the commit then reverts on
+  allowance. Now approves `tiers[0]`, the curve's maximum, which the contract's
+  strictly-descending rule guarantees is an upper bound on what it can pull.
+- **An allowance failure was reported as "Insufficient USDC balance"**, because
+  the generic `insufficient` branch sat above any allowance check. That sends
+  someone to top up a wallet that was never short.
+- **The default deal was id 0**, which cannot exist — ids start at `++dealCount`.
+  A first-time visitor saw a nonexistent deal rendered as expired, with a "Settle
+  deal" button. Now lands on the newest deal, with a real empty state when there
+  are none.
+- **The nav overflowed at 375px**, clipping the wallet button off-screen, in a
+  build whose prompt begins "mobile-first" and whose demo is filmed on a phone.
+
+**One thing it did that I would rather it had not.** Facing lint errors in the
+obsolete `scripts/wire-swarm*.ts`, it added them to `ignorePatterns` and the
+tsconfig excludes to get a green check. The scripts are genuinely dead — wiring
+moved out of Studio in Turn 1c — so deleting them was available and honest.
+Suppressing a check to make it pass is a habit worth catching early in something
+that will be reviewed.
+
+The pulled frontend passes `tsc --noEmit` and `oxlint --type-aware` locally after
+these fixes, builds, and was exercised against the verified testnet deployment in
+a browser: deal room, tier builder with its live curve chart, and the proof page
+all render, and the nav fits at 375px.
+
+Local toolchain note: the sandbox uses bun, and `npm install` fails outright here
+because `vite-plugin-node-polyfills@0.22.0` declares a peer range of vite ≤5
+against this project's vite 6. bun does not enforce peer ranges, so it never
+surfaced in Studio. `npm install --legacy-peer-deps` is correct — the plugin works
+under vite 6; the metadata is just stale.
 
 ## Turn 4 — gasless commits
 

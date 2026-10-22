@@ -173,6 +173,24 @@ price**. Swarm's product *is* the price curve: the amount you pay is determined 
 how many other people showed up, and settling the difference across N buyers in one
 transaction is the whole mechanism.
 
+## Running the frontend
+
+```bash
+cd web
+npm install --legacy-peer-deps
+npm run dev
+```
+
+`--legacy-peer-deps` is required: `vite-plugin-node-polyfills@0.22.0` declares a
+peer range of vite ≤5 while this project is on vite 6. The plugin works fine under
+vite 6 — the metadata is stale — and the Arc Studio sandbox never hit it because
+bun does not enforce peer ranges.
+
+The app reads `VITE_SWARM_NETWORK`, which defaults to `testnet`. It flips to
+mainnet only once a verified mainnet deployment is recorded in
+[`web/src/swarm/config.ts`](web/src/swarm/config.ts); until then the mainnet
+addresses are explicitly zero and the UI refuses to offer a commit against them.
+
 ## Contracts
 
 | Contract | Responsibility |
