@@ -88,3 +88,16 @@ export const MIN_LOG_WINDOW = 500n
  * refuse rather than letting a wallet sign against a zero address.
  */
 export const DEPLOYMENT_READY: boolean = CONTRACTS_ACTIVE.deployed
+
+/**
+ * Optional gasless relayer URL. When unset (or empty), the gasless commit path
+ * is not shown and everything works as normal approve-then-commit. When set, the
+ * commit panel offers gasless as the primary path with approve-then-commit as a
+ * fallback.
+ *
+ * The relayer is a separate Node service — the key never reaches the browser.
+ * Set VITE_RELAYER_URL in .env to enable:
+ *   VITE_RELAYER_URL=http://localhost:3100
+ */
+export const RELAYER_URL: string | undefined =
+  (import.meta.env.VITE_RELAYER_URL as string | undefined) || undefined

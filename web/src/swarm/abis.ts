@@ -88,6 +88,43 @@ export const DEMAND_POOL_ABI = [
   // Write
   { type: 'function', name: 'commit',   stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }], outputs: [] },
   { type: 'function', name: 'withdraw', stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }], outputs: [] },
+  {
+    type: 'function', name: 'commitWithAuthorization', stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'dealId',           type: 'uint256' },
+      { name: 'buyer',            type: 'address' },
+      { name: 'authorizedAmount', type: 'uint256' },
+      { name: 'validAfter',       type: 'uint256' },
+      { name: 'validBefore',      type: 'uint256' },
+      { name: 'salt',             type: 'bytes32' },
+      { name: 'v',                type: 'uint8'   },
+      { name: 'r',                type: 'bytes32' },
+      { name: 's',                type: 'bytes32' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function', name: 'authorizationNonce', stateMutability: 'view',
+    inputs: [
+      { name: 'dealId', type: 'uint256' },
+      { name: 'buyer',  type: 'address' },
+      { name: 'salt',   type: 'bytes32' },
+    ],
+    outputs: [{ type: 'bytes32' }],
+  },
+  // Events
+  {
+    type: 'event', name: 'ExcessCredited',
+    inputs: [
+      { name: 'dealId',  type: 'uint256', indexed: true  },
+      { name: 'buyer',   type: 'address', indexed: true  },
+      { name: 'amount',  type: 'uint256', indexed: false },
+    ],
+  },
+  // Errors
+  { type: 'error', name: 'PriceRoseBeyondAuthorization', inputs: [{ name: 'requiredPrice', type: 'uint64' }] },
+  { type: 'error', name: 'AuthorizationAlreadyUsed',     inputs: [] },
+  { type: 'error', name: 'Blocklisted',                  inputs: [] },
 ] as const
 
 export const SETTLER_ABI = [

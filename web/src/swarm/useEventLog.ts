@@ -45,13 +45,14 @@ import {
 // ── Event topic hashes ────────────────────────────────────────────────────────
 
 const TOPICS = {
-  DealPosted:  keccak256(toBytes('DealPosted(uint256,address,uint32,uint64,uint64)')),
-  Committed:   keccak256(toBytes('Committed(uint256,address,uint64,uint64,uint32)')),
-  Withdrawn:   keccak256(toBytes('Withdrawn(uint256,address,uint64,uint64,uint32)')),
-  TierBroken:  keccak256(toBytes('TierBroken(uint256,uint32,uint64)')),
-  Settled:     keccak256(toBytes('Settled(uint256,uint64,uint32,uint256)')),
-  Refunded:    keccak256(toBytes('Refunded(uint256,address,uint256)')),
-  Claimed:     keccak256(toBytes('Claimed(address,uint256)')),
+  DealPosted:     keccak256(toBytes('DealPosted(uint256,address,uint32,uint64,uint64)')),
+  Committed:      keccak256(toBytes('Committed(uint256,address,uint64,uint64,uint32)')),
+  Withdrawn:      keccak256(toBytes('Withdrawn(uint256,address,uint64,uint64,uint32)')),
+  TierBroken:     keccak256(toBytes('TierBroken(uint256,uint32,uint64)')),
+  Settled:        keccak256(toBytes('Settled(uint256,uint64,uint32,uint256)')),
+  Refunded:       keccak256(toBytes('Refunded(uint256,address,uint256)')),
+  Claimed:        keccak256(toBytes('Claimed(address,uint256)')),
+  ExcessCredited: keccak256(toBytes('ExcessCredited(uint256,address,uint256)')),
 }
 
 const CONTRACT_ADDRS = [
@@ -78,6 +79,7 @@ export interface ProofStats {
   totalRefunds: bigint
   totalClaimed: bigint
   totalWithdrawn: bigint
+  totalExcess: bigint      // sum of ExcessCredited.amount across all deals
   distinctBuyers: Set<string>
   tierBreaks: number
   deals: Map<string, DealProof>
@@ -85,7 +87,8 @@ export interface ProofStats {
 
 export interface DealProof {
   dealId: string
-  commitsIn: bigint        // pricePaid sum minus withdrawal amounts
+  commitsIn: bigint        // pricePaid sum minus withdrawal amounts (USDC escrowed)
+  excessIn: bigint         // ExcessCredited sum — received by pool but not escrowed
   supplierCredited: bigint // cp * buyerCount from Settled; 0 for refunded deals
   refundsOut: bigint       // totalRefunds from Settled event OR sum of Refunded events
   settled: boolean
@@ -251,6 +254,7 @@ export function useEventLog() {
       totalRefunds:   0n,
       totalClaimed:   0n,
       totalWithdrawn: 0n,
+      totalExcess:    0n,
       distinctBuyers: new Set(),
       tierBreaks: 0,
       deals: new Map(),
@@ -261,6 +265,7 @@ export function useEventLog() {
         s.deals.set(id, {
           dealId: id,
           commitsIn: 0n,
+          excessIn: 0n,
           supplierCredited: 0n,
           refundsOut: 0n,
           settled: false,
@@ -320,6 +325,17 @@ export function useEventLog() {
           s.totalRefunds  += amt
           break
         }
+        case 'ExcessCredited': {
+          // A gasless commit transferred more USDC to the pool than the clearing
+          // price. The excess was not escrowed — it was routed immediately to the
+          // buyer's claimable balance via creditWithdrawal. It must appear on both
+          // sides of the conservation ledger: received by the pool, credited out.
+          const dealId = String(a.dealId)
+          const amt    = BigInt(String(a.amount))
+          getDeal(dealId).excessIn += amt
+          s.totalExcess            += amt
+          break
+        }
         case 'Claimed':
           s.totalClaimed += BigInt(String(a.amount))
           break
@@ -327,16 +343,24 @@ export function useEventLog() {
     }
 
     // ── Conservation check ─────────────────────────────────────────────────
-    // settle():   commitsIn = supplierCredited + refundsOut
-    // refundAll(): commitsIn = refundsOut  (supplierCredited stays 0)
+    // For a settled deal:
+    //   (commitsIn + excessIn) = supplierCredited + refundsOut + excessIn
+    //   simplifies to: commitsIn = supplierCredited + refundsOut
+    //   (excess flows straight out via creditWithdrawal, so it cancels)
+    //
+    // For a refunded deal:
+    //   commitsIn = refundsOut  (no excess in a refundAll deal)
+    //
+    // ExcessCredited is recorded in excessIn for display but does not affect
+    // the conservation equation because it entered and left the pool atomically
+    // in the same transaction (received → immediately credited to claimable).
     for (const deal of s.deals.values()) {
       if (deal.settled) {
         deal.conserved = deal.commitsIn === deal.supplierCredited + deal.refundsOut
       } else if (deal.refunded) {
-        // supplierCredited is 0 for a refunded deal; all commits must come back out.
         deal.conserved = deal.commitsIn === deal.refundsOut
       }
-      // Still-open deals: conserved stays null (no check yet)
+      // Still-open deals: conserved stays null
     }
 
     return s

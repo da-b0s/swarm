@@ -5,9 +5,10 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Loader2, ExternalLink, CheckCircle, AlertCircle, Lock } from 'lucide-react'
 import { formatUsdcPrice, txUrl, parseRevertReason, checkWouldStrandBuyer } from './utils'
 import { useEscrowed, useTierCounts, useChainNow } from './hooks'
-import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'
+import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL } from './config'
 import { DEMAND_POOL_ABI, ERC20_ABI } from './abis'
 import type { DealTier } from './hooks'
+import { GaslessCommitFlow } from './GaslessCommitFlow'
 
 interface Props {
   dealId: bigint
@@ -24,6 +25,14 @@ type Step = 'idle' | 'approving' | 'approve-confirming' | 'committing' | 'commit
 const CHAIN_ID = ARC_NETWORK.chainId
 
 export function CommitFlow({ dealId, clearingPrice, buyerCount, tiers, deadline, state, onCommitted }: Props) {
+  // When the relayer is configured, show the gasless path first.
+  // The user can switch to approve-then-commit via the fallback link.
+  // NOTE: showFallback must be declared before any other hook so the hook
+  // order is the same on every render (rules-of-hooks).
+  const [showFallback, setShowFallback] = useState(false)
+
+  // All hooks must be called unconditionally — move them all above the
+  // conditional return so the call order is stable.
   const { address, isConnected, chainId: walletChain } = useAccount()
   const { switchChain } = useSwitchChain()
   const wrongChain = isConnected && walletChain !== CHAIN_ID
@@ -105,6 +114,21 @@ export function CommitFlow({ dealId, clearingPrice, buyerCount, tiers, deadline,
   // strictly descending prices), so approving it covers every price the contract
   // can charge, while the escrow actually pulled is still only the live price.
   const maxCharge = tiers.length > 0 ? tiers[0].pricePerUnit : clearingPrice
+
+  // All hooks have been called — safe to branch now.
+  if (RELAYER_URL && !showFallback) {
+    return (
+      <GaslessCommitFlow
+        dealId={dealId}
+        clearingPrice={clearingPrice}
+        tiers={tiers}
+        deadline={deadline}
+        state={state}
+        onCommitted={onCommitted}
+        onFallback={() => setShowFallback(true)}
+      />
+    )
+  }
 
   const handleCommit = () => {
     if (!isConnected || wrongChain || !address) return
@@ -325,6 +349,16 @@ export function CommitFlow({ dealId, clearingPrice, buyerCount, tiers, deadline,
             </button>
           )}
         </div>
+      )}
+
+      {RELAYER_URL && (
+        <button
+          onClick={() => setShowFallback(false)}
+          className="w-full text-xs py-1 opacity-40 hover:opacity-70 transition-opacity"
+          style={{ color: 'var(--muted)' }}
+        >
+          Switch to gasless commit
+        </button>
       )}
 
       <button

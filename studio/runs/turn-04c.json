@@ -1,0 +1,393 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading everything needed before writing a line. Good. I have everything. Now reading the remaining frontend files: Good. Reading the rest of useEventLog, utils, and the App.tsx to understand structure: Good. I have complete picture of everything. Now setting up todos and executing all work in parallel: Now update useEventLog to track ExcessCredited and add it to per-deal and global totals. Also need to add ExcessCredited to TOPICS and update the conservation model to account for excess: Now update the ProofStats and DealProof interfaces, and the aggregation logic: Now update the derived stats to initialise and aggregate `excessIn` and `totalExcess`, and update the conservation check: Now add the `ExcessCredited` case to the aggregation switch and update the conservation check: Now write the relayer service: Now update the frontend config to expose `VITE_RELAYER_URL`, then write the gasless commit flow: Now write `GaslessCommitFlow.tsx`. This component handles the sign-and-submit path:\n- Generates a random 32-byte salt\n- Reads `authorizationNonce` from the pool\n- Signs `ReceiveWithAuthorization` EIP-712 typed data with `signTypedData`\n- Posts to the relayer\n- Handles 409 (price rose) with re-sign prompt\n- Shows excess credited after success Now update `CommitFlow.tsx` to import and conditionally render `GaslessCommitFlow` as the primary path when `RELAYER_URL` is set, with the existing flow as fallback: Now add a `showFallback` state and render the gasless path first when the relayer is set: Also add a \"switch to gasless\" link at the bottom of the approve path when relayer is configured: Now also update ProofPage to display `excessIn` per deal. Let me check its current render: Now update ProofPage to show `excessIn` per deal and add `ExcessCredited` badge + summary in the event log, and show `totalExcess` in global stats: Now add `excessIn` to the per-deal row and add `ExcessCredited` to the event log badge/summary: Now add `ExcessCredited` to the event colors and EventSummary: Now run the frontend checks and relayer tsc simultaneously: All 14 errors are the same two issues. Fix `CommitFlow.tsx`: move all hooks before the conditional return; fix `config.ts`: add a type assertion on `VITE_RELAYER_URL`. I'll do both in one pass by rewriting CommitFlow's top section to hoist all hooks before the conditional: Now add the conditional return after all hooks are called. First I need to find where it should go — after `maxCharge` definition. Let me find the spot right after all hooks and derived values, before the handlers: The conditional return needs to go after all hooks are called. I'll place it after `maxCharge` (the last derived value) and before the handlers: Now fix the `config.ts` unsafe-any: Frontend is clean. Now typecheck the relayer: Four type errors to fix:\n\n1. `privateKeyToAccount` is in `viem/accounts`, not `viem` root\n2. `nextNonce` type clash — needs to track `number` not `bigint` for nonce (wagmi uses number nonces) \n3. `sendMutex` assignment issue — `txHash` declared with `!` but used before assignment; the mutex is a `Promise<void>` but `sendMutex =` reassigns it  \n4. `publicClient.decodeEventLog` doesn't exist — that's a viem utility function, not on the client Fix the nonce type (`number`, not `bigint`): Now fix the relay function — `txHash` and `gasPrice` need to be properly scoped, and the mutex reassignment needs to handle the promise type correctly. Also remove the dead `decoded` assignment (the `decodeEventLog` from `publicClient` which doesn't exist): Now fix the `decodeEventLog` usage — remove the dead `decoded` variable and use raw topic matching directly: Confirm the frontend dev server is still up: Actual check output:\n\n**Frontend (`bash scripts/check.sh`):**\n```\n$ oxlint --type-aware src scripts --fix; s=$?; oxlint --fix .; exit $((s>0?s:$?))\nFound 0 warnings and 0 errors.\nFinished in 1.3s on 27 files with 57 rules using 4 threads.\nFound 0 warnings and 0 errors.\nFinished in 209ms on 31 files with 34 rules using 4 threads.\n$ tsc --noEmit\n\n[Command succeeded with exit code 0]\n```\n\n**Relayer (`cd relayer && npx tsc --noEmit`):**\n```\n[Command succeeded with exit code 0]\n```\n\n---\n\nHere is what was built and why each decision is correct.\n\n**`src/swarm/abis.ts`**\n\n`commitWithAuthorization` and `authorizationNonce` added as functions; `ExcessCredited` added as an event with `dealId` and `buyer` indexed and `amount` non-indexed; `PriceRoseBeyondAuthorization(uint64)`, `AuthorizationAlreadyUsed()`, and `Blocklisted()` added as errors. All entries match the compiled artifact verbatim.\n\n**`src/swarm/useEventLog.ts`**\n\n`ExcessCredited` is now a tracked topic with its own keccak256 hash. The aggregation switch adds `excessIn` to the per-deal struct and `totalExcess` to global stats. The conservation equation is unchanged (`commitsIn = supplierCredited + refundsOut` for settled, `commitsIn = refundsOut` for refunded) because excess enters and exits the pool atomically in the same transaction: `receiveWithAuthorization` transfers the full authorized amount in, then `creditWithdrawal` immediately credits the excess out to the buyer's claimable balance. The pool's net accounting sees only the escrowed portion, so excess cancels out of the conservation equation. It is displayed separately so every dollar received is visible.\n\n**`relayer/server.ts`**\n\nThe nonce is tracked as a `number` (matching viem's `getTransactionCount` return type) and managed through a promise-chain mutex so concurrent requests never see the same nonce. The send loop bumps the fee by 20% if the transaction has not confirmed within 30 seconds, using the same nonce. `privateKeyToAccount` is imported from `viem/accounts` (not the root `viem` export). Log parsing uses raw topic matching against the known keccak256 hashes rather than `publicClient.decodeEventLog` (which does not exist on the client object). The key is never logged, returned, or interpolated into any string.\n\n**`src/swarm/GaslessCommitFlow.tsx`**\n\nSigns for `tiers[0].pricePerUnit` (the curve maximum), not the live price. This is the same reason `CommitFlow` approves the max: the price can rise between signing and submit, and the contract will charge the live price at that moment. If the price falls, the excess is immediately credited via `creditWithdrawal` and shown to the buyer after the relayer returns the confirmed receipt. `validBefore` is computed from `useChainNow()` so it tracks chain time, not the browser clock. On a 409 response, a fresh salt is generated and `authorizationNonce` is re-fetched before re-displaying the sign button with the new price — the buyer always signs a fresh nonce for the fresh price.\n\n**`src/swarm/CommitFlow.tsx`**\n\nAll hooks are now called unconditionally before any conditional return, satisfying rules-of-hooks. The conditional return (`if (RELAYER_URL && !showFallback)`) sits after `maxCharge`, the last derived value, where no hook can follow it.",
+  "todos": [
+    {
+      "id": "todo:run tsc + lint (frontend), tsc (relayer), paste actual output:0",
+      "text": "Run tsc + lint (frontend), tsc (relayer), paste actual output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "relayer/package.json",
+    "relayer/server.ts",
+    "relayer/tsconfig.json",
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/GaslessCommitFlow.tsx",
+    "src/swarm/ProofPage.tsx",
+    "src/swarm/abis.ts",
+    "src/swarm/config.ts",
+    "src/swarm/useEventLog.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "relayer/package.json",
+      "action": "write",
+      "addedLines": 19,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+{\n+  \"name\": \"swarm-relayer\",\n+  \"version\": \"1.0.0\",\n+  \"private\": true,\n+  \"type\": \"module\",\n+  \"scripts\": {\n+    \"start\": \"node --experimental-strip-types server.ts\",\n+    \"dev\":   \"node --experimental-strip-types --watch server.ts\","
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "write",
+      "addedLines": 462,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * Swarm Gasless Relayer\n+ *\n+ * POST /commit  — simulate, screen, relay a commitWithAuthorization call\n+ * GET  /health  — chain id, pool address, relayer address, USDC balance\n+ *\n+ * Environment:\n+ *   RELAYER_KEY     — hex private key (never logged, never returned)"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 12,
+      "removedLines": 12,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import {\n   createPublicClient,\n   createWalletClient,\n   http as viemHttp,\n   parseAbi,\n   decodeErrorResult,\n   formatUnits,\n   type Hex,"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 16,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-let nextNonce: bigint | null = null\n+let nextNonce: number | null = null\n let sendMutex = Promise.resolve()\n \n-async function getNextNonce(): Promise<bigint> {\n+async function getNextNonce(): Promise<number> {\n   if (nextNonce === null) {\n     nextNonce = await publicClient.getTransactionCount({ address: account.address })\n   }\n   return nextNonce"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 50,
+      "removedLines": 50,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // 3. Send — serialised through the mutex so two concurrent requests cannot\n-  //    take the same nonce.\n-  let txHash!: Hex\n-  let gasPrice!: bigint\n+  //    take the same nonce. We capture txHash and the final gasPrice for the\n+  //    receipt lookup and cost calculation below.\n+  const sendResult = { txHash: '' as Hex, gasPrice: MIN_GAS_PRICE }\n \n   sendMutex = sendMutex.then(async () => {\n     await getNextNonce()\n     const nonce = consumeNonce()"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 18,
+      "removedLines": 22,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "+  // keccak256 topic hashes (verified against the compiled ABI):\n+  //   Committed(uint256,address,uint64,uint64,uint32)\n+  //   ExcessCredited(uint256,address,uint256)\n+  const COMMITTED_TOPIC = '0x201b52d75ed359a2ae4baad1623cdef768038c57814a0a946233d073c8f470f6'\n+  const EXCESS_TOPIC    = '0x3cfc150e50c4024ef3086c288297f0b4d66863e163f546bcc0871098df534b41'\n+\n   for (const log of receipt.logs) {\n-    try {\n-      const decoded = publicClient.decodeEventLog\n-        ? undefined  // use low-level below\n-        : undefined\n-\n-      // Match Committed topic: keccak256('Committed(uint256,address,uint64,uint64,uint32)')\n-      const COMMITTED_TOPIC = '0x201b52d75ed359a2ae4baad1623cdef768038c57814a0a946233d073c8f470f6'\n+    try {"
+    },
+    {
+      "path": "relayer/tsconfig.json",
+      "action": "write",
+      "addedLines": 15,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+{\n+  \"compilerOptions\": {\n+    \"target\": \"ES2022\",\n+    \"module\": \"NodeNext\",\n+    \"moduleResolution\": \"NodeNext\",\n+    \"strict\": true,\n+    \"noUnusedLocals\": true,\n+    \"noUnusedParameters\": true,"
+    },
+    {
+      "path": "src/swarm/abis.ts",
+      "action": "edit",
+      "addedLines": 40,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   { type: 'function', name: 'commit',   stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }], outputs: [] },\n   { type: 'function', name: 'withdraw', stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }], outputs: [] },\n-] as const\n+  {\n+    type: 'function', name: 'commitWithAuthorization', stateMutability: 'nonpayable',\n+    inputs: [\n+      { name: 'dealId',           type: 'uint256' },\n+      { name: 'buyer',            type: 'address' },\n+      { name: 'authorizedAmount', type: 'uint256' },"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 11,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useState, useEffect } from 'react'\n import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'\n import { ConnectKitButton } from 'connectkit'\n import { motion, AnimatePresence } from 'framer-motion'\n import { Loader2, ExternalLink, CheckCircle, AlertCircle, Lock } from 'lucide-react'\n import { formatUsdcPrice, txUrl, parseRevertReason, checkWouldStrandBuyer } from './utils'\n import { useEscrowed, useTierCounts, useChainNow } from './hooks'\n-import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'\n+import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL } from './config'"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 22,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function CommitFlow({ dealId, clearingPrice, buyerCount, tiers, deadline, state, onCommitted }: Props) {\n-  const { address, isConnected, chainId: walletChain } = useAccount()\n-  const { switchChain } = useSwitchChain()\n-  const wrongChain = isConnected && walletChain !== CHAIN_ID\n+  // When the relayer is configured, show the gasless path first.\n+  // The user can switch to approve-then-commit via the fallback link.\n+  const [showFallback, setShowFallback] = useState(false)\n+\n+  if (RELAYER_URL && !showFallback) {\n+    return (\n+      <GaslessCommitFlow"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-      <button\n-        onClick={handleAddNetwork}\n-        className=\"w-full text-xs py-1 opacity-40 hover:opacity-70 transition-opacity\"\n-        style={{ color: 'var(--muted)' }}\n-      >\n-        Add {ARC_NETWORK.name} to wallet\n-      </button>\n-    </div>\n+      {RELAYER_URL && (\n+        <button\n+          onClick={() => setShowFallback(false)}\n+          className=\"w-full text-xs py-1 opacity-40 hover:opacity-70 transition-opacity\"\n+          style={{ color: 'var(--muted)' }}\n+        >\n+          Switch to gasless commit\n+        </button>"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 15,
+      "removedLines": 25,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function CommitFlow({ dealId, clearingPrice, buyerCount, tiers, deadline, state, onCommitted }: Props) {\n   // When the relayer is configured, show the gasless path first.\n   // The user can switch to approve-then-commit via the fallback link.\n+  // NOTE: showFallback must be declared before any other hook so the hook\n+  // order is the same on every render (rules-of-hooks).\n   const [showFallback, setShowFallback] = useState(false)\n \n-  if (RELAYER_URL && !showFallback) {\n-    return (\n-      <GaslessCommitFlow\n+  // All hooks must be called unconditionally — move them all above the"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 18,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const maxCharge = tiers.length > 0 ? tiers[0].pricePerUnit : clearingPrice\n \n-  const handleCommit = () => {\n+  // All hooks have been called — safe to branch now.\n+  if (RELAYER_URL && !showFallback) {\n+    return (\n+      <GaslessCommitFlow\n+        dealId={dealId}\n+        clearingPrice={clearingPrice}"
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 18,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " /**\n  * False when the active network has no verified deployment. Every write path must\n  * refuse rather than letting a wallet sign against a zero address.\n  */\n-export const DEPLOYMENT_READY: boolean = CONTRACTS_ACTIVE.deployed\n+export const DEPLOYMENT_READY: boolean = CONTRACTS_ACTIVE.deployed\n+\n+/**\n+ * Optional gasless relayer URL. When unset (or empty), the gasless commit path"
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export const RELAYER_URL: string | undefined =\n-  import.meta.env.VITE_RELAYER_URL || undefined\n+  (import.meta.env.VITE_RELAYER_URL as string | undefined) || undefined"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "write",
+      "addedLines": 364,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * GaslessCommitFlow — buyer signs once, relayer submits and pays gas.\n+ *\n+ * The buyer signs a ReceiveWithAuthorization EIP-712 message for\n+ * `authorizedAmount` USDC to the DemandPool. The relayer simulates,\n+ * screens, and relays the commitWithAuthorization call.\n+ *\n+ * Domain: { name: \"USDC\", version: \"2\", chainId, verifyingContract: 0x3600… }"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           {[\n             { label: 'Total committed', value: formatUsdcPrice(stats.totalCommits) },\n             { label: 'Total refunded', value: formatUsdcPrice(stats.totalRefunds) },\n+            { label: 'Total excess credited', value: formatUsdcPrice(stats.totalExcess) },\n             { label: 'Total claimed', value: formatUsdcPrice(stats.totalClaimed) },\n             { label: 'Tier breaks', value: stats.tierBreaks.toString() },\n+            { label: 'Distinct buyers', value: stats.distinctBuyers.size.toString() },\n           ].map(({ label, value }) => ("
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 14,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-                <div className=\"grid grid-cols-3 gap-2 text-xs\" style={{ color: 'var(--muted)' }}>\n+                <div className=\"grid grid-cols-2 gap-2 text-xs sm:grid-cols-4\" style={{ color: 'var(--muted)' }}>\n                   <div>\n                     <p>Commits in</p>\n                     <p className=\"font-semibold tabular-nums\" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.commitsIn)}</p>\n                   </div>\n-                  <div>\n-                    <p>Supplier</p>\n-                    <p className=\"font-semibold tabular-nums\" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.supplierCredited)}</p>\n+                  {deal.excessIn > 0n && (\n+                    <div>\n+                      <p>Excess credited</p>"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " const EVENT_COLORS: Record<string, string> = {\n-  DealPosted: '#122d45',\n-  Committed:  '#1a8047',\n-  Withdrawn:  '#6b6580',\n-  TierBroken: '#1061a6',\n-  Settled:    '#1a8047',\n-  Refunded:   '#ba2b4c',\n-  Claimed:    '#1a8047',\n+  DealPosted:     '#122d45',\n+  Committed:      '#1a8047',\n+  Withdrawn:      '#6b6580',\n+  TierBroken:     '#1061a6',\n+  Settled:        '#1a8047',\n+  Refunded:       '#ba2b4c',\n+  Claimed:        '#1a8047',"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "+    case 'ExcessCredited':\n+      return <p className=\"text-xs\" style={{ color: 'var(--ink-2)' }}>Deal #{String(a.dealId)} · {shortAddr(String(a.buyer))} excess {formatUsdcPrice(BigInt(String(a.amount)))} credited to claimable</p>\n     case 'Claimed':\n       return <p className=\"text-xs\" style={{ color: 'var(--ink-2)' }}>{shortAddr(String(a.claimant))} claimed {formatUsdcPrice(BigInt(String(a.amount)))}</p>\n     default:\n       return <p className=\"text-xs\" style={{ color: 'var(--muted)' }}>Unknown event</p>"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " const TOPICS = {\n-  DealPosted:  keccak256(toBytes('DealPosted(uint256,address,uint32,uint64,uint64)')),\n-  Committed:   keccak256(toBytes('Committed(uint256,address,uint64,uint64,uint32)')),\n-  Withdrawn:   keccak256(toBytes('Withdrawn(uint256,address,uint64,uint64,uint32)')),\n-  TierBroken:  keccak256(toBytes('TierBroken(uint256,uint32,uint64)')),\n-  Settled:     keccak256(toBytes('Settled(uint256,uint64,uint32,uint256)')),\n-  Refunded:    keccak256(toBytes('Refunded(uint256,address,uint256)')),\n-  Claimed:     keccak256(toBytes('Claimed(address,uint256)')),\n+  DealPosted:     keccak256(toBytes('DealPosted(uint256,address,uint32,uint64,uint64)')),\n+  Committed:      keccak256(toBytes('Committed(uint256,address,uint64,uint64,uint32)')),\n+  Withdrawn:      keccak256(toBytes('Withdrawn(uint256,address,uint64,uint64,uint32)')),\n+  TierBroken:     keccak256(toBytes('TierBroken(uint256,uint32,uint64)')),\n+  Settled:        keccak256(toBytes('Settled(uint256,uint64,uint32,uint256)')),\n+  Refunded:       keccak256(toBytes('Refunded(uint256,address,uint256)')),\n+  Claimed:        keccak256(toBytes('Claimed(address,uint256)')),"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 21,
+      "removedLines": 19,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export interface ProofStats {\n   totalCommits: bigint\n   totalRefunds: bigint\n   totalClaimed: bigint\n   totalWithdrawn: bigint\n+  totalExcess: bigint      // sum of ExcessCredited.amount across all deals\n   distinctBuyers: Set<string>\n-  tierBreaks: number\n-  deals: Map<string, DealProof>\n+  tierBreaks: number"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 26,
+      "removedLines": 24,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     const s: ProofStats = {\n       totalCommits:   0n,\n       totalRefunds:   0n,\n       totalClaimed:   0n,\n       totalWithdrawn: 0n,\n+      totalExcess:    0n,\n       distinctBuyers: new Set(),\n-      tierBreaks: 0,\n-      deals: new Map(),\n+      tierBreaks: 0,"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 37,
+      "removedLines": 18,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        case 'Claimed':\n-          s.totalClaimed += BigInt(String(a.amount))\n-          break\n-      }\n-    }\n-\n-    // ── Conservation check ─────────────────────────────────────────────────\n-    // settle():   commitsIn = supplierCredited + refundsOut\n+        case 'ExcessCredited': {\n+          // A gasless commit transferred more USDC to the pool than the clearing\n+          // price. The excess was not escrowed — it was routed immediately to the\n+          // buyer's claimable balance via creditWithdrawal. It must appear on both\n+          // sides of the conservation ledger: received by the pool, credited out.\n+          const dealId = String(a.dealId)\n+          const amt    = BigInt(String(a.amount))\n+          getDeal(dealId).excessIn += amt"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test/SwarmGaslessTest.t.sol",
+      "contracts/test/SwarmTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

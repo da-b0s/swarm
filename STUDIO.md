@@ -550,6 +550,46 @@ Two things to note rather than fix now:
   transfer; that is blocked by EIP-3009's distinct typehashes, which real USDC
   enforces, but this test does not demonstrate it.
 
+## Turn 4c — relayer and gasless frontend
+
+Prompt: [`turn-04c-relayer-frontend.md`](studio/prompts/turn-04c-relayer-frontend.md)
+Result: [`turn-04c`](studio/runs/turn-04c.json) · status `completed`
+
+Finished in one turn: a `relayer/` Node service, `GaslessCommitFlow.tsx`, the
+regenerated ABI, and `ExcessCredited` on the proof page. tsc and lint clean, both
+in its output and run here. The parts that are easiest to get wrong were right:
+the 20 gwei floor is applied to both the fee estimate and every bump, priority
+fee is 0, the service refuses to start on a chain-id mismatch or a placeholder
+key, the key is never interpolated into output, and the two hardcoded event
+topic hashes match keccak of the signatures.
+
+Review found the rest needed another pass, queued as Turn 4d:
+
+- **It signs for the curve maximum.** Reasoning carried over from the approve
+  flow, where approving the maximum is harmless because an approval is only a
+  ceiling. A `receiveWithAuthorization` moves the whole signed amount, so a buyer
+  joining at $0.50 would need — and lose to the contract until claimed — $1.00.
+  That defeats the feature's one purpose.
+- **One failed send poisons the queue.** Sends are serialised by reassigning a
+  single promise chain; a throw leaves it rejected and every later send skips.
+- **A failed send leaves a nonce gap** that blocks every later transaction.
+- **The replacement loop bumps the fee every two seconds** once it starts,
+  because the next replacement time is never moved forward: about fifteen bumps,
+  ending near fifteen times the starting fee.
+- **A mined original is reported as a failure** when a replacement was sent,
+  because only the latest hash is checked.
+- A fixed 300,000 gas limit instead of estimating after the simulation it already
+  runs; and CORS defaulting to `*`.
+
+None of these appear in a single happy-path request, which is exactly the test
+that would have passed.
+
+## Turn 4d — relayer hardening
+
+Prompt: [`turn-04d-relayer-hardening.md`](studio/prompts/turn-04d-relayer-hardening.md)
+
+_queued, not yet run_
+
 ## Turns 5+
 
 | Turn | Intent | What changed |

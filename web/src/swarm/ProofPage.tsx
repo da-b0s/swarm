@@ -74,8 +74,10 @@ export function ProofPage() {
           {[
             { label: 'Total committed', value: formatUsdcPrice(stats.totalCommits) },
             { label: 'Total refunded', value: formatUsdcPrice(stats.totalRefunds) },
+            { label: 'Total excess credited', value: formatUsdcPrice(stats.totalExcess) },
             { label: 'Total claimed', value: formatUsdcPrice(stats.totalClaimed) },
             { label: 'Tier breaks', value: stats.tierBreaks.toString() },
+            { label: 'Distinct buyers', value: stats.distinctBuyers.size.toString() },
           ].map(({ label, value }) => (
             <div key={label} className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
               <p className="text-xs" style={{ color: 'var(--muted)' }}>{label}</p>
@@ -113,11 +115,17 @@ export function ProofPage() {
                     {deal.settled ? 'Settled' : deal.refunded ? 'Refunded' : 'Open'}
                   </span>
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-xs" style={{ color: 'var(--muted)' }}>
+                <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4" style={{ color: 'var(--muted)' }}>
                   <div>
                     <p>Commits in</p>
                     <p className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.commitsIn)}</p>
                   </div>
+                  {deal.excessIn > 0n && (
+                    <div>
+                      <p>Excess credited</p>
+                      <p className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.excessIn)}</p>
+                    </div>
+                  )}
                   <div>
                     <p>Supplier</p>
                     <p className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.supplierCredited)}</p>
@@ -188,13 +196,14 @@ export function ProofPage() {
 }
 
 const EVENT_COLORS: Record<string, string> = {
-  DealPosted: '#122d45',
-  Committed:  '#1a8047',
-  Withdrawn:  '#6b6580',
-  TierBroken: '#1061a6',
-  Settled:    '#1a8047',
-  Refunded:   '#ba2b4c',
-  Claimed:    '#1a8047',
+  DealPosted:     '#122d45',
+  Committed:      '#1a8047',
+  Withdrawn:      '#6b6580',
+  TierBroken:     '#1061a6',
+  Settled:        '#1a8047',
+  Refunded:       '#ba2b4c',
+  Claimed:        '#1a8047',
+  ExcessCredited: '#b45309',
 }
 
 function EventBadge({ type }: { type: string }) {
@@ -223,6 +232,8 @@ function EventSummary({ ev }: { ev: import('./useEventLog').SwarmEvent }) {
       return <p className="text-xs" style={{ color: 'var(--ink-2)' }}>Deal #{String(a.dealId)} · cleared at {formatUsdcPrice(BigInt(String(a.clearingPrice)))} · {String(a.buyerCount)} buyers</p>
     case 'Refunded':
       return <p className="text-xs" style={{ color: 'var(--ink-2)' }}>Deal #{String(a.dealId)} · {shortAddr(String(a.buyer))} refunded {formatUsdcPrice(BigInt(String(a.amount)))}</p>
+    case 'ExcessCredited':
+      return <p className="text-xs" style={{ color: 'var(--ink-2)' }}>Deal #{String(a.dealId)} · {shortAddr(String(a.buyer))} excess {formatUsdcPrice(BigInt(String(a.amount)))} credited to claimable</p>
     case 'Claimed':
       return <p className="text-xs" style={{ color: 'var(--ink-2)' }}>{shortAddr(String(a.claimant))} claimed {formatUsdcPrice(BigInt(String(a.amount)))}</p>
     default:
