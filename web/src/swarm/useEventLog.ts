@@ -1,14 +1,40 @@
 /**
  * Event log scanner for the /proof page.
- * Paginates eth_getLogs starting at the deployment block.
- * Narrows the window on rejection rather than assuming a fixed limit.
- * Keeps the window at or below INITIAL_LOG_WINDOW blocks; backs off to MIN_LOG_WINDOW.
+ *
+ * Paginates eth_getLogs starting at the deployment block, distinguishing two
+ * classes of RPC failure that need different treatment:
+ *
+ *   "requested range too large" (or similar) — the node rejected our window.
+ *     Halve it and retry the same cursor immediately. Never go below MIN_LOG_WINDOW.
+ *
+ *   "rate limit exceeded" / HTTP 429 — the node is throttling us.
+ *     Keep the current window and wait, doubling the delay from RATE_LIMIT_BASE_MS
+ *     up to RATE_LIMIT_MAX_MS, then retry.
+ *
+ * After GROW_AFTER consecutive successes, grow the window by 25% back toward
+ * MAX_LOG_WINDOW. This lets the scan speed up again after an early halving.
+ *
+ * Measured on the Arc Testnet RPC:
+ *   - 2,000- and 5,000-block windows accepted with the seven-topic filter.
+ *   - 10,000+ returns "requested range too large".
+ *   - 20 consecutive back-to-back requests were not rate-limited.
+ * So the scanner starts at MAX_LOG_WINDOW = 5,000 and only backs off if the
+ * node tells it to.
  */
 
 import { useState, useCallback, useRef } from 'react'
 import { decodeEventLog, keccak256, toBytes, type Hex } from 'viem'
-import { ARC_NETWORK, CONTRACTS_ACTIVE, INITIAL_LOG_WINDOW, MIN_LOG_WINDOW } from './config'
+import { ARC_NETWORK, CONTRACTS_ACTIVE, MIN_LOG_WINDOW } from './config'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI, SETTLER_ABI } from './abis'
+
+/** Largest window to try. Stays ≤ 5,000 per RPC node behaviour. */
+const MAX_LOG_WINDOW = 5000n
+/** Floor — the node accepts this even for dense event ranges. */
+const RATE_LIMIT_BASE_MS = 500
+const RATE_LIMIT_MAX_MS  = 16_000
+/** Grow the window by this factor after GROW_AFTER consecutive clean fetches. */
+const GROW_FACTOR = 1.25
+const GROW_AFTER  = 4
 
 // All event topics we care about
 const TOPICS = {
@@ -61,11 +87,29 @@ export type ScanState = 'idle' | 'scanning' | 'done' | 'error'
 
 type JsonRpcResponse<T> = { result: T; error?: undefined } | { result?: undefined; error: { message?: string } }
 
+/** Thrown when the node is rate-limiting (HTTP 429 or message matches). */
+class RateLimitError extends Error { constructor(msg: string) { super(msg); this.name = 'RateLimitError' } }
+/** Thrown when the requested block range is too wide for this node. */
+class RangeTooLargeError extends Error { constructor(msg: string) { super(msg); this.name = 'RangeTooLargeError' } }
+
 async function rpcFetch<T>(method: string, params: unknown[]): Promise<T> {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
   const r = await fetch(ARC_NETWORK.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
+  if (r.status === 429) throw new RateLimitError('rate limit exceeded (HTTP 429)')
   const json = await r.json() as JsonRpcResponse<T>
-  if (json.error) throw new Error(json.error.message ?? 'RPC error')
+  if (json.error) {
+    const msg = json.error.message ?? 'RPC error'
+    const low = msg.toLowerCase()
+    // Rate-limit before range: the word "limit" appears in both, so match
+    // "rate" first to avoid misclassifying a rate-limit as a range error.
+    if (low.includes('rate limit') || low.includes('rate_limit') || low.includes('too many requests')) {
+      throw new RateLimitError(msg)
+    }
+    if (low.includes('range') || low.includes('too large') || low.includes('too many blocks')) {
+      throw new RangeTooLargeError(msg)
+    }
+    throw new Error(msg)
+  }
   return json.result
 }
 
@@ -150,25 +194,45 @@ export function useEventLog() {
       const total = head - start
       setProgress({ scanned: 0n, total, head })
 
-      let window = INITIAL_LOG_WINDOW
+      let windowBigInt = MAX_LOG_WINDOW
+      let rateLimitDelay = RATE_LIMIT_BASE_MS  // grows on repeated rate-limits, resets on success
+      let consecutiveSuccesses = 0
       let cursor = start
       const collected: SwarmEvent[] = []
 
       while (cursor <= head && !abortRef.current) {
-        const to = cursor + window - 1n < head ? cursor + window - 1n : head
+        const to = cursor + windowBigInt - 1n < head ? cursor + windowBigInt - 1n : head
 
         let raw: RawLog[]
         try {
           raw = await getLogs(cursor, to)
         } catch (e: unknown) {
-          const msg = (e as Error).message ?? ''
-          // Range too wide — shrink window
-          if (msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('range') || msg.toLowerCase().includes('too many')) {
-            window = window > MIN_LOG_WINDOW ? window / 2n : MIN_LOG_WINDOW
-            if (window < MIN_LOG_WINDOW) window = MIN_LOG_WINDOW
-            continue // retry same cursor with smaller window
+          if (e instanceof RangeTooLargeError) {
+            // Node rejected this window — shrink and retry the same cursor.
+            consecutiveSuccesses = 0
+            windowBigInt = windowBigInt / 2n
+            if (windowBigInt < MIN_LOG_WINDOW) windowBigInt = MIN_LOG_WINDOW
+            continue
+          }
+          if (e instanceof RateLimitError) {
+            // Node is throttling — keep window, wait, then retry.
+            consecutiveSuccesses = 0
+            await new Promise(r => setTimeout(r, rateLimitDelay))
+            rateLimitDelay = Math.min(rateLimitDelay * 2, RATE_LIMIT_MAX_MS)
+            continue
           }
           throw e
+        }
+
+        // Success
+        rateLimitDelay = RATE_LIMIT_BASE_MS
+        consecutiveSuccesses++
+        // Grow window toward MAX_LOG_WINDOW after several clean fetches
+        if (consecutiveSuccesses >= GROW_AFTER && windowBigInt < MAX_LOG_WINDOW) {
+          windowBigInt = BigInt(Math.min(
+            Number(MAX_LOG_WINDOW),
+            Math.floor(Number(windowBigInt) * GROW_FACTOR),
+          ))
         }
 
         for (const r of raw) {

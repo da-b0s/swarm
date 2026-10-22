@@ -394,9 +394,9 @@ under vite 6; the metadata is just stale.
 ## Turn 3b — review fixes, and what the live run found
 
 Prompt: [`studio/prompts/turn-03b-review-fixes.md`](studio/prompts/turn-03b-review-fixes.md)
-with [`turn-03b-review-fixes.patch`](studio/prompts/turn-03b-review-fixes.patch)
-
-_queued, not yet run_
+with [`turn-03b-review-fixes.patch`](studio/prompts/turn-03b-review-fixes.patch), sent as a
+read-only file under `context/`
+Result: [`studio/runs/turn-03b.json`](studio/runs/turn-03b.json) · status `completed` · ~2% of the 30-day limit
 
 Two reasons for this turn. First, the Turn 3 review fixes were made locally, so
 the Studio workspace and the repo had diverged in eight files — and a later turn
@@ -411,6 +411,51 @@ scrambles on the first withdrawal; and the `/proof` scanner reads
 `rate limit exceeded` as a range error and retries with no delay, which causes
 the very rate limiting it is reacting to. Both were measured before being
 written up, so the prompt carries real window sizes rather than guesses.
+
+**Result.** The patch landed: pulled back and diffed against the repo, four of
+the eight patched files came back byte-identical, and the others differ only
+where the new work touched them. Its summary said the patch was applied
+"exactly", which was not quite true and was better than true: rather than keep my
+effect that copied the newest deal id into state, it derived the id during
+render — same behaviour, one less piece of state, and it satisfies the React
+compiler's lint rule that my version only skirted. It also deleted the two dead
+wiring scripts and removed their lint and tsconfig exclusions, as asked. tsc and
+oxlint output were pasted verbatim, also as asked; that request is now a
+standing line in every prompt.
+
+The scanner fix is right: distinct error classes instead of substring matching,
+"rate limit" tested before "range", exponential backoff on throttling, and the
+window grows back after clean fetches. **Measured in the browser, the full proof
+scan from the deploy block fell from a projected ~8 minutes to 33 seconds.**
+
+The activity list is right in approach — events instead of storage order, a single
+filter on the indexed `dealId`, links to transactions — and on deal #1 it renders
+the true order: buyer 6, 5, buyer 1 marked "left", then 4, 3, 2, each at the price
+they paid. But it has an ordering bug that a two-minute test deal cannot show:
+the backfill walks backwards window by window and applies each window as it
+arrives, so a withdrawal in a newer window than its commit is dropped and the
+buyer is shown as still in. Reproduced in isolation with the hook's own
+`applyLogs`. Any deal longer than one 5,000-block window — about 42 minutes — is
+exposed, which includes the 48-hour campaign.
+
+**And the scan being fast exposed something worse.** With all 23 events loaded,
+the proof page reported deal #1 as **"Conservation FAILED"** — refunds $0.00 —
+on a deal the lifecycle script had verified to conserve exactly, and showed the
+fully refunded deal #2 as "Open". The cause dates from Turn 3, not 3b: `settle()`
+emits one `Settled` event carrying `totalRefunds`, and per-buyer `Refunded`
+events come only from `refundAll()`; the page summed `Refunded`. It could not
+surface until there was a settled deal to scan. The review read this code and
+did not catch it — the event signatures matched, so the aggregation looked
+plausible. Reading code against an ABI checks the shapes; only running it against
+real events checks the meaning.
+
+Both go to Turn 3c.
+
+## Turn 3c — the proof page, and activity ordering across windows
+
+Prompt: [`studio/prompts/turn-03c-proof-and-history.md`](studio/prompts/turn-03c-proof-and-history.md)
+
+_queued, not yet run_
 
 ## Turn 4 — gasless commits
 

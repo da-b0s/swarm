@@ -31,7 +31,6 @@
       ]
     }
   },
-  "include": ["src", "scripts"],
-  "exclude": ["scripts/wire-swarm.ts", "scripts/wire-swarm-v3.ts"]
+  "include": ["src", "scripts"]
 }
 

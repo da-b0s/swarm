@@ -216,13 +216,11 @@ export function useLiveDealState(dealId: bigint | undefined) {
   const { deal, isLoading: dealLoading, refetch: refetchDeal } = useDeal(dealId)
   const { data: buyerCount, refetch: refetchCount } = useBuyerCount(dealId)
   const { data: clearingPrice, refetch: refetchPrice } = useClearingPrice(dealId)
-  const { data: buyers, refetch: refetchBuyers } = useBuyers(dealId)
 
   const refetchAll = () => {
     void refetchDeal()
     void refetchCount()
     void refetchPrice()
-    void refetchBuyers()
   }
 
   // Current price as bigint (0 if not loaded)
@@ -256,7 +254,6 @@ export function useLiveDealState(dealId: bigint | undefined) {
     dealLoading,
     buyerCount: buyerCount !== undefined ? count : undefined,
     clearingPrice: currentPrice,
-    buyers: buyers as `0x${string}`[] | undefined,
     nextTier,
     tierProgress,
     refetchAll,

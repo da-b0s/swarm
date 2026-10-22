@@ -30,20 +30,16 @@ export default function App() {
   const [inputError, setInputError] = useState('')
 
   const { data: dealCount } = useDealCount()
-  const count = dealCount !== undefined ? BigInt(dealCount as bigint) : undefined
+  const count = dealCount !== undefined ? BigInt(dealCount) : undefined
   const noDeals = count === 0n
 
   // Deal ids start at 1 (`dealId = ++dealCount`), so 0 is never a real deal.
-  // Land on the newest deal rather than showing deal 0 as an expired one.
-  const [pinned, setPinned] = useState(() => readDealId() !== undefined)
-  useEffect(() => {
-    if (pinned || count === undefined || count === 0n) return
-    setDealId(count)
-    setPinned(true)
-  }, [count, pinned])
+  // When dealId is 0 (no URL param and user hasn't navigated), show the newest
+  // deal by deriving it from count during render — no effect or extra state needed.
+  const displayDealId = dealId > 0n ? dealId : (count ?? 0n)
 
-  // Keep URL in sync, but not before we know which deal to show.
-  useEffect(() => { if (dealId > 0n) writeDealId(dealId) }, [dealId])
+  // Keep URL in sync once we know which deal to show.
+  useEffect(() => { if (displayDealId > 0n) writeDealId(displayDealId) }, [displayDealId])
 
   const handleNavigateDeal = () => {
     const trimmed = dealInput.trim()
@@ -148,7 +144,7 @@ export default function App() {
                 value={dealInput}
                 onChange={e => { setDealInput(e.target.value); setInputError('') }}
                 onKeyDown={e => e.key === 'Enter' && handleNavigateDeal()}
-                placeholder={`Deal ID (current: ${dealId.toString()})`}
+                placeholder={`Deal ID (current: ${displayDealId.toString()})`}
                 className="flex-1 bg-transparent text-sm outline-none tabular-nums placeholder:text-slate-300"
                 style={{ color: 'var(--ink)' }}
               />
@@ -184,7 +180,7 @@ export default function App() {
         <AnimatePresence mode="wait">
           {tab === 'deal' && (
             <motion.div key="deal" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
-              {noDeals || dealId === 0n ? (
+              {noDeals || displayDealId === 0n ? (
                 <div className="px-4 pt-6">
                   <div
                     className="rounded-2xl p-6 text-center"
@@ -210,7 +206,7 @@ export default function App() {
                   </div>
                 </div>
               ) : (
-                <DealRoom dealId={dealId} />
+                <DealRoom dealId={displayDealId} />
               )}
             </motion.div>
           )}

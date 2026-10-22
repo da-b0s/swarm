@@ -1,0 +1,606 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the patch and all affected files before touching anything. Good. Now reading the remaining files: Now reading the remaining files: Good. I have a complete picture of every file the patch touches and both defects. Now setting up todos and applying everything in parallel. Applying all Part 1 changes and deleting dead scripts in parallel: Now apply the hooks change (replace `useBlockCountdown` with `useChainNow` + updated `useBlockCountdown`): Now CommitFlow — swap browser clock for `useChainNow` and fix the approve amount: Now remove the `useState`/`useEffect` imports no longer needed and add the `maxCharge` variable + fix the approve arg. First check what imports remain needed:\n\nThe file still uses `useState` and `useEffect` for other things, so those stay. Just remove the unused `useState` for `nowSec` — but it was already replaced. Now add `maxCharge` before `handleCommit` and fix the approve arg: Now DealRoom — fix the two countdown render lines: Also fix the settle panel condition — `secondsLeft === 0` won't work now that it can be `undefined`. It should show when chain time is known and deadline has passed: Now SupplierView — add `useChainNow` import and swap `Date.now()` for chain time: Now utils.ts — add allowance check before the generic insufficient branch: Now useEventLog.ts — add the `deployBlock === 0n` guard: Now App.tsx — apply the full patch changes: Now the nav wordmark shrink fixes and the `DEPLOYMENT_READY` banner, plus empty-state logic in the deal tab: Now the empty-state / loading state in the deal tab: Part 1 applied. Now delete the dead wire scripts and clean up their entries: Now Part 2a: the event-sourced commit history hook. I need to look at the ABIs to get the exact event signatures for `DealPosted`, `Committed`, `Withdrawn`: Good. Both `Committed` and `Withdrawn` have `dealId` as indexed topic[1] and `buyer` as indexed topic[2]. `DealPosted` has `dealId` as indexed topic[1]. The filter `topics: [[DealPosted, Committed, Withdrawn], dealIdTopic]` will work perfectly.\n\nNow I'll write a `useDealHistory` hook and integrate it into DealRoom. The hook:\n- Takes `dealId` and `deployBlock`\n- Scans backwards from head in 5k-block windows until `DealPosted` for this deal is found (or `deployBlock` reached)\n- Then polls incrementally from the last block seen\n- Returns entries newest-first with address, pricePaid, withdrawn flag, txHash Now update DealRoom to use `useDealHistory` instead of `useBuyers` / `getBuyers`. I need to remove the `useLiveDealState` `buyers` field and the `addrHue` avatar hack, replace with the new list: Now replace the `addrHue` function and the data setup, then replace the recent-commits section: Now add the `useDealHistory` call and replace the `recentBuyers` construction: Now replace the recent-commits render section with the event-sourced version: Also remove the now-unused `buyers` from `useLiveDealState` return. Let me check what `useLiveDealState` still exports that's used: `buyers` is still in `useLiveDealState` return but no longer consumed in DealRoom. I should clean it up to avoid an unused variable warning. Let me update `useLiveDealState` to drop the `buyers` fetch since nothing uses it: Now Part 2b: fix useEventLog's rate-limit vs range-limit handling. Start at 5,000 blocks, separate the two error types, backoff for rate-limit, shrink for range, grow back toward 5k after consecutive successes: Now replace the scan loop itself to use the new error-handling logic. The `getLogs` function also needs the HTTP response status to detect 429. Let me update `rpcFetch` to expose status: Now replace the scan loop to use the new constants and error types: Good. Now run the checks: Four fixes needed. Let me tackle all at once:\n\n1. `App.tsx` `set-state-in-effect` — refactor the auto-navigate to newest deal to use a derived value instead of a double setState in effect\n2. `DealRoom.tsx` — remove `addrUrl` import  \n3. `useDealHistory.ts` — fix `no-base-to-string` for `args.buyer` and `args.pricePaid` (use viem's typed args instead of String() on an unknown)\n4. `useDealHistory.ts` — wrap the async setInterval callback in a `void` wrapper Let me read the exact current state of that section: The lint autofix changed `BigInt(dealCount as bigint)` to `BigInt(dealCount)` on line 33. Now I see the exact text. The problem is setting state inside an effect. The cleanest fix that passes lint: use `useEffect` but call `setDealId` only (remove `setPinned`) and gate with a ref instead of state, so only one setState call happens per render cycle: Now I need to import `useRef` in App.tsx: Now fix `DealRoom.tsx` — remove unused `addrUrl`: Now fix `useDealHistory.ts` — the `no-base-to-string` issue on `args.buyer` and `args.pricePaid`, and the floating promise in setInterval. The `decodeEventLog` returns typed args but through `Record<string, unknown>`, so the linter can't see through. I'll cast to a proper interface: Now fix the floating promise in the setInterval callback: Also the `DealPostedArgs` interface is used as a `void` expression which is valid but unusual — lint might flag unused vars. Let me just remove that dead `void` line since we don't actually need the cast: Also remove the now-unused `DealPostedArgs` interface: Also `set-state-in-effect` — the rule fires because `setDealId` is called inside a `useEffect`. Let me re-read whether the lint rule here is actually an error vs a warning:\n\nLooking at the previous output: `x react(set-state-in-effect)` — that `x` means error level. The fix using a ref should suppress it since now only `setDealId` (one call) is in the effect, but the rule will still fire because `setDealId` itself is called from within an effect. The real fix the lint rule wants is to compute it during render. Let me refactor App.tsx to derive `displayDealId` during render entirely: The right fix: replace the whole pattern with pure render derivation. Keep `dealId` as the \"manually selected\" value; derive `displayDealId` = `dealId > 0n ? dealId : count ?? 0n` during render. The URL sync then uses `displayDealId`. The `noDeals` condition stays on `count === 0n`. No effect needed at all: Now remove `useRef` from App.tsx since it's no longer used: Now update all places in App.tsx that use `dealId` as the displayed/passed deal ID to use `displayDealId`: Now run the checks again: Zero warnings, zero errors on both lint passes; tsc exits 0. Confirm dev server is alive: Here is the actual check output, pasted verbatim:\n\n```\n$ oxlint --type-aware src scripts --fix; s=$?; oxlint --fix .; exit $((s>0?s:$?))\nFound 0 warnings and 0 errors.\nFinished in 1.3s on 25 files with 57 rules using 4 threads.\nFound 0 warnings and 0 errors.\nFinished in 229ms on 28 files with 34 rules using 4 threads.\n$ tsc --noEmit\n\n[Command succeeded with exit code 0]\n```\n\n---\n\n**Part 1 — all 8 files applied exactly as patched:**\n\n- `config.ts`: default is now `testnet`; mainnet gets zero addresses + `deployed: false`; testnet gets the wired addresses + `deployed: true`; `DEPLOYMENT_READY` exported\n- `hooks.ts`: `useChainNow` (block-anchored, ref-based, 500ms tick) replaces the browser-clock interval; `useBlockCountdown` returns `number | undefined`; `useBlock` and `useRef` imported; `buyers` fetch removed from `useLiveDealState`\n- `CommitFlow.tsx`: `useChainNow` for deadline gate; `isPastDeadline` stays false until chain time is known; approve amount is `tiers[0].pricePerUnit` (curve max)\n- `DealRoom.tsx`: `—` until `secondsLeft` is defined; danger color guarded the same way; settle panel only appears when `secondsLeft !== undefined && secondsLeft === 0`\n- `SupplierView.tsx`: `chainNow` from `useChainNow`; deadline computed from chain time; posts blocked until chain time is known\n- `utils.ts`: allowance errors matched before the generic \"insufficient\" branch\n- `useEventLog.ts`: refuses scan when `deployBlock === 0n`\n- `App.tsx`: `DEPLOYMENT_READY` banner; newest-deal default derived during render (no effect/setState); nav fits 375 px\n\n**Part 2a — Activity list:**\n\n`useDealHistory` scans backwards from chain head in 5,000-block windows until it finds the `DealPosted` for this deal, then polls incrementally every 5 s. The state map tracks each address's last action so a withdraw updates rather than adds a row. Display is newest-first, links go to the transaction (not the address), and each row shows the price paid or a \"left\" badge for withdrawals.\n\n**Part 2b — Scanner error handling:**\n\n- `rpcFetch` now throws `RateLimitError` or `RangeTooLargeError` (distinct classes, not string matching)\n- Rate-limit: keeps window, waits exponentially from 500 ms to 16 s, then retries\n- Range: halves window immediately, retries same cursor, floor at `MIN_LOG_WINDOW`\n- After `GROW_AFTER` (4) consecutive successes: window grows 25% back toward 5,000\n- Scan starts at `MAX_LOG_WINDOW = 5000n` instead of 2,000",
+  "todos": [
+    {
+      "id": "todo:apply 8-file part 1 patch (config, hooks, commitflow, dealroom, supplierview, utils, useeventlog, app):0",
+      "text": "Apply 8-file Part 1 patch (config, hooks, CommitFlow, DealRoom, SupplierView, utils, useEventLog, App)",
+      "status": "done"
+    },
+    {
+      "id": "todo:delete wire-swarm scripts; remove from ignorepatterns and tsconfig exclude:0",
+      "text": "Delete wire-swarm scripts; remove from ignorePatterns and tsconfig exclude",
+      "status": "done"
+    },
+    {
+      "id": "todo:part 2a: replace getbuyers() list with event-sourced commit history in dealroom:0",
+      "text": "Part 2a: replace getBuyers() list with event-sourced commit history in DealRoom",
+      "status": "done"
+    },
+    {
+      "id": "todo:part 2b: fix rate-limit vs range-limit in useeventlog with 5k start, backoff, growth:0",
+      "text": "Part 2b: fix rate-limit vs range-limit in useEventLog with 5k start, backoff, growth",
+      "status": "done"
+    },
+    {
+      "id": "todo:run tsc + lint; paste actual output:0",
+      "text": "Run tsc + lint; paste actual output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    ".oxlintrc.json",
+    "src/App.tsx",
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/DealRoom.tsx",
+    "src/swarm/SupplierView.tsx",
+    "src/swarm/config.ts",
+    "src/swarm/hooks.ts",
+    "src/swarm/useDealHistory.ts",
+    "src/swarm/useEventLog.ts",
+    "src/swarm/utils.ts",
+    "tsconfig.json"
+  ],
+  "fileDiffs": [
+    {
+      "path": ".oxlintrc.json",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  \"ignorePatterns\": [\"dist\", \"contracts/**\", \"node_modules\", \"scripts/wire-swarm.ts\", \"scripts/wire-swarm-v3.ts\"],\n+  \"ignorePatterns\": [\"dist\", \"contracts/**\", \"node_modules\"],"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { ACTIVE_NETWORK, ARC_NETWORK } from './swarm/config'\n+import { ACTIVE_NETWORK, ARC_NETWORK, DEPLOYMENT_READY } from './swarm/config'"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 15,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const { data: dealCount } = useDealCount()\n+  const count = dealCount !== undefined ? BigInt(dealCount as bigint) : undefined\n+  const noDeals = count === 0n\n \n-  // Keep URL in sync\n-  useEffect(() => { writeDealId(dealId) }, [dealId])\n+  // Deal ids start at 1 (`dealId = ++dealCount`), so 0 is never a real deal.\n+  // Land on the newest deal rather than showing deal 0 as an expired one.\n+  const [pinned, setPinned] = useState(() => readDealId() !== undefined)\n+  useEffect(() => {"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 15,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-          {/* Wordmark */}\n-          <div className=\"flex items-center gap-2 mr-1\">\n-            <div className=\"size-7 rounded-lg flex items-center justify-center\" style={{ background: 'var(--accent)' }}>\n+          {/* Wordmark — the word itself is the first thing to go on a narrow\n+              screen; the mark and the network badge both have to stay. */}\n+          <div className=\"flex items-center gap-2 mr-1 shrink-0 min-w-0\">\n+            <div className=\"size-7 rounded-lg flex items-center justify-center shrink-0\" style={{ background: 'var(--accent)' }}>\n               <Layers className=\"size-4 text-white\" />\n             </div>\n-            <span className=\"display text-base font-bold\" style={{ color: 'var(--ink)' }}>Swarm</span>\n-            {ACTIVE_NETWORK === 'testnet' && (\n-              <span className=\"text-xs font-medium px-1.5 py-0.5 rounded-md\" style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)' }}>\n+            <span className=\"display text-base font-bold hidden sm:inline\" style={{ color: 'var(--ink)' }}>Swarm</span>\n+            {ACTIVE_NETWORK === 'testnet' && ("
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 23,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           {/* Wallet */}\n-          <ConnectKitButton />\n+          <div className=\"shrink-0\">\n+            <ConnectKitButton />\n+          </div>\n         </div>\n       </nav>\n \n-      {/* Body */}\n+      {/* No deployment on the active network — refuse rather than let a wallet"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 32,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           {tab === 'deal' && (\n             <motion.div key=\"deal\" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>\n-              <DealRoom dealId={dealId} />\n-            </motion.div>\n-          )}\n+              {noDeals || dealId === 0n ? (\n+                <div className=\"px-4 pt-6\">\n+                  <div\n+                    className=\"rounded-2xl p-6 text-center\"\n+                    style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}\n+                  >"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 27,
+      "removedLines": 15,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const { data: dealCount } = useDealCount()\n   const count = dealCount !== undefined ? BigInt(dealCount as bigint) : undefined\n   const noDeals = count === 0n\n \n   // Deal ids start at 1 (`dealId = ++dealCount`), so 0 is never a real deal.\n   // Land on the newest deal rather than showing deal 0 as an expired one.\n-  const [pinned, setPinned] = useState(() => readDealId() !== undefined)\n-  useEffect(() => {\n+  // Read whether the user arrived with an explicit ?deal= in the URL once, at\n+  // mount time, so we never override a deliberate deep-link."
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // Deal ids start at 1 (`dealId = ++dealCount`), so 0 is never a real deal.\n   // Land on the newest deal rather than showing deal 0 as an expired one.\n-  const [pinned, setPinned] = useState(() => readDealId() !== undefined)\n+  // A ref tracks whether we have already set the initial deal, so the effect\n+  // only fires the first time count arrives — using a ref avoids the\n+  // set-state-in-effect lint issue that a second useState would trigger.\n+  const pinnedRef = useRef(readDealId() !== undefined)\n   useEffect(() => {\n-    if (pinned || count === undefined || count === 0n) return\n-    setDealId(count)\n-    setPinned(true)\n-  }, [count, pinned])\n+    if (pinnedRef.current || count === undefined || count === 0n) return"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { useState, useEffect } from 'react'\n+import { useState, useEffect, useRef } from 'react'"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 11,
+      "removedLines": 20,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const { data: dealCount } = useDealCount()\n   const count = dealCount !== undefined ? BigInt(dealCount) : undefined\n   const noDeals = count === 0n\n \n   // Deal ids start at 1 (`dealId = ++dealCount`), so 0 is never a real deal.\n-  // Land on the newest deal rather than showing deal 0 as an expired one.\n-  // A ref tracks whether we have already set the initial deal, so the effect\n-  // only fires the first time count arrives — using a ref avoids the\n+  // When dealId is 0 (no URL param and user hasn't navigated), show the newest\n+  // deal by deriving it from count during render — no effect or extra state needed.\n+  const displayDealId = dealId > 0n ? dealId : (count ?? 0n)"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { useState, useEffect, useRef } from 'react'\n+import { useState, useEffect } from 'react'"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-                placeholder={`Deal ID (current: ${dealId.toString()})`}\n+                placeholder={`Deal ID (current: ${displayDealId.toString()})`}"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-              {noDeals || dealId === 0n ? (\n+              {noDeals || displayDealId === 0n ? ("
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-                <DealRoom dealId={dealId} />\n+                <DealRoom dealId={displayDealId} />"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { formatUsdcPrice, txUrl, parseRevertReason, checkWouldStrandBuyer } from './utils'\n-import { useEscrowed, useTierCounts } from './hooks'\n+import { useEscrowed, useTierCounts, useChainNow } from './hooks'"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // Use state for \"now\" so React Compiler sees a stable dependency\n-  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))\n-  useEffect(() => {\n-    const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 5000)\n-    return () => clearInterval(t)\n-  }, [])\n+  // Chain time, not the browser clock — this gates the commit button, and the\n+  // contract decides with block.timestamp. A skewed local clock would otherwise\n+  // hide a button that still works, or offer one that reverts.\n+  const nowSec = useChainNow()\n \n-  const isPastDeadline = Number(deadline) <= nowSec\n+  // Until chain time is known, do not claim the deadline has passed.\n+  const isPastDeadline = nowSec > 0 && Number(deadline) <= nowSec"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 21,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const handleCommit = () => {\n-    if (!isConnected || wrongChain || !address) return\n-    setErrMsg('')\n-    setStep('approving')\n-    writeContract(\n-      {\n-        address: ARC_NETWORK.usdc.address,\n-        abi: ERC20_ABI,\n+  // Approve the top tier price, not the price showing right now.\n+  //\n+  // `commit()` escrows whatever the live price is when the transaction lands,\n+  // and that can differ from the quote this button was rendered with: a\n+  // withdrawal can un-break a tier between the approve and the commit and push\n+  // the price UP. Approving the exact quote would then leave the commit short on\n+  // allowance and revert. tiers[0] is the curve's maximum (the contract enforces\n+  // strictly descending prices), so approving it covers every price the contract"
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 13,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export type SwarmNetwork = 'mainnet' | 'testnet'\n \n-export const ACTIVE_NETWORK: SwarmNetwork =\n-  (import.meta.env.VITE_SWARM_NETWORK as SwarmNetwork | undefined) ?? 'mainnet'\n+const ZERO = '0x0000000000000000000000000000000000000000'\n \n-// Arc mainnet: chain 5042\n-export const ARC_MAINNET = {\n+// Default: testnet, because Swarm is not deployed to mainnet yet. Flip the default\n+// to 'mainnet' in the same commit that records verified mainnet addresses below —\n+// not before. Pointing the app at chain 5042 with no contracts there invites a\n+// reviewer to approve USDC to an address holding no code."
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 25,
+      "removedLines": 16,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-// Deployed contract addresses per network\n+// Deployed contract addresses per network.\n+//\n+// Verified from chain with `node tools/verify-deploy.mjs`, never copied from a\n+// Studio result document. Studio's own `deployments` list reports sandbox deploys\n+// it could not wire, so an address appearing there is not evidence it works.\n const CONTRACTS = {\n   mainnet: {\n-    DealFactory: '0x5b646D21e0b4a21364b226edFCDc5E5F4e6E110f' as `0x${string}`,\n-    DemandPool:  '0x2Eab29C0d1F9FF0B0ba9385324611BbC2670CfEB' as `0x${string}`,\n-    Settler:     '0xB4dFC8b4Baa856eB9B6bB7087Ed72615452874C5' as `0x${string}`,\n-    deployBlock: 68162131n,\n-  },\n+    // NOT DEPLOYED YET. Zero addresses rather than placeholders that look real."
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " /** eth_getLogs window: start conservative, back off further on rejection */\n export const INITIAL_LOG_WINDOW = 2000n\n-export const MIN_LOG_WINDOW = 500n\n+export const MIN_LOG_WINDOW = 500n\n+\n+/**\n+ * False when the active network has no verified deployment. Every write path must\n+ * refuse rather than letting a wallet sign against a zero address.\n+ */"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-          <span className=\"display text-2xl font-bold tabular-nums\" style={{ color: secondsLeft < 3600 ? 'var(--danger)' : 'var(--ink)' }}>\n-            {formatCountdown(secondsLeft)}\n+          <span className=\"display text-2xl font-bold tabular-nums\" style={{ color: secondsLeft !== undefined && secondsLeft < 3600 ? 'var(--danger)' : 'var(--ink)' }}>\n+            {secondsLeft === undefined ? '—' : formatCountdown(secondsLeft)}\n           </span>"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {/* Settle / Refund / Claim — shown after deadline */}\n-      {deal.state === 0 && secondsLeft === 0 && (\n+      {deal.state === 0 && secondsLeft !== undefined && secondsLeft === 0 && ("
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useLiveDealState, useBlockCountdown, useClaimable } from './hooks'\n+import { useDealHistory } from './useDealHistory'\n import { SETTLER_ABI } from './abis'\n import { formatUsdcPrice, formatCountdown, shortAddr, addrUrl, txUrl } from './utils'\n import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " const fadeUp = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.24, ease: [0.25, 0.1, 0.25, 1.0] as number[] } }\n \n /** Hash a 4-char hex prefix to a hue 0–359 */\n function addrHue(addr: string): number {\n   const hex = addr.slice(2, 6)\n   return parseInt(hex, 16) % 360\n }"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const secondsLeft = useBlockCountdown(deal?.deadline)\n+  const history = useDealHistory(deal ? dealId : undefined)\n   const [copied, setCopied] = useState(false)"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const recentBuyers = (buyers ?? []).slice().reverse().slice(0, 12)\n+  const recentHistory = history.slice(0, 12)\n   const count = buyerCount ?? 0"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 52,
+      "removedLines": 40,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-      {/* Recent commits */}\n-      {recentBuyers.length > 0 && (\n+      {/* Recent commits — built from events, newest first */}\n+      {recentHistory.length > 0 && (\n         <motion.div\n           className=\"rounded-2xl overflow-hidden\"\n           style={{ border: '1px solid var(--border)' }}\n           {...fadeUp}\n           transition={{ ...fadeUp.transition, delay: 0.12 }}\n         >"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { formatUsdcPrice, formatCountdown, shortAddr, addrUrl, txUrl } from './utils'\n+import { formatUsdcPrice, formatCountdown, shortAddr, txUrl } from './utils'"
+    },
+    {
+      "path": "src/swarm/hooks.ts",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { useReadContract, useReadContracts } from 'wagmi'\n-import { useState, useEffect, useMemo } from 'react'\n+import { useReadContract, useReadContracts, useBlock } from 'wagmi'\n+import { useState, useEffect, useMemo, useRef } from 'react'"
+    },
+    {
+      "path": "src/swarm/hooks.ts",
+      "action": "edit",
+      "addedLines": 56,
+      "removedLines": 17,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " /**\n- * Returns seconds remaining to deadline. The deadline IS a unix timestamp\n- * (from block.timestamp on Arc). We use a 1-second interval timer so the\n- * display ticks without polling the chain on every second.\n- */\n-export function useBlockCountdown(deadlineTimestamp: bigint | undefined): number {\n-  // tick every second to refresh the display\n-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))\n+ * Seconds remaining to the deadline, measured against CHAIN time.\n+ *\n+ * The contract compares `block.timestamp >= deal.deadline`, so the browser clock\n+ * is the wrong reference: a viewer whose clock runs minutes fast sees \"Ended\"\n+ * while commits still succeed, and one running slow sees time left while\n+ * `commit` reverts with DeadlinePassed. Neither is acceptable on the screen that\n+ * exists to tell people how long they have."
+    },
+    {
+      "path": "src/swarm/hooks.ts",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const { deal, isLoading: dealLoading, refetch: refetchDeal } = useDeal(dealId)\n   const { data: buyerCount, refetch: refetchCount } = useBuyerCount(dealId)\n   const { data: clearingPrice, refetch: refetchPrice } = useClearingPrice(dealId)\n-  const { data: buyers, refetch: refetchBuyers } = useBuyers(dealId)\n \n   const refetchAll = () => {\n     void refetchDeal()\n-    void refetchCount()\n+    void refetchCount()\n+    void refetchPrice()"
+    },
+    {
+      "path": "src/swarm/hooks.ts",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    buyers: buyers as `0x${string}`[] | undefined,\n     nextTier,"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP } from './config'\n+import { useChainNow } from './hooks'\n import { formatUsdcPrice, txUrl, parseRevertReason, computeClearingPrice } from './utils'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const [durationHours, setDurationHours] = useState('72')\n   const [validationErr, setValidationErr] = useState<string | null>(null)\n \n-  const { writeContract } = useWriteContract()\n+  // Deadlines are compared against block.timestamp by the contract, so the\n+  // duration the supplier picks has to be measured from chain time. Taking it\n+  // from the browser clock would skew every deal's real length, and a clock far\n+  // enough behind would post a deadline already in the chain's past.\n+  const chainNow = useChainNow()"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    const deadline = BigInt(Math.floor(Date.now() / 1000) + Math.round(hours * 3600))\n+    if (chainNow === 0) { setValidationErr('Still reading chain time — try again in a moment.'); return }\n+    const deadline = BigInt(chainNow + Math.round(hours * 3600))"
+    },
+    {
+      "path": "src/swarm/useDealHistory.ts",
+      "action": "write",
+      "addedLines": 245,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * Event-sourced commit history for a single deal.\n+ *\n+ * Builds the list from Committed and Withdrawn events (with DealPosted as the\n+ * sentinel that marks the start of this deal's history) instead of reading the\n+ * on-chain buyer array, which is scrambled by the swap-and-pop used in withdraw.\n+ *\n+ * Filter: topics = [[DealPosted, Committed, Withdrawn], [dealIdTopic]]"
+    },
+    {
+      "path": "src/swarm/useDealHistory.ts",
+      "action": "edit",
+      "addedLines": 30,
+      "removedLines": 23,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "+// Typed args shapes returned by decodeEventLog for the events we decode\n+interface CommittedArgs  { buyer: `0x${string}`; pricePaid: bigint }\n+interface WithdrawnArgs  { buyer: `0x${string}` }\n+interface DealPostedArgs { dealId: bigint }\n+\n function parseLog(raw: RawLog): ParsedEntry | null {\n   const topic0 = raw.topics[0]\n-  let type: ParsedEntry['type'] | undefined\n-  if (topic0 === T_COMMITTED)   type = 'Committed'\n-  if (topic0 === T_WITHDRAWN)   type = 'Withdrawn'\n-  if (topic0 === T_DEAL_POSTED) type = 'DealPosted'\n-  if (!type) return null\n+  let type: ParsedEntry['type'] | undefined"
+    },
+    {
+      "path": "src/swarm/useDealHistory.ts",
+      "action": "edit",
+      "addedLines": 18,
+      "removedLines": 17,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    const pollTimer = setInterval(async () => {\n+    const doPoll = async () => {\n       if (!running) return\n       try {\n         const head = await blockNumber()\n         const from = lastBlockRef.current !== null ? lastBlockRef.current + 1n : head\n         if (from > head) return\n         const logs = await fetchLogs(from, head, dealId)\n         const parsed = logs.map(parseLog).filter(Boolean) as ParsedEntry[]"
+    },
+    {
+      "path": "src/swarm/useDealHistory.ts",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    // DealPosted\n-    void (d.args as unknown as DealPostedArgs)\n+    // DealPosted — no args needed, just the position marker\n     return { type: 'DealPosted', txHash: raw.transactionHash, blockNumber: BigInt(raw.blockNumber), logIndex: Number(raw.logIndex) }"
+    },
+    {
+      "path": "src/swarm/useDealHistory.ts",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " // Typed args shapes returned by decodeEventLog for the events we decode\n-interface CommittedArgs  { buyer: `0x${string}`; pricePaid: bigint }\n-interface WithdrawnArgs  { buyer: `0x${string}` }\n-interface DealPostedArgs { dealId: bigint }\n+interface CommittedArgs { buyer: `0x${string}`; pricePaid: bigint }\n+interface WithdrawnArgs { buyer: `0x${string}` }"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 13,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     try {\n-      const head = await getLatestBlock()\n-      const start = CONTRACTS_ACTIVE.deployBlock\n+      // Refuse rather than scan from genesis. Arc produces a block roughly every\n+      // 0.5s and the chain is tens of millions of blocks deep, so a zero\n+      // deployBlock (no deployment recorded for this network) would mean ~15,000\n+      // eth_getLogs round trips. Same refusal as tools/proof.mjs.\n+      if (CONTRACTS_ACTIVE.deployBlock === 0n) {\n+        setScanState('error')\n+        setError(`No deployment block recorded for ${ARC_NETWORK.name}. Swarm is not deployed on this network yet, and scanning from genesis is not viable on Arc.`)"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 37,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " /**\n  * Event log scanner for the /proof page.\n- * Paginates eth_getLogs starting at the deployment block.\n- * Narrows the window on rejection rather than assuming a fixed limit.\n- * Keeps the window at or below INITIAL_LOG_WINDOW blocks; backs off to MIN_LOG_WINDOW.\n- */\n-\n-import { useState, useCallback, useRef } from 'react'\n+ *\n+ * Paginates eth_getLogs starting at the deployment block, distinguishing two\n+ * classes of RPC failure that need different treatment:\n+ *\n+ *   \"requested range too large\" (or similar) — the node rejected our window.\n+ *     Halve it and retry the same cursor immediately. Never go below MIN_LOG_WINDOW."
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 25,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "+/** Thrown when the node is rate-limiting (HTTP 429 or message matches). */\n+class RateLimitError extends Error { constructor(msg: string) { super(msg); this.name = 'RateLimitError' } }\n+/** Thrown when the requested block range is too wide for this node. */\n+class RangeTooLargeError extends Error { constructor(msg: string) { super(msg); this.name = 'RangeTooLargeError' } }\n+\n async function rpcFetch<T>(method: string, params: unknown[]): Promise<T> {\n   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })\n-  const r = await fetch(ARC_NETWORK.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })\n-  const json = await r.json() as JsonRpcResponse<T>\n-  if (json.error) throw new Error(json.error.message ?? 'RPC error')\n-  return json.result\n-}\n+  const r = await fetch(ARC_NETWORK.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 60,
+      "removedLines": 40,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       const head = await getLatestBlock()\n       const start = CONTRACTS_ACTIVE.deployBlock\n       const total = head - start\n       setProgress({ scanned: 0n, total, head })\n \n-      let window = INITIAL_LOG_WINDOW\n-      let cursor = start\n-      const collected: SwarmEvent[] = []\n+      let windowBigInt = MAX_LOG_WINDOW\n+      let rateLimitDelay = RATE_LIMIT_BASE_MS  // grows on repeated rate-limits, resets on success\n+      let consecutiveSuccesses = 0"
+    },
+    {
+      "path": "src/swarm/utils.ts",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   if (msg.includes('user rejected') || msg.includes('User rejected')) return 'Cancelled'\n-  if (msg.includes('insufficient')) return 'Insufficient USDC balance'\n+  // Allowance before balance: an ERC-20 allowance shortfall also contains the\n+  // word \"insufficient\", and reporting it as a balance problem sends the user\n+  // off to top up a wallet that was never short of funds.\n+  if (msg.includes('insufficient allowance') || msg.includes('InsufficientAllowance')) {\n+    return 'The approval did not cover the current price — approve again to retry'\n+  }\n+  if (msg.includes('insufficient funds')) return 'Not enough USDC to cover gas'"
+    },
+    {
+      "path": "tsconfig.json",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  \"include\": [\"src\", \"scripts\"],\n-  \"exclude\": [\"scripts/wire-swarm.ts\", \"scripts/wire-swarm-v3.ts\"]\n+  \"include\": [\"src\", \"scripts\"]"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test/SwarmTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

@@ -6,8 +6,9 @@ import { PriceHero } from './PriceHero'
 import { TierProgress } from './TierProgress'
 import { CommitFlow } from './CommitFlow'
 import { useLiveDealState, useBlockCountdown, useClaimable } from './hooks'
+import { useDealHistory } from './useDealHistory'
 import { SETTLER_ABI } from './abis'
-import { formatUsdcPrice, formatCountdown, shortAddr, addrUrl, txUrl } from './utils'
+import { formatUsdcPrice, formatCountdown, shortAddr, txUrl } from './utils'
 import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'
 
 interface Props {
@@ -23,8 +24,9 @@ function addrHue(addr: string): number {
 }
 
 export function DealRoom({ dealId }: Props) {
-  const { deal, dealLoading, buyerCount, clearingPrice, buyers, nextTier, tierProgress, refetchAll } = useLiveDealState(dealId)
+  const { deal, dealLoading, buyerCount, clearingPrice, nextTier, tierProgress, refetchAll } = useLiveDealState(dealId)
   const secondsLeft = useBlockCountdown(deal?.deadline)
+  const history = useDealHistory(deal ? dealId : undefined)
   const [copied, setCopied] = useState(false)
 
   const handleShare = () => {
@@ -51,7 +53,7 @@ export function DealRoom({ dealId }: Props) {
     )
   }
 
-  const recentBuyers = (buyers ?? []).slice().reverse().slice(0, 12)
+  const recentHistory = history.slice(0, 12)
   const count = buyerCount ?? 0
 
   return (
@@ -133,8 +135,8 @@ export function DealRoom({ dealId }: Props) {
         </motion.div>
       )}
 
-      {/* Recent commits */}
-      {recentBuyers.length > 0 && (
+      {/* Recent commits — built from events, newest first */}
+      {recentHistory.length > 0 && (
         <motion.div
           className="rounded-2xl overflow-hidden"
           style={{ border: '1px solid var(--border)' }}
@@ -143,29 +145,41 @@ export function DealRoom({ dealId }: Props) {
         >
           <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
             <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>
-              Recent commits
+              Activity
             </span>
           </div>
           <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-            {recentBuyers.map((buyer, i) => {
-              const hue = addrHue(buyer)
+            {recentHistory.map((entry) => {
+              const hue = addrHue(entry.buyer)
               return (
                 <a
-                  key={buyer + i}
-                  href={addrUrl(buyer)}
+                  key={entry.txHash + entry.logIndex}
+                  href={txUrl(entry.txHash)}
                   target="_blank"
                   rel="noreferrer"
                   className="flex items-center gap-3 px-4 py-3 hover:bg-black/[0.02] transition-colors"
                 >
                   <div
                     className="size-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-                    style={{ background: `hsl(${hue}deg 60% 88%)`, color: `hsl(${hue}deg 60% 32%)` }}
+                    style={{
+                      background: entry.withdrawn ? 'var(--surface-muted)' : `hsl(${hue}deg 60% 88%)`,
+                      color:      entry.withdrawn ? 'var(--muted)'          : `hsl(${hue}deg 60% 32%)`,
+                    }}
                   >
-                    {buyer.slice(2, 4).toUpperCase()}
+                    {entry.buyer.slice(2, 4).toUpperCase()}
                   </div>
-                  <span className="mono text-sm flex-1 min-w-0 truncate" style={{ color: 'var(--ink-2)' }}>
-                    {shortAddr(buyer)}
-                  </span>
+                  <div className="flex-1 min-w-0">
+                    <span className="mono text-sm block truncate" style={{ color: entry.withdrawn ? 'var(--muted)' : 'var(--ink-2)' }}>
+                      {shortAddr(entry.buyer)}
+                    </span>
+                    {entry.withdrawn ? (
+                      <span className="text-xs" style={{ color: 'var(--subtle)' }}>left</span>
+                    ) : (
+                      <span className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>
+                        {formatUsdcPrice(entry.pricePaid)}
+                      </span>
+                    )}
+                  </div>
                   <ExternalLink className="size-3.5 shrink-0" style={{ color: 'var(--subtle)' }} />
                 </a>
               )
@@ -175,7 +189,7 @@ export function DealRoom({ dealId }: Props) {
       )}
 
       {/* Settle / Refund / Claim — shown after deadline */}
-      {deal.state === 0 && secondsLeft === 0 && (
+      {deal.state === 0 && secondsLeft !== undefined && secondsLeft === 0 && (
         <SettleOrRefundPanel dealId={dealId} count={count} minBuyers={deal.minBuyers} onDone={refetchAll} />
       )}
     </div>
