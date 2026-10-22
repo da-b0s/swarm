@@ -487,9 +487,68 @@ screen, but it means a partial history is not flagged as partial.
 
 ## Turn 4 — gasless commits
 
-Prompt: [`studio/prompts/turn-04-gasless.md`](studio/prompts/turn-04-gasless.md)
+Prompts: [`turn-04-gasless.md`](studio/prompts/turn-04-gasless.md) ·
+[`turn-04b-tests.md`](studio/prompts/turn-04b-tests.md) ·
+[`turn-04b2-gasless-tests-file.md`](studio/prompts/turn-04b2-gasless-tests-file.md)
+Results: [`turn-04`](studio/runs/turn-04.json) · [`turn-04b`](studio/runs/turn-04b.json) ·
+[`turn-04b2`](studio/runs/turn-04b2.json)
 
-_pending_
+**The prompt was rewritten before it ran.** The 20 October draft specified
+`transferWithAuthorization`. Anyone who sees such a signature can submit it
+straight to USDC, landing the buyer's money in the pool with no commit recorded —
+funds the contract's accounting never sees and nobody can claim. The rewrite
+required `receiveWithAuthorization`, which only the payee can execute, and a
+signature bound to a single deal. It also replaced an open question with facts
+read from both chains: the USDC domain is `{name "USDC", version "2", chainId,
+0x3600…}` on mainnet and testnet alike, the separator matches, and
+`receiveWithAuthorization` exists. The draft had hardcoded chain id 5042, which
+would have invalidated every testnet signature. And it named the purpose
+honestly: on Arc gas is USDC, so a wallet holding USDC can always pay gas; the
+gain is committing an entire balance without holding some back.
+
+**The design came back right.** `commitWithAuthorization` uses
+`receiveWithAuthorization`; the authorization nonce is
+`keccak256(pool, dealId, buyer, salt)`, so a signature cannot be pointed at another
+deal or pool; both commit paths share one precondition function; a price that rose
+after signing reverts `PriceRoseBeyondAuthorization(newPrice)` before any state
+changes; a price that fell escrows the live price and credits the excess through
+the existing pool-only `creditWithdrawal`, with an `ExcessCredited` event so the
+proof page can account for it.
+
+**Three turns to get there, and why.** Turn 4 and Turn 4b both stopped mid-turn
+with no error, each while rewriting the whole of `SwarmTest.t.sol` — the
+nineteen existing tests plus the new ones — in a single write; neither reached
+`forge test`. Turn 4b2 put the new tests in their own file and left the original
+untouched, and finished. The useful lesson is about shape, not effort: ask for
+additions as new files, and for a test run before more writing.
+
+Between the stops, Studio did two good things. It turned `AuthorizationAlreadyUsed`
+— declared in Turn 4 but never raised — into a real check of `authorizationState`
+before the transfer, ordered so a replay gets that error rather than
+`AlreadyCommitted`. And it caught a bug in its own test token that review had
+missed: the mock computed its EIP-712 domain at construction, but the tests etch
+its bytecode onto the USDC address, so the baked-in `verifyingContract` was wrong
+and every test signature would have failed. It now rebuilds the domain after the
+etch.
+
+**27 tests pass, run locally** in WSL with `arc-forge`, not taken from the pasted
+output — the 19 originals unchanged and 8 gasless tests: signer recorded rather
+than relayer, excess credited when the price falls, named revert when it rises,
+replay, wrong deal, blocklisted buyer, and a fuzz property mixing both commit
+paths with excess credits.
+
+Two things to note rather than fix now:
+
+- **`via_ir = true` is now on for the whole project**, added to get past a
+  stack-depth error in a test helper. It also changes how the production
+  contracts compile — `settle(100 buyers)` moved from 1,475,504 to 1,483,728 gas.
+  The cleaner fix is a helper that returns a struct; worth doing before mainnet
+  rather than shipping a compiler-pipeline change made for test scaffolding.
+- **`test_Gasless_TransferWithAuthCannotCommit` proves an adjacent case.** It has
+  the buyer sign a *transfer* authorization, which our flow never asks for. The
+  threat that matters is the buyer's *receive* signature being submitted as a
+  transfer; that is blocked by EIP-3009's distinct typehashes, which real USDC
+  enforces, but this test does not demonstrate it.
 
 ## Turns 5+
 

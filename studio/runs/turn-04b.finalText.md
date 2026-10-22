@@ -1,0 +1,10 @@
+Reading the files that landed last turn before writing anything. Good. Now I have the full picture. Two things to address before writing tests:
+
+1. `authorizationState` needs to be added to `IUSDC3009` in DemandPool and the pre-check inserted before `receiveWithAuthorization`.
+2. The domain separator in `MockEIP3009USDC` is built at construction time using `address(this)` — but the test `vm.etch`es the mock's bytecode onto `0x3600...`, so the domain separator baked in at construction will have the wrong `verifyingContract`. The constructor needs to be replaced with a post-etch initializer that recomputes the domain separator using `address(this)` at call time. I'll add an `initialize()` function and call it after etching.
+
+Let me apply both fixes now, then write the tests: Now insert the pre-check before `receiveWithAuthorization`: Now fix the mock's domain separator — replace the immutable with a mutable slot, add `initialize()`, and update the constructor to only set the ERC-20 fields: I also need to add a blocklisted-buyer mock. The existing `MockBlocklistedERC20` doesn't have `receiveWithAuthorization` or `authorizationState`. I'll add a `MockBlocklistedEIP3009USDC` that extends `MockEIP3009USDC` and overrides `isBlacklisted`: But `isBlacklisted` in the base is `external pure` — I need to make it `virtual` so the subclass can override it. Let me fix that: Now writing the full test file. The key signing helper: I build the EIP-712 digest for `ReceiveWithAuthorization` using the domain that matches `MockEIP3009USDC` (name="USDC", version="2", chainId=`block.chainid`, verifyingContract=USDC_ADDR), then sign with `vm.sign`:
+
+Now writing the complete test file with all 19 original tests intact plus the 8 new gasless tests:
+
+Now writing the full test file. The key helper `_signReceiveWithAuthorization` will compute the EIP-712 digest exactly as the mock does, using `vm.sign`:
