@@ -391,6 +391,27 @@ against this project's vite 6. bun does not enforce peer ranges, so it never
 surfaced in Studio. `npm install --legacy-peer-deps` is correct — the plugin works
 under vite 6; the metadata is just stale.
 
+## Turn 3b — review fixes, and what the live run found
+
+Prompt: [`studio/prompts/turn-03b-review-fixes.md`](studio/prompts/turn-03b-review-fixes.md)
+with [`turn-03b-review-fixes.patch`](studio/prompts/turn-03b-review-fixes.patch)
+
+_queued, not yet run_
+
+Two reasons for this turn. First, the Turn 3 review fixes were made locally, so
+the Studio workspace and the repo had diverged in eight files — and a later turn
+touching any of them could not have been pulled cleanly. The patch puts them back
+in step, and it goes through Studio rather than around it so the workspace stays
+the source of the frontend.
+
+Second, running the whole lifecycle against live testnet deals
+([`docs/testnet-lifecycle.md`](docs/testnet-lifecycle.md)) found two defects the
+review had not: "Recent commits" renders storage order, which swap-and-pop
+scrambles on the first withdrawal; and the `/proof` scanner reads
+`rate limit exceeded` as a range error and retries with no delay, which causes
+the very rate limiting it is reacting to. Both were measured before being
+written up, so the prompt carries real window sizes rather than guesses.
+
 ## Turn 4 — gasless commits
 
 Prompt: [`studio/prompts/turn-04-gasless.md`](studio/prompts/turn-04-gasless.md)
