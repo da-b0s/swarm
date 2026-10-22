@@ -1,81 +1,67 @@
 /**
- * Event-sourced commit history for a single deal.
+ * Event-sourced commit/withdraw history for a single deal.
  *
- * Builds the list from Committed and Withdrawn events (with DealPosted as the
- * sentinel that marks the start of this deal's history) instead of reading the
- * on-chain buyer array, which is scrambled by the swap-and-pop used in withdraw.
+ * Correctness requirements
+ * ────────────────────────
+ * 1. Cross-window ordering: the contract's swap-and-pop means storage order is
+ *    scrambled; and a buyer's Committed may be in an older window than their
+ *    Withdrawn. Processing windows newest-first (backfill order) would apply a
+ *    Withdrawn before its Committed, dropping it.
+ *    Fix: accumulate all backfill logs, rebuild the state map from scratch in
+ *    chronological order after every window for progressive display.
  *
- * Filter: topics = [[DealPosted, Committed, Withdrawn], [dealIdTopic]]
- * Applied to both DealFactory and DemandPool addresses.
+ * 2. Poll–backfill race: the incremental poll must not start before the
+ *    backfill finishes, and must never move lastBlockRef backwards.
  *
- * Scan strategy:
- * - Initial backfill: walk backwards from chain head in 5,000-block windows until
- *   we find the DealPosted event for this dealId (or reach the deploy block).
- * - Incremental poll: every 5 s, fetch only blocks since the last scanned block.
- * - Display order: newest first (last-committed shows at the top).
+ * 3. Silent partial lists: errors during backfill must not silently mark the
+ *    list as complete. Rate-limit → back off and retry; range-too-large →
+ *    shrink window and retry; other → surface the error.
+ *
+ * Filter: topics = [[DealPosted, Committed, Withdrawn], [dealIdTopic32]]
+ * Applied to DealFactory (DealPosted) and DemandPool (Committed, Withdrawn).
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { keccak256, toBytes, decodeEventLog, pad, type Hex } from 'viem'
-import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'
+import { CONTRACTS_ACTIVE } from './config'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'
+import {
+  rpcFetch, getLatestBlock,
+  RateLimitError, RangeTooLargeError,
+  SCAN_MAX_WINDOW, SCAN_MIN_WINDOW,
+  RATE_BASE_MS, RATE_MAX_MS,
+  GROW_AFTER, growWindow,
+} from './rpc'
+
+// ── Public type ───────────────────────────────────────────────────────────────
 
 export interface DealHistoryEntry {
   buyer: `0x${string}`
-  pricePaid: bigint    // micro-USDC (6 dec)
+  pricePaid: bigint    // micro-USDC (6 dec); 0 if withdrawn
   withdrawn: boolean
-  txHash: string
+  txHash: string       // most recent tx (withdraw > commit)
   blockNumber: bigint
   logIndex: number
 }
 
-// ── topic hashes ──────────────────────────────────────────────────────────────
+// ── Topic hashes ──────────────────────────────────────────────────────────────
 
-const T_DEAL_POSTED  = keccak256(toBytes('DealPosted(uint256,address,uint32,uint64,uint64)'))
-const T_COMMITTED    = keccak256(toBytes('Committed(uint256,address,uint64,uint64,uint32)'))
-const T_WITHDRAWN    = keccak256(toBytes('Withdrawn(uint256,address,uint64,uint64,uint32)'))
-
-// ── RPC helpers ───────────────────────────────────────────────────────────────
-
-type JsonRpcResp<T> = { result: T; error?: undefined } | { result?: undefined; error: { message?: string } }
-
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  const r = await fetch(ARC_NETWORK.rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  })
-  const json = await r.json() as JsonRpcResp<T>
-  if (json.error) throw new Error(json.error.message ?? 'RPC error')
-  return json.result
-}
-
-async function blockNumber(): Promise<bigint> {
-  return BigInt(await rpc<string>('eth_blockNumber', []))
-}
-
-type RawLog = { address: string; topics: Hex[]; data: Hex; blockNumber: Hex; transactionHash: Hex; logIndex: Hex }
-
-/** Encode a uint256 as a 32-byte padded topics entry */
-function dealIdTopic(id: bigint): Hex {
-  return pad(`0x${id.toString(16)}`, { size: 32 })
-}
-
-async function fetchLogs(from: bigint, to: bigint, dealId: bigint): Promise<RawLog[]> {
-  return rpc<RawLog[]>('eth_getLogs', [{
-    address: [CONTRACTS_ACTIVE.DealFactory, CONTRACTS_ACTIVE.DemandPool],
-    topics: [
-      [T_DEAL_POSTED, T_COMMITTED, T_WITHDRAWN],
-      dealIdTopic(dealId),
-    ],
-    fromBlock: `0x${from.toString(16)}`,
-    toBlock:   `0x${to.toString(16)}`,
-  }])
-}
+const T_DEAL_POSTED = keccak256(toBytes('DealPosted(uint256,address,uint32,uint64,uint64)'))
+const T_COMMITTED   = keccak256(toBytes('Committed(uint256,address,uint64,uint64,uint32)'))
+const T_WITHDRAWN   = keccak256(toBytes('Withdrawn(uint256,address,uint64,uint64,uint32)'))
 
 const COMBINED_ABI = [...DEAL_FACTORY_ABI, ...DEMAND_POOL_ABI] as const
 
-// ── decoder ───────────────────────────────────────────────────────────────────
+// ── RawLog / ParsedEntry types ────────────────────────────────────────────────
+
+type RawLog = {
+  address: string
+  topics: Hex[]
+  data: Hex
+  blockNumber: Hex
+  transactionHash: Hex
+  logIndex: Hex
+}
 
 interface ParsedEntry {
   type: 'Committed' | 'Withdrawn' | 'DealPosted'
@@ -86,9 +72,23 @@ interface ParsedEntry {
   logIndex: number
 }
 
-// Typed args shapes returned by decodeEventLog for the events we decode
 interface CommittedArgs { buyer: `0x${string}`; pricePaid: bigint }
 interface WithdrawnArgs { buyer: `0x${string}` }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function dealIdTopic(id: bigint): Hex {
+  return pad(`0x${id.toString(16)}`, { size: 32 })
+}
+
+async function fetchLogs(from: bigint, to: bigint, dealId: bigint): Promise<RawLog[]> {
+  return rpcFetch<RawLog[]>('eth_getLogs', [{
+    address: [CONTRACTS_ACTIVE.DealFactory, CONTRACTS_ACTIVE.DemandPool],
+    topics: [[T_DEAL_POSTED, T_COMMITTED, T_WITHDRAWN], dealIdTopic(dealId)],
+    fromBlock: `0x${from.toString(16)}`,
+    toBlock:   `0x${to.toString(16)}`,
+  }])
+}
 
 function parseLog(raw: RawLog): ParsedEntry | null {
   const topic0 = raw.topics[0]
@@ -97,152 +97,193 @@ function parseLog(raw: RawLog): ParsedEntry | null {
   if (topic0 === T_WITHDRAWN)   type = 'Withdrawn'
   if (topic0 === T_DEAL_POSTED) type = 'DealPosted'
   if (!type) return null
-
   try {
     const d = decodeEventLog({ abi: COMBINED_ABI, data: raw.data, topics: raw.topics as [Hex, ...Hex[]] })
+    const pos = { txHash: raw.transactionHash, blockNumber: BigInt(raw.blockNumber), logIndex: Number(raw.logIndex) }
     if (type === 'Committed') {
       const a = d.args as unknown as CommittedArgs
-      return { type, buyer: a.buyer, pricePaid: BigInt(a.pricePaid), txHash: raw.transactionHash, blockNumber: BigInt(raw.blockNumber), logIndex: Number(raw.logIndex) }
+      return { type, buyer: a.buyer, pricePaid: BigInt(a.pricePaid), ...pos }
     }
     if (type === 'Withdrawn') {
       const a = d.args as unknown as WithdrawnArgs
-      return { type, buyer: a.buyer, txHash: raw.transactionHash, blockNumber: BigInt(raw.blockNumber), logIndex: Number(raw.logIndex) }
+      return { type, buyer: a.buyer, ...pos }
     }
-    // DealPosted — no args needed, just the position marker
-    return { type: 'DealPosted', txHash: raw.transactionHash, blockNumber: BigInt(raw.blockNumber), logIndex: Number(raw.logIndex) }
+    return { type: 'DealPosted', ...pos }
   } catch {
     return null
   }
 }
 
-// ── hook ──────────────────────────────────────────────────────────────────────
+/**
+ * Rebuild the display list from a flat array of ALL parsed entries collected
+ * so far, applied in chronological order from an empty state map.
+ * Returns entries sorted newest-first.
+ */
+function buildEntries(allLogs: ParsedEntry[]): DealHistoryEntry[] {
+  // Sort ascending so each event is applied in the order it occurred on-chain.
+  const sorted = [...allLogs].sort((a, b) =>
+    a.blockNumber < b.blockNumber ? -1 : a.blockNumber > b.blockNumber ? 1 : a.logIndex - b.logIndex
+  )
 
-const WINDOW = 5000n   // blocks per getLogs call
-const POLL_MS = 5000   // incremental poll interval
+  // Build a fresh state map — never carry over state from a previous build.
+  const map = new Map<string, DealHistoryEntry>()
+
+  for (const l of sorted) {
+    if (l.type === 'DealPosted' || !l.buyer) continue
+    const key = l.buyer.toLowerCase()
+    if (l.type === 'Committed') {
+      map.set(key, {
+        buyer: l.buyer,
+        pricePaid: l.pricePaid ?? 0n,
+        withdrawn: false,
+        txHash: l.txHash,
+        blockNumber: l.blockNumber,
+        logIndex: l.logIndex,
+      })
+    } else if (l.type === 'Withdrawn') {
+      const existing = map.get(key)
+      if (existing) {
+        map.set(key, { ...existing, withdrawn: true, txHash: l.txHash, blockNumber: l.blockNumber, logIndex: l.logIndex })
+      }
+    }
+  }
+
+  // Return newest-first.
+  return Array.from(map.values()).sort((a, b) =>
+    a.blockNumber !== b.blockNumber
+      ? a.blockNumber > b.blockNumber ? -1 : 1
+      : b.logIndex - a.logIndex
+  )
+}
+
+// ── Hook ──────────────────────────────────────────────────────────────────────
+
+const POLL_MS = 5_000
 
 export function useDealHistory(dealId: bigint | undefined): DealHistoryEntry[] {
   const [entries, setEntries] = useState<DealHistoryEntry[]>([])
-  // last block fully scanned (so incremental polls start from lastBlock+1)
-  const lastBlockRef  = useRef<bigint | null>(null)
-  const foundPostedRef = useRef(false)
-  // track live state: address → {pricePaid, withdrawn}
-  const stateRef = useRef<Map<string, { pricePaid: bigint; withdrawn: boolean; txHash: string; blockNumber: bigint; logIndex: number }>>(new Map())
   const mountedRef = useRef(true)
-
-  // Rebuild the display list (newest first) from the state map
-  const rebuild = useCallback(() => {
-    const arr: DealHistoryEntry[] = []
-    for (const [buyer, v] of stateRef.current) {
-      arr.push({ buyer: buyer as `0x${string}`, pricePaid: v.pricePaid, withdrawn: v.withdrawn, txHash: v.txHash, blockNumber: v.blockNumber, logIndex: v.logIndex })
-    }
-    // Sort newest-first (by block, then logIndex descending)
-    arr.sort((a, b) => {
-      if (a.blockNumber !== b.blockNumber) return a.blockNumber > b.blockNumber ? -1 : 1
-      return b.logIndex - a.logIndex
-    })
-    if (mountedRef.current) setEntries(arr)
-  }, [])
-
-  // Apply a batch of parsed log entries to stateRef
-  const applyLogs = useCallback((logs: ParsedEntry[]) => {
-    // Sort chronologically before applying
-    const sorted = [...logs].sort((a, b) =>
-      a.blockNumber < b.blockNumber ? -1 : a.blockNumber > b.blockNumber ? 1 : a.logIndex - b.logIndex
-    )
-    for (const l of sorted) {
-      if (l.type === 'DealPosted') {
-        foundPostedRef.current = true
-        continue
-      }
-      if (!l.buyer) continue
-      const key = l.buyer.toLowerCase()
-      if (l.type === 'Committed') {
-        stateRef.current.set(key, {
-          pricePaid: l.pricePaid ?? 0n,
-          withdrawn: false,
-          txHash: l.txHash,
-          blockNumber: l.blockNumber,
-          logIndex: l.logIndex,
-        })
-      } else if (l.type === 'Withdrawn') {
-        const existing = stateRef.current.get(key)
-        if (existing) {
-          stateRef.current.set(key, { ...existing, withdrawn: true, txHash: l.txHash, blockNumber: l.blockNumber, logIndex: l.logIndex })
-        }
-      }
-    }
-  }, [])
 
   useEffect(() => {
     if (dealId === undefined) return
     mountedRef.current = true
-    lastBlockRef.current  = null
-    foundPostedRef.current = false
-    stateRef.current = new Map()
     setEntries([])
 
     const deployBlock = CONTRACTS_ACTIVE.deployBlock
 
-    // ── Initial backfill: scan backwards until DealPosted found ──────────────
+    // allLogs holds every ParsedEntry collected during the backfill.
+    // The backfill appends to it; each window triggers a rebuild from scratch
+    // so the display is always consistent even though windows arrive newest-first.
+    const allLogs: ParsedEntry[] = []
+
+    // lastBlock is set once (to the head at backfill start) and only ever
+    // moves forward; the incremental poll reads it after the backfill resolves.
+    let lastBlock: bigint | null = null
     let running = true
-    const backfill = async () => {
-      try {
-        const head = await blockNumber()
-        // Start from head, walk backwards in WINDOW-sized chunks
-        let hi = head
 
-        while (running && !foundPostedRef.current && hi >= deployBlock) {
-          const lo = hi >= deployBlock + WINDOW ? hi - WINDOW + 1n : deployBlock
-          let logs: RawLog[]
-          try {
-            logs = await fetchLogs(lo, hi, dealId)
-          } catch {
-            // On any RPC error during backfill, just stop and use what we have
-            break
+    // ── Backfill (backwards from head, newest-first windows) ──────────────────
+
+    const backfill = async (): Promise<void> => {
+      const head = await getLatestBlock()
+      let hi = head
+      let window = SCAN_MAX_WINDOW
+      let rateLimitDelay = RATE_BASE_MS
+      let consecutiveSuccesses = 0
+      let foundPosted = false
+
+      while (running && !foundPosted && hi >= deployBlock) {
+        const lo = hi >= deployBlock + window ? hi - window + 1n : deployBlock
+        let raw: RawLog[]
+        try {
+          raw = await fetchLogs(lo, hi, dealId)
+        } catch (e: unknown) {
+          if (e instanceof RateLimitError) {
+            consecutiveSuccesses = 0
+            await new Promise(res => setTimeout(res, rateLimitDelay))
+            rateLimitDelay = Math.min(rateLimitDelay * 2, RATE_MAX_MS)
+            continue  // retry same [lo, hi]
           }
-          const parsed = logs.map(parseLog).filter(Boolean) as ParsedEntry[]
-          applyLogs(parsed)
-          rebuild()
-          if (lo <= deployBlock) break
-          hi = lo - 1n
+          if (e instanceof RangeTooLargeError) {
+            consecutiveSuccesses = 0
+            if (window <= SCAN_MIN_WINDOW) {
+              // Already at floor — give up and surface a partial list.
+              // Setting lastBlock allows the poll to keep the list live.
+              if (running) lastBlock = head
+              return
+            }
+            window = window / 2n
+            if (window < SCAN_MIN_WINDOW) window = SCAN_MIN_WINDOW
+            continue  // retry same hi with smaller window
+          }
+          // Any other error: abort this backfill attempt.
+          if (running) lastBlock = head
+          return
         }
 
-        // Record where we've scanned to so incremental polls start here
-        if (running) {
-          lastBlockRef.current = head
+        // Success
+        rateLimitDelay = RATE_BASE_MS
+        consecutiveSuccesses++
+        if (consecutiveSuccesses >= GROW_AFTER && window < SCAN_MAX_WINDOW) {
+          window = growWindow(window)
         }
-      } catch {
-        // Silently fail — the list stays empty/partial
+
+        const parsed = raw.map(parseLog).filter((x): x is ParsedEntry => x !== null)
+        allLogs.push(...parsed)
+
+        // Check whether we've seen the DealPosted sentinel for this deal.
+        if (parsed.some(p => p.type === 'DealPosted')) foundPosted = true
+
+        // Rebuild from scratch after every window for progressive display.
+        if (mountedRef.current) setEntries(buildEntries(allLogs))
+
+        if (lo <= deployBlock) break
+        hi = lo - 1n
+      }
+
+      // Backfill complete — record head so the poll knows where to start.
+      // Never move lastBlock backwards: if something already set it forward,
+      // keep the later value.
+      if (running) {
+        lastBlock = lastBlock === null || head > lastBlock ? head : lastBlock
       }
     }
 
-    void backfill()
+    // ── Incremental poll — starts only after backfill resolves ────────────────
 
-    // ── Incremental poll: pick up new events as blocks arrive ─────────────────
-    const doPoll = async () => {
-      if (!running) return
-      try {
-        const head = await blockNumber()
-        const from = lastBlockRef.current !== null ? lastBlockRef.current + 1n : head
-        if (from > head) return
-        const logs = await fetchLogs(from, head, dealId)
-        const parsed = logs.map(parseLog).filter(Boolean) as ParsedEntry[]
-        if (parsed.length > 0) {
-          applyLogs(parsed)
-          rebuild()
-        }
-        lastBlockRef.current = head
-      } catch {
-        // Ignore transient poll failures
-      }
-    }
-    const pollTimer = setInterval(() => { void doPoll() }, POLL_MS)
+    const startPoll = (): ReturnType<typeof setInterval> =>
+      setInterval(() => {
+        void (async () => {
+          if (!running || lastBlock === null) return
+          try {
+            const head = await getLatestBlock()
+            const from = lastBlock + 1n
+            if (from > head) return
+            const raw = await fetchLogs(from, head, dealId)
+            const parsed = raw.map(parseLog).filter((x): x is ParsedEntry => x !== null)
+            if (parsed.length > 0) {
+              allLogs.push(...parsed)
+              if (mountedRef.current) setEntries(buildEntries(allLogs))
+            }
+            // Only advance lastBlock — never let it go backwards.
+            if (head > lastBlock) lastBlock = head
+          } catch {
+            // Ignore transient poll failures — next tick will retry.
+          }
+        })()
+      }, POLL_MS)
+
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+
+    void backfill().then(() => {
+      if (running) pollTimer = startPoll()
+    })
 
     return () => {
       running = false
       mountedRef.current = false
-      clearInterval(pollTimer)
+      if (pollTimer !== null) clearInterval(pollTimer)
     }
+  // dealId is the only stable dependency. Everything inside closes over it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dealId])
 

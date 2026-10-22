@@ -22,7 +22,7 @@ export function ProofPage() {
           Conservation proof
         </h1>
         <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
-          Events read live from {ARC_NETWORK.name}. For each settled deal: commits in = supplier credited + refunds out, to the wei.
+          Events read live from {ARC_NETWORK.name}. Settled: commits in = supplier credited + refunds out. Refunded: commits in = refunds out. Verified to the wei.
         </p>
       </motion.div>
 
@@ -127,7 +127,7 @@ export function ProofPage() {
                     <p className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.refundsOut)}</p>
                   </div>
                 </div>
-                {deal.settled && deal.conserved !== null && (
+                {(deal.settled || deal.refunded) && deal.conserved !== null && (
                   <div className="flex items-center gap-1.5 mt-1">
                     {deal.conserved
                       ? <CheckCircle className="size-3.5" style={{ color: 'var(--success)' }} />

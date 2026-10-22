@@ -454,8 +454,36 @@ Both go to Turn 3c.
 ## Turn 3c — the proof page, and activity ordering across windows
 
 Prompt: [`studio/prompts/turn-03c-proof-and-history.md`](studio/prompts/turn-03c-proof-and-history.md)
+Result: [`studio/runs/turn-03c.json`](studio/runs/turn-03c.json) · status `completed`
 
-_queued, not yet run_
+Both fixes are correct, and this time the code bore out the summary.
+
+The proof page now adds `Settled.totalRefunds` into the deal's refunds, marks a
+deal refunded when `Refunded` events arrive, and checks conservation for refunded
+deals too. Scanned in the browser from the deploy block, in 25 seconds: deal #1
+**$3.75 = $2.50 + $1.25, conservation verified**; deal #2 **refunded, $1.00 =
+$0.00 + $1.00, verified**; total refunded $2.25; total claimed $5.75, which is
+every claim in the lifecycle run summed. Those are the figures the lifecycle
+script had already checked from chain, now reproduced by the page from events
+alone.
+
+The activity list now keeps every log it has collected and rebuilds its state
+from an empty map in chronological order after each window, so arrival order no
+longer matters. Tested rather than read: its shipped `buildEntries`, stripped of
+types with esbuild and fed windows newest-first, now reports a buyer whose
+withdrawal sits in a later window than their commit as having left, and a buyer
+who left and rejoined at their latest price. The same input made the Turn 3b
+version show the leaver as still in. Polling now starts only once the backfill has
+finished, `lastBlock` only moves forward, and both hooks share one classified
+`rpcFetch` in a new `rpc.ts` rather than two copies. The scanner's last hot loop —
+retrying forever when even the 500-block floor is refused — now surfaces as an
+error.
+
+One judgement call worth recording: if the backfill hits an error that is
+neither a rate limit nor a range limit, it keeps the partial list visible and
+continues polling rather than clearing it. That is a reasonable choice for a live
+screen, but it means a partial history is not flagged as partial.
+
 
 ## Turn 4 — gasless commits
 
