@@ -24,3 +24,6 @@ typechain-types/
 # os
 Thumbs.db
 .DS_Store
+
+# relayer runtime log
+relayer/relay-log.jsonl

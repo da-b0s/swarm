@@ -1,0 +1,314 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the current relayer and GaslessCommitFlow in full before touching anything. I have both files completely. Seven fixes needed. I'll apply them in parallel: `GaslessCommitFlow.tsx` gets one surgical edit (sign for `clearingPrice` not `tiers[0].pricePerUnit`); `server.ts` gets six fixes. Fix 1 — GaslessCommitFlow: remove the max-price logic and sign for `clearingPrice` directly. The `tiers` prop and its comment go away; the price shown and signed are both `priceToSign` which defaults to `clearingPrice`: Now remove the now-unused `tiers` dependency from the `useCallback` dep array and from the component signature — `tiers` is still a prop used by the parent, but `GaslessCommitFlow` itself no longer uses it. Check if it's used anywhere else in this component: `tiers` appears in the Props interface, destructuring, and dep array but is no longer used in the component body. Remove it from all three, and remove the `DealTier` import since it's only used for `tiers`: Now find where GaslessCommitFlow is called in CommitFlow to remove the `tiers` prop: Good. Now the six server.ts fixes. I'll rewrite the nonce manager + relay function in one targeted block:\n\n**Fix 7 — CORS default**: change `ALLOWED_ORIGIN` default from `'*'` to `''` (refuse) and log at startup: **Fix 2, 3, 4, 5, 6 — rewrite the nonce manager and the relay `send` block in one replacement:** Now rewrite the entire send block in `relay()`: There's now a stale `// 4. Wait for the confirmed receipt.` line that was the old step 4 — it needs to be removed since the receipt is now in `confirmedReceipt`: Now also remove the old step number comments that are now wrong, and update the gas cost comment to reference step 6: Now update the startup log to show the CORS origin: Now run both checks: Actual output:\n\n**Frontend (`bash scripts/check.sh`):**\n```\n$ oxlint --type-aware src scripts --fix; s=$?; oxlint --fix .; exit $((s>0?s:$?))\nFound 0 warnings and 0 errors.\nFinished in 1.4s on 27 files with 57 rules using 4 threads.\nFound 0 warnings and 0 errors.\nFinished in 231ms on 31 files with 34 rules using 4 threads.\n$ tsc --noEmit\n\n[Command succeeded with exit code 0]\n```\n\n**Relayer (`cd relayer && npx tsc --noEmit`):**\n```\n[Command succeeded with exit code 0]\n```\n\n---\n\nHere is what changed and why each fix is correct:\n\n**Fix 1 — sign for `priceToSign` (= `clearingPrice`).** The comment in the previous version was wrong: \"the pool only pulls the live price\" applies to `transferFrom` approvals (which are ceilings), not to `receiveWithAuthorization` (which transfers exactly the signed amount). Signing for `tiers[0].pricePerUnit` would transfer the full top-tier price out of the buyer's wallet regardless of what tier they're actually joining. `tiers` is removed from Props, the import, the destructuring and the dep array entirely.\n\n**Fix 2 — mutex never poisons the queue.** The pattern is now `const run = sendMutex.then(work); sendMutex = run.catch(() => {})`. `sendMutex` always resolves, so the next caller's `.then(work)` always fires. Each caller `await run`s its own promise and gets its own error if the send failed.\n\n**Fix 3 — nonce reset on send failure.** `sendAtFee` calls `resetNonce()` in its `catch` block before re-throwing. The next `resolveNonce()` call re-reads `getTransactionCount({ blockTag: 'pending' })`, which returns the first unused nonce as the mempool sees it, skipping any gap.\n\n**Fix 4 — bump timer advances after each replacement.** `nextReplace = Date.now() + REPLACE_INTERVAL_MS` is reassigned inside the bump branch. A `feeCap` of `5 × initFee` is enforced; bumping stops when the fee hits the cap.\n\n**Fix 5 — all hashes tracked.** `allHashes: Hex[]` collects every hash submitted for this nonce. The confirmation loop checks all of them on each poll. After the send work completes, the receipt-finding loop iterates `allHashes` to locate which one was actually mined and returns that hash to the caller.\n\n**Fix 6 — `estimateContractGas` + 20% margin.** The simulation is followed immediately by `estimateContractGas` using the same args. The result multiplied by `120n / 100n` is used as the `gas` limit for every `writeContract` call. The fixed 300,000 is gone.\n\n**Fix 7 — CORS defaults to empty string.** An empty `ALLOWED_ORIGIN` means the `Access-Control-Allow-Origin` header is sent as `\"\"`, which browsers treat as a refusal. The startup log prints the effective origin so operators can confirm it at a glance.",
+  "todos": [
+    {
+      "id": "todo:gaslesscommitflow: sign for live clearingprice not tiers[0]:0",
+      "text": "GaslessCommitFlow: sign for live clearingPrice not tiers[0]",
+      "status": "done"
+    },
+    {
+      "id": "todo:server.ts: fix sendmutex rejected-promise propagation (#2):0",
+      "text": "server.ts: fix sendMutex rejected-promise propagation (#2)",
+      "status": "done"
+    },
+    {
+      "id": "todo:server.ts: reset nonce on send failure (#3):0",
+      "text": "server.ts: reset nonce on send failure (#3)",
+      "status": "done"
+    },
+    {
+      "id": "todo:server.ts: fix replacement loop bump frequency (#4):0",
+      "text": "server.ts: fix replacement loop bump frequency (#4)",
+      "status": "done"
+    },
+    {
+      "id": "todo:server.ts: track all hashes, return mined one (#5):0",
+      "text": "server.ts: track all hashes, return mined one (#5)",
+      "status": "done"
+    },
+    {
+      "id": "todo:server.ts: estimatecontractgas + 20% margin (#6):0",
+      "text": "server.ts: estimateContractGas + 20% margin (#6)",
+      "status": "done"
+    },
+    {
+      "id": "todo:server.ts: cors default to refuse + startup log (#7):0",
+      "text": "server.ts: CORS default to refuse + startup log (#7)",
+      "status": "done"
+    },
+    {
+      "id": "todo:run tsc + lint, paste actual output:0",
+      "text": "Run tsc + lint, paste actual output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "relayer/server.ts",
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/GaslessCommitFlow.tsx"
+  ],
+  "fileDiffs": [
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-const ALLOWED_ORIGIN = process.env['ALLOWED_ORIGIN'] ?? '*'\n+// Default to empty string (refuse cross-origin). Set ALLOWED_ORIGIN explicitly\n+// for any deployment that accepts browser requests.\n+const ALLOWED_ORIGIN = process.env['ALLOWED_ORIGIN'] ?? ''"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 30,
+      "removedLines": 20,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " // ── Nonce manager ─────────────────────────────────────────────────────────────\n-// Tracks the nonce explicitly so concurrent requests don't collide.\n-// A mutex (promise chain) serialises sends — only one in-flight at a time.\n+// Serialises sends through a promise chain so concurrent requests never take\n+// the same nonce.  The chain is kept alive even when an individual send fails\n+// (fix #2: catch on the inner run, not the outer chain).\n+// On any send failure the nonce is reset to null so the next send re-reads\n+// getTransactionCount with the pending block, skipping any gap (fix #3).\n \n-let nextNonce: number | null = null\n-let sendMutex = Promise.resolve()\n-\n-async function getNextNonce(): Promise<number> {\n+let nextNonce: number | null = null"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 131,
+      "removedLines": 78,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // 2. Simulate — never broadcast a call you can already tell will revert.\n+  //    Also estimate gas here so we don't hardcode a limit.\n+  let estimatedGas: bigint\n   try {\n-    await publicClient.simulateContract({\n+    const sim = await publicClient.simulateContract({\n       address: POOL_ADDRESS,\n       abi: POOL_ABI,\n-      functionName: 'commitWithAuthorization',\n-      args: [dealId, buyer, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],\n-      account: account.address,\n+      functionName: 'commitWithAuthorization',"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const receipt  = confirmedReceipt\n   const gasPrice = receipt.effectiveGasPrice ?? MIN_GAS_PRICE\n \n-  // 4. Wait for the confirmed receipt.\n-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 })\n-\n   // 5. Parse Committed and ExcessCredited from the receipt logs."
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // 6. Compute gas cost in USDC: gasUsed * effectiveGasPrice / 1e12 (18→6 dec).\n+  // 6. Compute gas cost in USDC: gasUsed * effectiveGasPrice / 1e12 (18→6 dec).\n+  //    effectiveGasPrice is taken from the receipt, not the fee we sent."
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " server.listen(PORT, () => {\n-  console.log(`Swarm relayer listening on port ${PORT} (chain ${CHAIN_ID}, pool ${POOL_ADDRESS}, relayer ${account.address})`)\n+  const originLabel = ALLOWED_ORIGIN || '(none — cross-origin requests refused)'\n+  console.log(`Swarm relayer listening on port ${PORT}`)\n+  console.log(`  chain    ${CHAIN_ID}`)\n+  console.log(`  pool     ${POOL_ADDRESS}`)\n+  console.log(`  relayer  ${account.address}`)\n+  console.log(`  origin   ${originLabel}`)\n })"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       <GaslessCommitFlow\n         dealId={dealId}\n         clearingPrice={clearingPrice}\n-        tiers={tiers}\n         deadline={deadline}\n         state={state}\n         onCommitted={onCommitted}\n-        onFallback={() => setShowFallback(true)}\n+        onFallback={() => setShowFallback(true)}\n+      />"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    // Top tier = highest price. Sign for the top tier's price so a sign for\n-    // $1.00 still works when the live price is $0.75 and the pool only\n-    // pulls $0.75 (routing the $0.25 to claimable). The user sees the\n-    // on-screen live price — this guards against the one-in-a-thousand\n-    // case where the price rises back up to exactly the top between sign\n-    // and submit, which would otherwise revert and force a re-sign.\n-    // The amount authorised here is tiers[0].pricePerUnit (the curve max).\n-    const maxPrice = tiers.length > 0 ? tiers[0].pricePerUnit : priceToSign\n+    // Sign for the live price the buyer will actually pay: clearingPrice at\n+    // count+1. The contract charges at most this amount; if another commit\n+    // breaks a tier first the difference is credited back. If a withdrawal\n+    // pushed the price up, the relayer returns 409 and we re-sign at the\n+    // new price via the errMsg path already in place.\n+    const authorizedAmount = priceToSign"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import type { DealTier } from './hooks'\n import { useChainNow } from './hooks'"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface Props {\n   dealId: bigint\n   clearingPrice: bigint\n-  tiers: DealTier[]\n   deadline: bigint\n   state: number\n   onCommitted: () => void\n-  onFallback: () => void   // user chose the approve-then-commit path\n+  onFallback: () => void   // user chose the approve-then-commit path\n+}"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function GaslessCommitFlow({\n-  dealId, clearingPrice, tiers, deadline, state, onCommitted, onFallback,\n+  dealId, clearingPrice, deadline, state, onCommitted, onFallback,\n }: Props) {"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  }, [address, isConnected, wrongChain, nonce, nowSec, tiers, priceToSign, dealId, salt, signTypedData, refetchNonce, onCommitted])\n+  }, [address, isConnected, wrongChain, nonce, nowSec, priceToSign, dealId, salt, signTypedData, refetchNonce, onCommitted])"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test/SwarmGaslessTest.t.sol",
+      "contracts/test/SwarmTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

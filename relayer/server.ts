@@ -41,7 +41,9 @@ const RELAYER_KEY   = required('RELAYER_KEY') as Hex
 const RPC_URL       = required('RPC_URL')
 const CHAIN_ID      = parseInt(required('CHAIN_ID'), 10)
 const POOL_ADDRESS  = required('POOL_ADDRESS') as Hex
-const ALLOWED_ORIGIN = process.env['ALLOWED_ORIGIN'] ?? '*'
+// Default to empty string (refuse cross-origin). Set ALLOWED_ORIGIN explicitly
+// for any deployment that accepts browser requests.
+const ALLOWED_ORIGIN = process.env['ALLOWED_ORIGIN'] ?? ''
 const PORT          = parseInt(process.env['PORT'] ?? '3100', 10)
 const LOG_FILE      = process.env['LOG_FILE'] ?? 'relay-log.jsonl'
 
@@ -100,15 +102,21 @@ const USDC_ABI = parseAbi([
 const USDC_ADDRESS: Hex = '0x3600000000000000000000000000000000000000'
 
 // ── Nonce manager ─────────────────────────────────────────────────────────────
-// Tracks the nonce explicitly so concurrent requests don't collide.
-// A mutex (promise chain) serialises sends — only one in-flight at a time.
+// Serialises sends through a promise chain so concurrent requests never take
+// the same nonce.  The chain is kept alive even when an individual send fails
+// (fix #2: catch on the inner run, not the outer chain).
+// On any send failure the nonce is reset to null so the next send re-reads
+// getTransactionCount with the pending block, skipping any gap (fix #3).
 
 let nextNonce: number | null = null
-let sendMutex = Promise.resolve()
+let sendMutex: Promise<void> = Promise.resolve()
 
-async function getNextNonce(): Promise<number> {
+async function resolveNonce(): Promise<number> {
   if (nextNonce === null) {
-    nextNonce = await publicClient.getTransactionCount({ address: account.address })
+    nextNonce = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: 'pending',
+    })
   }
   return nextNonce
 }
@@ -118,6 +126,10 @@ function consumeNonce(): number {
   const n = nextNonce
   nextNonce = n + 1
   return n
+}
+
+function resetNonce(): void {
+  nextNonce = null
 }
 
 // ── Rate limiting per buyer ────────────────────────────────────────────────────
@@ -220,86 +232,136 @@ async function relay(body: CommitBody): Promise<RelayResult> {
   if (relayerBlocked) throw Object.assign(new Error('Relayer address is USDC-blacklisted'), { code: 'Blocklisted' })
 
   // 2. Simulate — never broadcast a call you can already tell will revert.
+  //    Also estimate gas here so we don't hardcode a limit.
+  let estimatedGas: bigint
   try {
-    await publicClient.simulateContract({
+    const sim = await publicClient.simulateContract({
       address: POOL_ADDRESS,
       abi: POOL_ABI,
       functionName: 'commitWithAuthorization',
       args: [dealId, buyer, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
       account: account.address,
     })
+    // estimateContractGas gives a tighter figure; add 20% safety margin (fix #6).
+    const raw = await publicClient.estimateContractGas({
+      address: POOL_ADDRESS,
+      abi: POOL_ABI,
+      functionName: 'commitWithAuthorization',
+      args: [dealId, buyer, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
+      account: account.address,
+    })
+    estimatedGas = (raw * 120n) / 100n
+    void sim  // simulation succeeded; we only needed the revert check
   } catch (e: unknown) {
-    // Try to decode a named contract error from the simulation revert.
+    // Decode a named contract error from the simulation revert.
     const errData = (e as { cause?: { data?: Hex } })?.cause?.data
     if (errData) {
       try {
         const decoded = decodeErrorResult({ abi: POOL_ABI, data: errData })
-        const err = Object.assign(new Error(`Contract revert: ${decoded.errorName}`), {
+        throw Object.assign(new Error(`Contract revert: ${decoded.errorName}`), {
           code: decoded.errorName,
           args: decoded.args,
         })
-        throw err
-      } catch (decodeErr) {
-        if ((decodeErr as { code?: string }).code) throw decodeErr
-        // Decode failed: fall through and throw the raw simulation error.
+      } catch (inner) {
+        if ((inner as { code?: string }).code) throw inner
+        // Decode failed; fall through and throw the raw error.
       }
     }
     throw e
   }
 
-  // 3. Send — serialised through the mutex so two concurrent requests cannot
-  //    take the same nonce. We capture txHash and the final gasPrice for the
-  //    receipt lookup and cost calculation below.
-  const sendResult = { txHash: '' as Hex, gasPrice: MIN_GAS_PRICE }
+  // 3. Send — serialised through the mutex so concurrent requests never take
+  //    the same nonce.  Pattern: `run` is the actual work; `sendMutex` is
+  //    chained on a silenced copy so a failure in `run` doesn't poison later
+  //    requests (fix #2).
+  const CONFIRMATION_TIMEOUT_MS = 90_000
+  const REPLACE_INTERVAL_MS     = 30_000   // how long between bumps (fix #4)
+  const MAX_FEE_MULTIPLIER      = 5n       // cap bumps at 5× initial fee (fix #4)
 
-  sendMutex = sendMutex.then(async () => {
-    await getNextNonce()
-    const nonce = consumeNonce()
-    sendResult.gasPrice = await currentMaxFeePerGas()
+  // Collects every hash sent for this nonce so we recognise whichever is mined (fix #5).
+  const allHashes: Hex[] = []
+  let   sendError: unknown = null
 
-    const CONFIRMATION_TIMEOUT_MS = 60_000
-    const REPLACE_AFTER_MS        = 30_000
+  const work = async (): Promise<void> => {
+    await resolveNonce()
+    const nonce     = consumeNonce()
+    const initFee   = await currentMaxFeePerGas()
+    const feeCap    = (initFee * MAX_FEE_MULTIPLIER)
+    let   curFee    = initFee
 
-    const sendAtFee = async (fee: bigint): Promise<Hex> =>
-      walletClient.writeContract({
-        address: POOL_ADDRESS,
-        abi: POOL_ABI,
-        functionName: 'commitWithAuthorization',
-        args: [dealId, buyer, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
-        nonce,
-        maxFeePerGas: fee,
-        maxPriorityFeePerGas: 0n,
-        gas: 300_000n,
-      })
+    const sendAtFee = async (fee: bigint): Promise<Hex> => {
+      try {
+        const h = await walletClient.writeContract({
+          address: POOL_ADDRESS,
+          abi: POOL_ABI,
+          functionName: 'commitWithAuthorization',
+          args: [dealId, buyer, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
+          nonce,
+          maxFeePerGas: fee,
+          maxPriorityFeePerGas: 0n,
+          gas: estimatedGas,
+        })
+        allHashes.push(h)
+        return h
+      } catch (e) {
+        resetNonce()   // gap: nonce was never accepted; re-read on next call (fix #3)
+        throw e
+      }
+    }
 
-    sendResult.txHash = await sendAtFee(sendResult.gasPrice)
+    await sendAtFee(curFee)
 
-    // Wait for confirmation; if it stalls, replace at a higher fee.
-    const deadline = Date.now() + CONFIRMATION_TIMEOUT_MS
-    const replaceAt = Date.now() + REPLACE_AFTER_MS
+    const deadline    = Date.now() + CONFIRMATION_TIMEOUT_MS
+    let   nextReplace = Date.now() + REPLACE_INTERVAL_MS
 
     while (Date.now() < deadline) {
-      await new Promise(res => setTimeout(res, 2000))
-      const receipt = await publicClient.getTransactionReceipt({ hash: sendResult.txHash }).catch(() => null)
-      if (receipt) return // confirmed
+      await new Promise(res => setTimeout(res, 2_000))
 
-      if (Date.now() >= replaceAt) {
-        sendResult.gasPrice = bumpFee(sendResult.gasPrice)
+      // Check every hash we have ever sent for this nonce (fix #5).
+      for (const h of allHashes) {
+        const receipt = await publicClient.getTransactionReceipt({ hash: h }).catch(() => null)
+        if (receipt) return  // confirmed — whichever hash it was
+      }
+
+      if (Date.now() >= nextReplace && curFee < feeCap) {
+        curFee = bumpFee(curFee)
+        if (curFee > feeCap) curFee = feeCap
         try {
-          sendResult.txHash = await sendAtFee(sendResult.gasPrice)
+          await sendAtFee(curFee)
+          nextReplace = Date.now() + REPLACE_INTERVAL_MS  // reset timer after bump (fix #4)
         } catch {
-          // If replacement fails, keep waiting for the original.
+          // Replacement rejected; keep polling existing hashes.
         }
       }
     }
-  })
 
-  await sendMutex
-  const txHash = sendResult.txHash
-  const gasPrice = sendResult.gasPrice
+    throw new Error(`Transaction not confirmed within ${CONFIRMATION_TIMEOUT_MS / 1000}s`)
+  }
 
-  // 4. Wait for the confirmed receipt.
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 })
+  const run = sendMutex.then(work)
+  sendMutex = run.catch(() => {})   // keep the chain alive for the next caller (fix #2)
+
+  try {
+    await run
+  } catch (e) {
+    sendError = e
+  }
+
+  if (sendError) throw sendError
+
+  // 4. Find the confirmed receipt among all hashes we sent (fix #5).
+  let txHash: Hex = allHashes[0]!
+  let confirmedReceipt: Awaited<ReturnType<typeof publicClient.getTransactionReceipt>> | null = null
+  for (const h of allHashes) {
+    const r = await publicClient.getTransactionReceipt({ hash: h }).catch(() => null)
+    if (r) { txHash = h; confirmedReceipt = r; break }
+  }
+  if (!confirmedReceipt) {
+    // Shouldn't happen if the loop above returned, but be safe.
+    confirmedReceipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 30_000 })
+  }
+  const receipt  = confirmedReceipt
+  const gasPrice = receipt.effectiveGasPrice ?? MIN_GAS_PRICE
 
   // 5. Parse Committed and ExcessCredited from the receipt logs.
   let pricePaid: bigint       = 0n
@@ -325,6 +387,7 @@ async function relay(body: CommitBody): Promise<RelayResult> {
   }
 
   // 6. Compute gas cost in USDC: gasUsed * effectiveGasPrice / 1e12 (18→6 dec).
+  //    effectiveGasPrice is taken from the receipt, not the fee we sent.
   const gasUsed         = receipt.gasUsed
   const effectivePrice  = receipt.effectiveGasPrice ?? gasPrice
   const gasUsdcCost     = formatUnits((gasUsed * effectivePrice) / 1_000_000_000_000n, 6)
@@ -453,5 +516,10 @@ if (liveChainId !== CHAIN_ID) {
 }
 
 server.listen(PORT, () => {
-  console.log(`Swarm relayer listening on port ${PORT} (chain ${CHAIN_ID}, pool ${POOL_ADDRESS}, relayer ${account.address})`)
+  const originLabel = ALLOWED_ORIGIN || '(none — cross-origin requests refused)'
+  console.log(`Swarm relayer listening on port ${PORT}`)
+  console.log(`  chain    ${CHAIN_ID}`)
+  console.log(`  pool     ${POOL_ADDRESS}`)
+  console.log(`  relayer  ${account.address}`)
+  console.log(`  origin   ${originLabel}`)
 })

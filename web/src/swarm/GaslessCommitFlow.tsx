@@ -24,13 +24,11 @@ import { Loader2, ExternalLink, CheckCircle, AlertCircle, Zap } from 'lucide-rea
 import { formatUsdcPrice, txUrl } from './utils'
 import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL } from './config'
 import { DEMAND_POOL_ABI } from './abis'
-import type { DealTier } from './hooks'
 import { useChainNow } from './hooks'
 
 interface Props {
   dealId: bigint
   clearingPrice: bigint
-  tiers: DealTier[]
   deadline: bigint
   state: number
   onCommitted: () => void
@@ -67,7 +65,7 @@ function randomSalt(): `0x${string}` {
 }
 
 export function GaslessCommitFlow({
-  dealId, clearingPrice, tiers, deadline, state, onCommitted, onFallback,
+  dealId, clearingPrice, deadline, state, onCommitted, onFallback,
 }: Props) {
   const { address, isConnected, chainId: walletChain } = useAccount()
   const { switchChain } = useSwitchChain()
@@ -112,15 +110,12 @@ export function GaslessCommitFlow({
     const baseNow = nowSec > 0 ? nowSec : Math.floor(Date.now() / 1000)
     const validBefore = BigInt(baseNow + VALIDITY_WINDOW_SEC)
 
-    // Top tier = highest price. Sign for the top tier's price so a sign for
-    // $1.00 still works when the live price is $0.75 and the pool only
-    // pulls $0.75 (routing the $0.25 to claimable). The user sees the
-    // on-screen live price — this guards against the one-in-a-thousand
-    // case where the price rises back up to exactly the top between sign
-    // and submit, which would otherwise revert and force a re-sign.
-    // The amount authorised here is tiers[0].pricePerUnit (the curve max).
-    const maxPrice = tiers.length > 0 ? tiers[0].pricePerUnit : priceToSign
-    const authorizedAmount = maxPrice
+    // Sign for the live price the buyer will actually pay: clearingPrice at
+    // count+1. The contract charges at most this amount; if another commit
+    // breaks a tier first the difference is credited back. If a withdrawal
+    // pushed the price up, the relayer returns 409 and we re-sign at the
+    // new price via the errMsg path already in place.
+    const authorizedAmount = priceToSign
 
     try {
       const sig = await new Promise<`0x${string}`>((resolve, reject) => {
@@ -201,7 +196,7 @@ export function GaslessCommitFlow({
       setErrMsg((e as Error).message ?? 'Signing failed')
       setStep('error')
     }
-  }, [address, isConnected, wrongChain, nonce, nowSec, tiers, priceToSign, dealId, salt, signTypedData, refetchNonce, onCommitted])
+  }, [address, isConnected, wrongChain, nonce, nowSec, priceToSign, dealId, salt, signTypedData, refetchNonce, onCommitted])
 
   const reset = () => {
     setStep('idle')

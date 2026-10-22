@@ -587,6 +587,45 @@ that would have passed.
 ## Turn 4d — relayer hardening
 
 Prompt: [`turn-04d-relayer-hardening.md`](studio/prompts/turn-04d-relayer-hardening.md)
+Result: [`turn-04d`](studio/runs/turn-04d.json) · status `completed`
+
+All seven fixes landed and read correctly: the send queue chains on a promise
+that cannot reject, a failed send resets the nonce and re-reads it with the
+`pending` tag, the replacement timer moves forward with a 5x fee cap, every hash
+sent for a nonce is checked for a receipt, gas is estimated with a 20% margin,
+and CORS refuses by default. The frontend now signs for the clearing price at
+the current count — I had asked for count plus one, but this is the safe
+direction: if the buyer's own commit breaks a tier, they pay less and the
+difference is credited back.
+
+**Then it was run, not just read.** The contracts were redeployed to testnet for
+the new pool, the relayer was started against it, and
+[`tools/gasless-testnet.mjs`](tools/gasless-testnet.mjs) drove a deal through it
+with each case forced by the order of events:
+
+- a plain gasless commit: the buyer's balance fell by **exactly $1.00** — the
+  price and nothing else, so the buyer paid no gas;
+- signed at $1.00, landed after another buyer broke a tier: escrowed **$0.50**,
+  **$0.50** credited back and visible in `claimable`;
+- settlement at $0.75: **$1.75 committed = $1.50 supplier + $0.25 refunds**,
+  every claim matched, the pool ended at **$0**;
+- the relayer spent **$0.0155** on gas for three relays, about half a cent each,
+  and its log held deal, buyer, transaction, block, price, excess and gas cost —
+  no key, no signature.
+
+And one failure, which reading the code had missed: with the price risen above the
+authorization, the contract reverted `PriceRoseBeyondAuthorization(750000)` in
+simulation exactly as designed, nothing was broadcast, the buyer's balance did not
+move — and the relayer answered **400 with viem's whole error text instead of
+409**. viem's revert error carries `data` already decoded; the relayer passed it to
+`decodeErrorResult` as if it were hex, which threw, and the raw error fell through.
+So no named contract error ever reached the status mapping, and the frontend's
+re-sign flow, which only runs on 409, could never have fired. A replay was refused
+the same way. Queued as Turn 4e.
+
+## Turn 4e — relayer error mapping
+
+Prompt: [`turn-04e-relayer-errors.md`](studio/prompts/turn-04e-relayer-errors.md)
 
 _queued, not yet run_
 

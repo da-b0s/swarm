@@ -121,7 +121,6 @@ export function CommitFlow({ dealId, clearingPrice, buyerCount, tiers, deadline,
       <GaslessCommitFlow
         dealId={dealId}
         clearingPrice={clearingPrice}
-        tiers={tiers}
         deadline={deadline}
         state={state}
         onCommitted={onCommitted}
