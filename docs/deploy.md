@@ -142,10 +142,26 @@ arc-forge test --remappings "@openzeppelin/=node_modules/@openzeppelin/" -vv
 Normalize before running:
 
 ```bash
-python -c "p='x.sh';b=open(p,'rb').read();open(p,'wb').write(b.replace(b'
+python -c "p='x.sh';b=open(p,'rb').read();open(p,'wb').write(b.replace(b'
+
 ',b'
 '))"
 ```
+
+**Never parse the deployed address out of command output.** On 22 October a
+deploy script grepped `arc-forge create --json` for the address under
+`set -o pipefail`; the field name did not match, the grep failed, and the script
+exited silently — *after* the factory had been broadcast. Run twice, that left two
+orphaned, unwired DealFactory contracts on testnet (nonces 24 and 25,
+`0x3B9a60e4…` and `0xA76e1910…`) and cost $0.87. The fix that held: compute the
+address before deploying with `arc-cast compute-address $OWNER --nonce $(arc-cast nonce $OWNER)`,
+deploy, then require bytecode at that exact address before going on, and stop at
+the first mismatch. On mainnet the same mistake would cost real money and leave
+contracts a reviewer can find.
+
+**Testnet gas is no longer cheap.** The same six transactions cost $0.072 on 20
+October and $1.69 on 22 October: testnet now sits at 25 gwei, the same as mainnet.
+Budget about $1.70 for a mainnet deploy and wiring, plus margin.
 
 ## Verify before recording anything
 

@@ -62,10 +62,12 @@ const CONTRACTS = {
     // Deployed and wired from a deployer wallet we control, then verified from
     // chain: bytecode at all three, all three owner wiring calls landed,
     // constructor links agree in both directions, USDC predeploy correct.
-    DealFactory: '0x5b646D21e0b4a21364b226edFCDc5E5F4e6E110f' as `0x${string}`,
-    DemandPool:  '0x2Eab29C0d1F9FF0B0ba9385324611BbC2670CfEB' as `0x${string}`,
-    Settler:     '0xB4dFC8b4Baa856eB9B6bB7087Ed72615452874C5' as `0x${string}`,
-    deployBlock: 68162131n,
+    // Redeployed 22 Oct 2026 for gasless commits (commitWithAuthorization); the
+    // previous set (0x5b646D21… / 0x2Eab29C0… / 0xB4dFC8b4…) is retired.
+    DealFactory: '0x97e7B6431Ad839580A06B1CC5717d68be27D2212' as `0x${string}`,
+    DemandPool:  '0xe7860112eF7fF7a375b33fA703D3B3A38CC7A70d' as `0x${string}`,
+    Settler:     '0x2deDA8Fa1101C42Bc6f36AEEd898A583366816E8' as `0x${string}`,
+    deployBlock: 68495162n,
     deployed: true,
   },
 } as const

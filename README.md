@@ -204,12 +204,12 @@ addresses are explicitly zero and the UI refuses to offer a commit against them.
 
 | Contract | Arc Mainnet (5042) | Arc Testnet (5042002) |
 |---|---|---|
-| `DealFactory` | _pending_ | [`0x5b646D21…6E110f`](https://explorer.testnet.arc.io/address/0x5b646D21e0b4a21364b226edFCDc5E5F4e6E110f) |
-| `DemandPool` | _pending_ | [`0x2Eab29C0…70CfEB`](https://explorer.testnet.arc.io/address/0x2Eab29C0d1F9FF0B0ba9385324611BbC2670CfEB) |
-| `Settler` | _pending_ | [`0xB4dFC8b4…2874C5`](https://explorer.testnet.arc.io/address/0xB4dFC8b4Baa856eB9B6bB7087Ed72615452874C5) |
+| `DealFactory` | _pending_ | [`0x97e7B643…7D2212`](https://explorer.testnet.arc.io/address/0x97e7B6431Ad839580A06B1CC5717d68be27D2212) |
+| `DemandPool` | _pending_ | [`0xe7860112…C7A70d`](https://explorer.testnet.arc.io/address/0xe7860112eF7fF7a375b33fA703D3B3A38CC7A70d) |
+| `Settler` | _pending_ | [`0x2deDA8Fa…6816E8`](https://explorer.testnet.arc.io/address/0x2deDA8Fa1101C42Bc6f36AEEd898A583366816E8) |
 | `CommitRelayer` | _pending_ | _pending_ |
 
-Testnet deployed at block 68,162,131 and wired. Every claim above is checked from
+Testnet redeployed at block 68,495,162 on 22 October for gasless commits, and wired. The first set (`0x5b646D21…`), which ran the lifecycle in [docs/testnet-lifecycle.md](docs/testnet-lifecycle.md), is retired. Every claim above is checked from
 chain rather than taken from a deploy log — `node tools/verify-deploy.mjs` confirms
 bytecode, all three owner wiring calls, the constructor links in both directions,
 the USDC predeploy address and that the factory is unpaused holding zero escrow.
