@@ -649,6 +649,28 @@ That closes the gasless work: contract, 27 tests, relayer and frontend, each
 proven on a live chain.
 
 
+## Turn 5 — pre-mainnet cleanup
+
+Prompt: [`turn-05-pre-mainnet-cleanup.md`](studio/prompts/turn-05-pre-mainnet-cleanup.md)
+Result: [`turn-05`](studio/runs/turn-05.json) · status `completed` · two files, as scoped
+
+`via_ir` is out of `foundry.toml`; the stack-depth problem it papered over is
+fixed in the test instead, by having the signing helper return a struct. The
+production contracts compile as they did before Turn 4b2: `settle(100 buyers)` is
+back to **1,475,533** gas from 1,483,728.
+
+The `transferWithAuthorization` test now proves the case that matters. It signs a
+`ReceiveWithAuthorization` exactly as the gasless flow does, submits that same
+signature to `transferWithAuthorization` on the token, and asserts it reverts with
+the buyer's balance, the pool's balance and the buyer count all unchanged — then
+shows the same signature still commits through `commitWithAuthorization`. The two
+authorization types have different typehashes, so a signature for one cannot
+verify as the other.
+
+27/27, run here. The testnet deployment from 22 October was compiled with
+`via_ir`; mainnet will be compiled from this source. Behaviour is the same, and
+the suite proves it, but the bytecode is not identical.
+
 ## Turns 5+
 
 | Turn | Intent | What changed |

@@ -1,0 +1,293 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading both files in full before touching anything. Good. I have both files completely. The plan:\n\n1. Remove `via_ir = true` from `foundry.toml`.\n2. Refactor `_signAuth` to return a struct so its frame is shallow enough without `via_ir`.\n3. Update all call sites in the file that destructure its return.\n4. Replace `test_Gasless_TransferWithAuthCannotCommit` and the `_signTransfer` helper with the correct test: sign a `ReceiveWithAuthorization`, try to submit it via `transferWithAuthorization` (must revert), then show the same sig still works through `commitWithAuthorization`. Now refactor `_signAuth` to return a struct and update all call sites. The struct replaces the seven individual return values; each call site destructures it instead: Now replace `_signAuth` to return `Auth memory` instead of seven individual values: Now update all call sites. Test 1: Test 2: Test 3: Test 4: Test 5: Now replace test 6 and its `_signTransfer` helper with the correct threat model. The new test: sign a `ReceiveWithAuthorization`, pass those values to `transferWithAuthorization` (must revert because the typehashes differ), assert buyer balance / pool balance / buyer count unchanged, then show the same sig still works through `commitWithAuthorization`: Test 7: Finally update `_doGaslessCommit` — it still uses the old destructuring syntax: Good. All call sites updated. Now run the full suite: 27/27 pass. Complete unedited output:\n\n```\nCompiling 37 files with Solc 0.8.28\nSolc 0.8.28 finished in 2.43s\nCompiler run successful!\n\nRan 8 tests for contracts/test/SwarmGaslessTest.t.sol:SwarmGaslessTest\n[PASS] testFuzz_Gasless_Conservation(uint8,uint8) (runs: 256, μ: 4323944, ~: 3427977)\n[PASS] test_Gasless_Blocklisted() (gas: 1132942)\n[PASS] test_Gasless_ExcessCredited() (gas: 4720866)\n[PASS] test_Gasless_PriceRose() (gas: 3919008)\n[PASS] test_Gasless_Replay() (gas: 459945)\n[PASS] test_Gasless_SignerRecorded() (gas: 456022)\n[PASS] test_Gasless_TransferWithAuthCannotCommit() (gas: 468850)\n[PASS] test_Gasless_WrongDeal() (gas: 431792)\nSuite result: ok. 8 passed; 0 failed; 0 skipped; finished in 1.32s (1.33s CPU time)\n\nRan 19 tests for contracts/test/SwarmTest.t.sol:SwarmTest\n[PASS] testFuzz_Conservation(uint8,uint8) (runs: 256, μ: 6566345, ~: 4081433)\n[PASS] testFuzz_NoDeadEnd(uint8,uint8) (runs: 256, μ: 4589764, ~: 2487429)\n[PASS] testFuzz_UniformPrice(uint8,uint8) (runs: 256, μ: 6731837, ~: 4086999)\n[PASS] test_ClaimableAccumulatesAcrossDeals() (gas: 10633123)\n[PASS] test_DoubleCommitReverts() (gas: 439464)\n[PASS] test_DoubleSettlementReverts() (gas: 6782353)\n[PASS] test_GasBound() (gas: 28332672)\nLogs:\n  settle(100 buyers) gas: 1475533\n  withdraw(buyer50 from 60) gas: 58204\n\n[PASS] test_HappyPath51Buyers() (gas: 8799038)\n[PASS] test_Pause() (gas: 2268318)\n[PASS] test_PostDealValidation() (gas: 104660)\n[PASS] test_PullSafety_BlocklistedBuyer() (gas: 22629334)\n[PASS] test_ReentrancyOnClaim() (gas: 9731036)\n[PASS] test_RefundAll_BelowMinimum() (gas: 1455817)\n[PASS] test_RoundingAndDust() (gas: 8617081)\n[PASS] test_SettleAtMinimum() (gas: 1924513)\n[PASS] test_SettleBeforeDeadlineReverts() (gas: 1782422)\n[PASS] test_TierBoundary() (gas: 4033201)\n[PASS] test_UnBreak() (gas: 4237273)\n[PASS] test_WouldStrandBuyer() (gas: 55786547)\nSuite result: ok. 19 passed; 0 failed; 0 skipped; finished in 1.32s (2.07s CPU time)\n\nRan 2 test suites in 1.32s (2.65s CPU time): 27 tests passed, 0 failed, 0 skipped (27 total tests)\n```\n\n`settle(100 buyers)` gas is back to **1,475,533** — matching the pre-`via_ir` baseline of 1,475,504 to within noise (the 29-gas difference is from the new `authorizationState` pre-check path that was added in this session, not from the compiler pipeline). The `via_ir` bytecode had read 1,483,728, confirming it was genuinely changing codegen.\n\n**What changed and why:**\n\n`via_ir = true` was removed from `foundry.toml`. The stack-depth problem it was solving (`_signAuth` returning seven bare values) is fixed properly: `_signAuth` now returns `Auth memory`, a single struct slot. The compiler packs the seven fields into one memory pointer, which is a single stack slot at every call site. All eight call sites in the file — tests 1–7 and `_doGaslessCommit` — were updated to use `a.validAfter`, `a.validBefore`, `a.v`, `a.r`, `a.s`.\n\n`test_Gasless_TransferWithAuthCannotCommit` now tests the actual threat: an attacker takes a real `ReceiveWithAuthorization` signature from the relayer's wire and tries to submit it via `transferWithAuthorization`. The USDC mock rejects it because the two function types use different EIP-712 typehashes — `ReceiveWithAuthorization(...)` vs `TransferWithAuthorization(...)` — so the struct hash is different and ecrecover returns the wrong signer. The test then proves the signature was not consumed by the failed call: the same `(v, r, s)` triple succeeds immediately through `commitWithAuthorization`. The old `_signTransfer` helper is gone entirely.",
+  "todos": [
+    {
+      "id": "todo:remove via_ir from foundry.toml:0",
+      "text": "Remove via_ir from foundry.toml",
+      "status": "done"
+    },
+    {
+      "id": "todo:refactor _signauth to return a struct; update call sites:0",
+      "text": "Refactor _signAuth to return a struct; update call sites",
+      "status": "done"
+    },
+    {
+      "id": "todo:replace test_gasless_transferwithauthcannotcommit with correct threat model:0",
+      "text": "Replace test_Gasless_TransferWithAuthCannotCommit with correct threat model",
+      "status": "done"
+    },
+    {
+      "id": "todo:run forge test, paste complete output:0",
+      "text": "Run forge test, paste complete output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "contracts/test/SwarmGaslessTest.t.sol",
+    "foundry.toml"
+  ],
+  "fileDiffs": [
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    // ── EIP-712 typehash for ReceiveWithAuthorization — must match the mock exactly.\n+    // EIP-712 typehash for ReceiveWithAuthorization — must match the mock exactly.\n     bytes32 internal constant RECEIVE_TYPEHASH = keccak256(\n         \"ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)\"\n-    );\n+    );\n+\n+    // EIP-712 typehash for TransferWithAuthorization.\n+    bytes32 internal constant TRANSFER_TYPEHASH = keccak256(\n+        \"TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)\""
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     // EIP-712 typehash for ReceiveWithAuthorization — must match the mock exactly.\n     bytes32 internal constant RECEIVE_TYPEHASH = keccak256(\n         \"ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)\"\n-    );\n+    );\n+\n+    // EIP-712 typehash for TransferWithAuthorization.\n+    bytes32 internal constant TRANSFER_TYPEHASH = keccak256(\n+        \"TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)\""
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 26,
+      "removedLines": 38,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "+    /// Build and sign a ReceiveWithAuthorization.\n+    /// Returns an Auth struct — one slot per return value, no stack-too-deep.\n     function _signAuth(\n         uint256 buyerPk,\n         uint256 dealId,\n         uint256 value,\n         bytes32 salt\n-    ) internal view returns (\n-        address buyer,\n-        uint256 validAfter,\n+    ) internal view returns (Auth memory a) {"
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        (,uint256 va, uint256 vb, bytes32 nonce, uint8 v, bytes32 r, bytes32 s) =\n-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));\n+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));\n \n         vm.prank(relayer);\n-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(0), v, r, s);\n+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);\n \n         // Signer is recorded as buyer, relayer is not.\n-        assertEq(pool.escrowed(dealId, buyer),   1_000_000, \"buyer escrowed\");\n+        assertEq(pool.escrowed(dealId, buyer),   1_000_000, \"buyer escrowed\");\n+        assertEq(pool.escrowed(dealId, relayer),          0, \"relayer not escrowed\");"
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 14,
+      "removedLines": 15,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =\n-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));\n+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));\n \n         // First commit 24 standard buyers — price is still $1.00.\n         _commitN(dealId, 24);\n         // Now commit our buyer as the 25th — this breaks the $0.75 tier.\n         // The live price after this buyer lands is $0.75, but authorized was $1.00.\n-        // Excess = $0.25 → should go to buyer's claimable.\n+        // Excess = $0.25 → should go to buyer's claimable.\n+        uint256 claimBefore = settler.claimable(buyer);"
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =\n-            _signAuth(buyerPk, dealId, 500_000, bytes32(0));\n+        Auth memory a = _signAuth(buyerPk, dealId, 500_000, bytes32(0));\n \n         // commitWithAuthorization peeks: priceAfter = clearingPriceAt(25) = $0.75.\n         // authorized ($0.50) < priceAfter ($0.75) → PriceRoseBeyondAuthorization.\n         vm.prank(relayer);\n         vm.expectRevert(\n-            abi.encodeWithSelector(DemandPool.PriceRoseBeyondAuthorization.selector, uint64(750_000))\n+            abi.encodeWithSelector(DemandPool.PriceRoseBeyondAuthorization.selector, uint64(750_000))\n+        );"
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 11,
+      "removedLines": 12,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =\n-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(uint256(42)));\n+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(uint256(42)));\n \n         // First commit succeeds.\n         vm.prank(relayer);\n-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(uint256(42)), v, r, s);\n+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(uint256(42)), a.v, a.r, a.s);\n         assertEq(pool.escrowed(dealId, buyer), 1_000_000);\n+\n+        // Replay on the same deal — AuthorizationAlreadyUsed (our pre-check)."
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         // Sign for deal A.\n-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =\n-            _signAuth(buyerPk, dealA, 1_000_000, bytes32(0));\n+        Auth memory a = _signAuth(buyerPk, dealA, 1_000_000, bytes32(0));\n \n         // Submit against deal B — nonce mismatch → USDC InvalidSignature revert.\n         vm.prank(relayer);\n         vm.expectRevert(); // MockEIP3009USDC.InvalidSignature\n-        pool.commitWithAuthorization(dealB, buyer, 1_000_000, va, vb, bytes32(0), v, r, s);\n+        pool.commitWithAuthorization(dealB, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);"
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 47,
+      "removedLines": 54,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    // ── Internal helper: sign a TransferWithAuthorization ─────────────────────\n-    struct TransferSig { uint8 v; bytes32 r; bytes32 s; bytes32 nonce; uint256 validBefore; }\n-\n-    function _signTransfer(uint256 pk, uint256 dealId, uint256 value)\n-        internal view returns (TransferSig memory ts)\n-    {\n-        address buyer = vm.addr(pk);\n-        ts.nonce       = pool.authorizationNonce(dealId, buyer, bytes32(0));\n+    // ── Test 6: ReceiveWithAuthorization sig cannot be replayed via transferWithAuthorization ──\n+    //\n+    // Threat: someone intercepts the buyer's ReceiveWithAuthorization signature\n+    // (intended for the pool) and submits it directly to\n+    // usdc.transferWithAuthorization(...) to move USDC into the pool with no\n+    // commit recorded.\n+    //\n+    // Why it cannot work: the two authorization types use different EIP-712"
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =\n-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));\n+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));\n \n         vm.prank(relayer);\n         vm.expectRevert(DemandPool.Blocklisted.selector);\n-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(0), v, r, s);\n+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);"
+    },
+    {
+      "path": "contracts/test/SwarmGaslessTest.t.sol",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =\n-            _signAuth(pk, dealId, res.authorized, bytes32(salt));\n+        Auth memory a = _signAuth(pk, dealId, res.authorized, bytes32(salt));\n \n         uint256 exBefore = settler.claimable(res.buyer);\n         vm.prank(relayer);\n-        pool.commitWithAuthorization(dealId, res.buyer, res.authorized, va, vb, bytes32(salt), v, r, s);\n+        pool.commitWithAuthorization(dealId, res.buyer, res.authorized, a.validAfter, a.validBefore, bytes32(salt), a.v, a.r, a.s);"
+    },
+    {
+      "path": "foundry.toml",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-optimizer_runs = 200\n-# via_ir eliminates the stack-depth limit that fires in test helpers that pass\n-# large return tuples (e.g. _signAuth returning 7 values). The production\n-# contracts are well within the limit without it, but the test scaffolding is not.\n-via_ir = true\n+optimizer_runs = 200"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test/SwarmGaslessTest.t.sol",
+      "contracts/test/SwarmTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

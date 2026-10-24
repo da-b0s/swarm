@@ -29,6 +29,22 @@ contract SwarmGaslessTest is Test {
         "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
 
+    // EIP-712 typehash for TransferWithAuthorization.
+    bytes32 internal constant TRANSFER_TYPEHASH = keccak256(
+        "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+
+    /// Packed return struct for _signAuth — avoids stack-too-deep without via_ir.
+    struct Auth {
+        address buyer;
+        uint256 validAfter;
+        uint256 validBefore;
+        bytes32 nonce;
+        uint8   v;
+        bytes32 r;
+        bytes32 s;
+    }
+
     // ── Contracts ─────────────────────────────────────────────────────────────
     DealFactory        internal factory;
     DemandPool         internal pool;
@@ -100,24 +116,19 @@ contract SwarmGaslessTest is Test {
      *
      * The nonce is the pool's authorizationNonce(dealId, buyer, salt).
      */
+    /// Build and sign a ReceiveWithAuthorization.
+    /// Returns an Auth struct — one slot per return value, no stack-too-deep.
     function _signAuth(
         uint256 buyerPk,
         uint256 dealId,
         uint256 value,
         bytes32 salt
-    ) internal view returns (
-        address buyer,
-        uint256 validAfter,
-        uint256 validBefore,
-        bytes32 nonce,
-        uint8 v, bytes32 r, bytes32 s
-    ) {
-        buyer       = vm.addr(buyerPk);
-        validAfter  = 0;
-        validBefore = block.timestamp + 10 minutes;
-        nonce       = pool.authorizationNonce(dealId, buyer, salt);
+    ) internal view returns (Auth memory a) {
+        a.buyer       = vm.addr(buyerPk);
+        a.validAfter  = 0;
+        a.validBefore = block.timestamp + 10 minutes;
+        a.nonce       = pool.authorizationNonce(dealId, a.buyer, salt);
 
-        // Read the live domain separator from the etched contract.
         bytes32 domSep = keccak256(abi.encode(
             keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
             keccak256(bytes("USDC")),
@@ -125,18 +136,11 @@ contract SwarmGaslessTest is Test {
             block.chainid,
             USDC_ADDR
         ));
-
         bytes32 structHash = keccak256(abi.encode(
             RECEIVE_TYPEHASH,
-            buyer,
-            address(pool),
-            value,
-            validAfter,
-            validBefore,
-            nonce
+            a.buyer, address(pool), value, a.validAfter, a.validBefore, a.nonce
         ));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domSep, structHash));
-        (v, r, s) = vm.sign(buyerPk, digest);
+        (a.v, a.r, a.s) = vm.sign(buyerPk, keccak256(abi.encodePacked("\x19\x01", domSep, structHash)));
     }
 
     // ── Test 1: commit recorded for signer, not relayer ───────────────────────
@@ -146,17 +150,15 @@ contract SwarmGaslessTest is Test {
         address buyer = vm.addr(buyerPk);
         usdc.mint(buyer, 2_000_000);
 
-        (,uint256 va, uint256 vb, bytes32 nonce, uint8 v, bytes32 r, bytes32 s) =
-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));
+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));
 
         vm.prank(relayer);
-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(0), v, r, s);
+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);
 
         // Signer is recorded as buyer, relayer is not.
         assertEq(pool.escrowed(dealId, buyer),   1_000_000, "buyer escrowed");
         assertEq(pool.escrowed(dealId, relayer),          0, "relayer not escrowed");
         assertEq(pool.getBuyerCount(dealId),              1,  "one buyer");
-        (nonce); // silence unused var
     }
 
     // ── Test 2: price falls between sign and land — excess credited ───────────
@@ -168,8 +170,7 @@ contract SwarmGaslessTest is Test {
         address buyer = vm.addr(buyerPk);
         usdc.mint(buyer, 2_000_000);
 
-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =
-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));
+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));
 
         // First commit 24 standard buyers — price is still $1.00.
         _commitN(dealId, 24);
@@ -182,7 +183,7 @@ contract SwarmGaslessTest is Test {
         emit DemandPool.ExcessCredited(dealId, buyer, 250_000);
 
         vm.prank(relayer);
-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(0), v, r, s);
+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);
 
         // Escrowed is the live price ($0.75), not $1.00.
         assertEq(pool.escrowed(dealId, buyer), 750_000, "escrowed live price");
@@ -225,8 +226,7 @@ contract SwarmGaslessTest is Test {
         address buyer = vm.addr(buyerPk);
         usdc.mint(buyer, 2_000_000);
 
-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =
-            _signAuth(buyerPk, dealId, 500_000, bytes32(0));
+        Auth memory a = _signAuth(buyerPk, dealId, 500_000, bytes32(0));
 
         // commitWithAuthorization peeks: priceAfter = clearingPriceAt(25) = $0.75.
         // authorized ($0.50) < priceAfter ($0.75) → PriceRoseBeyondAuthorization.
@@ -234,7 +234,7 @@ contract SwarmGaslessTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(DemandPool.PriceRoseBeyondAuthorization.selector, uint64(750_000))
         );
-        pool.commitWithAuthorization(dealId, buyer, 500_000, va, vb, bytes32(0), v, r, s);
+        pool.commitWithAuthorization(dealId, buyer, 500_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);
 
         // No state change: buyer not recorded, count still 24.
         assertEq(pool.escrowed(dealId, buyer), 0, "no escrow after revert");
@@ -248,18 +248,17 @@ contract SwarmGaslessTest is Test {
         address buyer = vm.addr(buyerPk);
         usdc.mint(buyer, 4_000_000);
 
-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =
-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(uint256(42)));
+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(uint256(42)));
 
         // First commit succeeds.
         vm.prank(relayer);
-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(uint256(42)), v, r, s);
+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(uint256(42)), a.v, a.r, a.s);
         assertEq(pool.escrowed(dealId, buyer), 1_000_000);
 
         // Replay on the same deal — AuthorizationAlreadyUsed (our pre-check).
         vm.prank(relayer);
         vm.expectRevert(DemandPool.AuthorizationAlreadyUsed.selector);
-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(uint256(42)), v, r, s);
+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(uint256(42)), a.v, a.r, a.s);
     }
 
     // ── Test 5: signature for deal A cannot commit to deal B ──────────────────
@@ -272,71 +271,63 @@ contract SwarmGaslessTest is Test {
         usdc.mint(buyer, 2_000_000);
 
         // Sign for deal A.
-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =
-            _signAuth(buyerPk, dealA, 1_000_000, bytes32(0));
+        Auth memory a = _signAuth(buyerPk, dealA, 1_000_000, bytes32(0));
 
         // Submit against deal B — nonce mismatch → USDC InvalidSignature revert.
         vm.prank(relayer);
         vm.expectRevert(); // MockEIP3009USDC.InvalidSignature
-        pool.commitWithAuthorization(dealB, buyer, 1_000_000, va, vb, bytes32(0), v, r, s);
+        pool.commitWithAuthorization(dealB, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);
 
         // Deal B is unchanged.
         assertEq(pool.getBuyerCount(dealB), 0, "deal B unchanged");
     }
 
-    // ── Internal helper: sign a TransferWithAuthorization ─────────────────────
-    struct TransferSig { uint8 v; bytes32 r; bytes32 s; bytes32 nonce; uint256 validBefore; }
-
-    function _signTransfer(uint256 pk, uint256 dealId, uint256 value)
-        internal view returns (TransferSig memory ts)
-    {
-        address buyer = vm.addr(pk);
-        ts.nonce       = pool.authorizationNonce(dealId, buyer, bytes32(0));
-        ts.validBefore = block.timestamp + 10 minutes;
-        bytes32 domSep = keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256(bytes("USDC")),
-            keccak256(bytes("2")),
-            block.chainid,
-            USDC_ADDR
-        ));
-        bytes32 typehash = keccak256(
-            "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domSep,
-            keccak256(abi.encode(typehash, buyer, address(pool), value, uint256(0), ts.validBefore, ts.nonce))
-        ));
-        (ts.v, ts.r, ts.s) = vm.sign(pk, digest);
-    }
-
-    // ── Test 6: transferWithAuthorization cannot create a commit ──────────────
+    // ── Test 6: ReceiveWithAuthorization sig cannot be replayed via transferWithAuthorization ──
+    //
+    // Threat: someone intercepts the buyer's ReceiveWithAuthorization signature
+    // (intended for the pool) and submits it directly to
+    // usdc.transferWithAuthorization(...) to move USDC into the pool with no
+    // commit recorded.
+    //
+    // Why it cannot work: the two authorization types use different EIP-712
+    // typehashes. A signature over ReceiveWithAuthorization covers a different
+    // struct hash than TransferWithAuthorization, so the token's ecrecover
+    // produces the wrong signer and the call reverts InvalidSignature.
+    //
+    // We then show the same (v, r, s) triple still works correctly through
+    // commitWithAuthorization — the signature was never consumed.
     function test_Gasless_TransferWithAuthCannotCommit() public {
-        uint256 dealId = _postDeal();
+        uint256 dealId  = _postDeal();
         uint256 buyerPk = 0xBEEF;
         address buyer   = vm.addr(buyerPk);
         usdc.mint(buyer, 2_000_000);
 
-        TransferSig memory ts = _signTransfer(buyerPk, dealId, 1_000_000);
+        // Sign a ReceiveWithAuthorization exactly as the gasless flow does.
+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));
 
-        // Call transferWithAuthorization directly on the USDC contract.
-        // This sends USDC to pool but does NOT record a commit.
+        uint256 buyerBalBefore = usdc.balanceOf(buyer);
+        uint256 poolBalBefore  = usdc.balanceOf(address(pool));
+
+        // Attempt to replay the ReceiveWithAuthorization sig via
+        // transferWithAuthorization. The typehashes differ, so ecrecover returns
+        // the wrong signer and the mock reverts InvalidSignature.
+        vm.expectRevert(); // InvalidSignature
         usdc.transferWithAuthorization(
             buyer, address(pool), 1_000_000,
-            0, ts.validBefore, ts.nonce, ts.v, ts.r, ts.s
+            a.validAfter, a.validBefore, a.nonce, a.v, a.r, a.s
         );
 
-        // Pool received the USDC but buyer is NOT committed.
-        assertEq(pool.escrowed(dealId, buyer), 0, "no escrow from transferWithAuth");
-        assertEq(pool.getBuyerCount(dealId),   0, "no commit recorded");
+        // Buyer balance, pool balance and buyer count are all unchanged.
+        assertEq(usdc.balanceOf(buyer),        buyerBalBefore, "buyer balance unchanged");
+        assertEq(usdc.balanceOf(address(pool)), poolBalBefore,  "pool balance unchanged");
+        assertEq(pool.getBuyerCount(dealId),   0,              "no commit recorded");
 
-        // The nonce is now spent. A subsequent commitWithAuthorization using the
-        // same nonce must revert AuthorizationAlreadyUsed, even with a valid
-        // ReceiveWithAuthorization signature (which uses the same nonce derivation).
-        (,uint256 va, uint256 vb,, uint8 v2, bytes32 r2, bytes32 s2) =
-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));
+        // The same (v, r, s) triple still works through commitWithAuthorization
+        // — the authorization was not consumed by the failed transferWithAuth call.
         vm.prank(relayer);
-        vm.expectRevert(DemandPool.AuthorizationAlreadyUsed.selector);
-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(0), v2, r2, s2);
+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);
+        assertEq(pool.escrowed(dealId, buyer), 1_000_000, "commit succeeded after failed transfer attempt");
+        assertEq(pool.getBuyerCount(dealId),   1,         "buyer recorded");
     }
 
     // ── Test 7: blocklisted buyer reverts Blocklisted ─────────────────────────
@@ -355,12 +346,11 @@ contract SwarmGaslessTest is Test {
         // Blocklist the buyer.
         bUsdc.setBlacklisted(buyer, true);
 
-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =
-            _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));
+        Auth memory a = _signAuth(buyerPk, dealId, 1_000_000, bytes32(0));
 
         vm.prank(relayer);
         vm.expectRevert(DemandPool.Blocklisted.selector);
-        pool.commitWithAuthorization(dealId, buyer, 1_000_000, va, vb, bytes32(0), v, r, s);
+        pool.commitWithAuthorization(dealId, buyer, 1_000_000, a.validAfter, a.validBefore, bytes32(0), a.v, a.r, a.s);
 
         assertEq(pool.escrowed(dealId, buyer), 0, "no escrow");
     }
@@ -381,12 +371,11 @@ contract SwarmGaslessTest is Test {
         res.authorized = cp + 100_000;
         usdc.mint(res.buyer, res.authorized);
 
-        (,uint256 va, uint256 vb,, uint8 v, bytes32 r, bytes32 s) =
-            _signAuth(pk, dealId, res.authorized, bytes32(salt));
+        Auth memory a = _signAuth(pk, dealId, res.authorized, bytes32(salt));
 
         uint256 exBefore = settler.claimable(res.buyer);
         vm.prank(relayer);
-        pool.commitWithAuthorization(dealId, res.buyer, res.authorized, va, vb, bytes32(salt), v, r, s);
+        pool.commitWithAuthorization(dealId, res.buyer, res.authorized, a.validAfter, a.validBefore, bytes32(salt), a.v, a.r, a.s);
 
         uint256 actualEscrow = uint256(pool.escrowed(dealId, res.buyer));
         res.excess = res.authorized - actualEscrow;
