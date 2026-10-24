@@ -1,202 +1,106 @@
 #!/usr/bin/env node
-// End-to-end test of gasless commits on TESTNET, through the real relayer.
+// Swarm v2 gasless orders on TESTNET, through the real relayer, checked from chain.
+// Needs the relayer running locally against the pool in ../.env (see docs/hosting.md).
 //
-// Needs the relayer running locally against the current testnet pool:
-//   cd relayer && RELAYER_KEY=... RPC_URL=https://rpc.testnet.arc.io CHAIN_ID=5042002 \
-//     POOL_ADDRESS=0xe7860112eF7fF7a375b33fA703D3B3A38CC7A70d PORT=8787 \
-//     node --experimental-strip-types server.ts
-//
-// Curve: $1.00 at 1 buyer, $0.75 at 2, $0.50 at 3. Each scenario is forced by
-// the order of events, not left to timing:
-//
-//   A  plain gasless commit: the buyer's balance falls by exactly the price,
-//      which is the proof they paid no gas.
-//   B  price falls after signing: buyer 2 signs at $1.00, buyer 3 commits
-//      normally, buyer 2 lands at $0.50 and $0.50 is credited back.
-//      Replay of the same request is refused.
-//   C  price rises after signing: buyer 4 signs at $0.50, two withdrawals push
-//      the price to $0.75, the relayer answers 409 with $0.75 before
-//      broadcasting, buyer 4's balance does not move; buyer 4 re-signs and lands.
-//   Then settle, everyone claims, the pool ends at $0.
-//
-// Buyer keys are the throwaway testnet wallets in ../secrets/testnet-buyers.json.
+// Curve: $0.30/unit from 1 unit, $0.20 from 4, $0.10 from 8; stock 20.
+//   A  b1 orders 2 gaslessly at $0.30: balance falls by exactly $0.60, no gas paid
+//   B  b2 signs 2 at $0.20 (quoted at 4 units); b3 orders 4 normally first (6 units);
+//      b2 lands at 8 units: $0.10 x 2 escrowed, $0.20 credited back. Replay refused.
+//   C  b4 signs 1 at $0.10 (quoted at 9 units); submitting it as 2 units is refused
+//   D  b2 withdraws (8 -> 6 units, $0.20); b4's $0.10 order would land at $0.20:
+//      409 with the new total, balance unchanged; b4 re-signs at $0.20 and lands
+//   Settle at $0.20 on 7 units, everyone claims, the contracts end empty.
 
 import {
-  createPublicClient, createWalletClient, http, defineChain, parseUnits, formatUnits,
-  decodeEventLog, toHex, BaseError, ContractFunctionRevertedError,
-} from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+  POOL, SETTLER, USDC, POOL_ABI, SETTLER_ABI, ERC20_ABI,
+  usd, fmt, supplier, buyers, usdcOf, makeRecorder, events, ensurePasses,
+  postPassDeal, waitForDeadline, signOrder, claimAll, checkEmpty, pub,
+} from './lib-v2.mjs';
 
-const chain = defineChain({
-  id: 5042002, name: 'Arc Testnet',
-  nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
-  rpcUrls: { default: { http: ['https://rpc.testnet.arc.io'] } },
-});
-const EXPLORER = 'https://explorer.testnet.arc.io';
 const RELAYER_URL = process.env.RELAYER_URL ?? 'http://localhost:8787';
-const USDC = '0x3600000000000000000000000000000000000000';
-// Addresses come from ../.env, which verify-deploy.mjs output is recorded into,
-// so a redeploy needs no edit here. Testnet only.
-const ENV = Object.fromEntries(readFileSync(new URL('../.env', import.meta.url), 'utf8')
-  .split(/\r?\n/).filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]));
-if (ENV.ARC_NETWORK !== 'testnet') throw new Error(`refusing: .env ARC_NETWORK is ${ENV.ARC_NETWORK}, not testnet`);
-const FACTORY = ENV.DEAL_FACTORY;
-const POOL = ENV.DEMAND_POOL;
-const SETTLER = ENV.SETTLER;
-for (const [k, v] of Object.entries({ FACTORY, POOL, SETTLER })) if (!/^0x[0-9a-fA-F]{40}$/.test(v ?? '')) throw new Error(`${k} missing from .env`);
-
-const abi = (n) => JSON.parse(readFileSync(new URL(`../onchain/contracts/out/${n}.sol/${n}.json`, import.meta.url), 'utf8')).abi;
-const FACTORY_ABI = abi('DealFactory'), POOL_ABI = abi('DemandPool'), SETTLER_ABI = abi('Settler');
-const ERC20_ABI = [
-  { name: 'transfer', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ type: 'bool' }] },
-  { name: 'approve', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ type: 'bool' }] },
-  { name: 'balanceOf', type: 'function', stateMutability: 'view', inputs: [{ name: 'a', type: 'address' }], outputs: [{ type: 'uint256' }] },
-];
-const usd = (n) => parseUnits(String(n), 6);
-const fmt = (v) => `$${formatUnits(BigInt(v), 6)}`;
-
-const envKey = (name) => readFileSync(new URL('../.env', import.meta.url), 'utf8')
-  .split(/\r?\n/).find((l) => l.startsWith(name + '='))?.slice(name.length + 1).trim();
-const supplier = privateKeyToAccount(envKey('DEPLOYER_KEY'));
-const buyers = JSON.parse(readFileSync(new URL('../secrets/testnet-buyers.json', import.meta.url), 'utf8')).map((k) => privateKeyToAccount(k));
+const rec = makeRecorder('gasless-v2-run');
 const [b1, b2, b3, b4] = buyers;
+const relay = async (body) => { const r = await fetch(`${RELAYER_URL}/commit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
 
-const pub = createPublicClient({ chain, transport: http() });
-const wallet = (account) => createWalletClient({ account, chain, transport: http() });
-const read = (address, a, functionName, args = []) => pub.readContract({ address, abi: a, functionName, args });
-const bal = (a) => read(USDC, ERC20_ABI, 'balanceOf', [a.address]);
-const claimable = (a) => read(SETTLER, SETTLER_ABI, 'claimable', [a.address]);
-
-const record = { startedAt: new Date().toISOString(), steps: [] };
-let failures = 0;
-function check(label, ok, detail = '') {
-  console.log(`${ok ? 'pass' : 'FAIL'}  ${label}${detail ? '  — ' + detail : ''}`);
-  if (!ok) failures++;
-  record.steps.push({ check: label, ok, detail });
-}
-async function send(label, account, params) {
-  const hash = await wallet(account).writeContract({ ...params, account });
-  const r = await pub.waitForTransactionReceipt({ hash });
-  console.log(`${r.status === 'success' ? 'tx  ' : 'FAIL'}  ${label.padEnd(40)} ${EXPLORER}/tx/${hash}`);
-  record.steps.push({ tx: label, hash, status: r.status });
-  if (r.status !== 'success') throw new Error(`${label} reverted`);
-  return r;
-}
-
-// Sign a ReceiveWithAuthorization exactly as the frontend does.
-async function signCommit(buyer, dealId, amount) {
-  const salt = toHex(randomBytes(32));
-  const nonce = await read(POOL, POOL_ABI, 'authorizationNonce', [dealId, buyer.address, salt]);
-  const validBefore = BigInt(Number((await pub.getBlock()).timestamp) + 600);
-  const signature = await buyer.signTypedData({
-    domain: { name: 'USDC', version: '2', chainId: 5042002, verifyingContract: USDC },
-    types: { ReceiveWithAuthorization: [
-      { name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' },
-      { name: 'validAfter', type: 'uint256' }, { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' },
-    ] },
-    primaryType: 'ReceiveWithAuthorization',
-    message: { from: buyer.address, to: POOL, value: amount, validAfter: 0n, validBefore, nonce },
-  });
-  return { dealId: dealId.toString(), buyer: buyer.address, authorizedAmount: amount.toString(), validAfter: '0', validBefore: validBefore.toString(), salt, signature };
-}
-async function relay(body) {
-  const r = await fetch(`${RELAYER_URL}/commit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return { status: r.status, body: await r.json() };
-}
-
-// ── preflight ────────────────────────────────────────────────────────────────────
 const health = await (await fetch(`${RELAYER_URL}/health`)).json();
-check('relayer is on testnet and pointed at the current pool', health.chainId === 5042002 && health.poolAddress.toLowerCase() === POOL.toLowerCase(), `${health.chainId} ${health.poolAddress}`);
-check('/health does not expose a key', !JSON.stringify(health).match(/[0-9a-f]{64}/i));
-const relayerStart = BigInt(parseUnits(String(health.usdcBalance), 6));
+rec.check('relayer is on testnet and pointed at the current pool', health.chainId === 5042002 && health.poolAddress.toLowerCase() === POOL.toLowerCase(), `${health.chainId} ${health.poolAddress}`);
+rec.check('/health does not expose a key', !JSON.stringify(health).match(/[0-9a-f]{64}/i));
+if ((await pub.getChainId()) !== 5042002) throw new Error('not testnet');
 
 for (const [i, b] of [b1, b2, b3, b4].entries()) {
-  const have = await bal(b);
-  if (have < usd(2)) await send(`top up buyer ${i + 1}`, supplier, { address: USDC, abi: ERC20_ABI, functionName: 'transfer', args: [b.address, usd(2) - have] });
+  const have = await usdcOf(b);
+  if (have < usd(2)) await rec.send(`top up buyer ${i + 1}`, supplier, { address: USDC, abi: ERC20_ABI, functionName: 'transfer', args: [b.address, usd(2) - have] });
 }
-await send('buyer 3 approves the new pool', b3, { address: USDC, abi: ERC20_ABI, functionName: 'approve', args: [POOL, usd(5)] });
+await rec.send('buyer 3 approves the pool', b3, { address: USDC, abi: ERC20_ABI, functionName: 'approve', args: [POOL, usd(5)] });
+await ensurePasses(rec, 20);
+const { dealId, deadline } = await postPassDeal(rec, 'gasless deal', { tiers: [[1, 0.30], [4, 0.20], [8, 0.10]], minUnits: 1, maxUnits: 20, title: 'Gasless test', description: 'Orders signed once and relayed.' });
+console.log(`\ndeal #${dealId}\n`);
 
-const deadline = BigInt(Number((await pub.getBlock()).timestamp) + 10 * 60);
-const posted = await send('post deal ($1.00/1, $0.75/2, $0.50/3)', supplier, {
-  address: FACTORY, abi: FACTORY_ABI, functionName: 'postDeal',
-  args: [[{ minBuyers: 1, pricePerUnit: usd(1) }, { minBuyers: 2, pricePerUnit: usd(0.75) }, { minBuyers: 3, pricePerUnit: usd(0.5) }], 1, deadline, 10],
-});
-const dealId = posted.logs.map((l) => { try { return decodeEventLog({ abi: FACTORY_ABI, data: l.data, topics: l.topics }); } catch { return null; } })
-  .find((e) => e?.eventName === 'DealPosted').args.dealId;
-console.log(`\ndeal #${dealId} on the new pool, deadline ${new Date(Number(deadline) * 1000).toISOString()}\n`);
-record.dealId = dealId;
+// ── A ────────────────────────────────────────────────────────────────────────────
+console.log('A  plain gasless order');
+let before = await usdcOf(b1);
+const a = await relay(await signOrder(b1, dealId, 2, usd(0.60)));
+rec.check('relayer accepted it', a.status === 200, `${a.status} ${a.body.txHash ?? JSON.stringify(a.body)}`);
+rec.check('relayer reports 2 units at $0.30, $0.60 escrowed, nothing back',
+  a.body.units === 2 && a.body.paidPerUnit === usd(0.30).toString() && a.body.escrow === usd(0.60).toString() && a.body.excessCredited === '0',
+  `${a.body.units} units, ${fmt(a.body.paidPerUnit ?? 0)}/unit, ${fmt(a.body.escrow ?? 0)}`);
+let fell = before - (await usdcOf(b1));
+rec.check('buyer 1 balance fell by exactly $0.60 — no gas paid', fell === usd(0.60), fmt(fell));
 
-// ── A: plain gasless commit ──────────────────────────────────────────────────────
-console.log('A  plain gasless commit');
-let before = await bal(b1);
-const a = await relay(await signCommit(b1, dealId, usd(1)));
-check('relayer accepted it', a.status === 200, `${a.status} ${a.body.txHash ? EXPLORER + '/tx/' + a.body.txHash : JSON.stringify(a.body)}`);
-check('buyer 1 escrowed $1.00 with nothing credited back', a.body.pricePaid === usd(1).toString() && a.body.excessCredited === '0', `paid ${fmt(a.body.pricePaid ?? 0)}, excess ${fmt(a.body.excessCredited ?? 0)}`);
-let delta = before - (await bal(b1));
-check('buyer 1 balance fell by exactly $1.00 — no gas paid by the buyer', delta === usd(1), `fell by ${fmt(delta)}`);
-record.relayGasA = a.body.gasUsdcCost;
-
-// ── B: price falls after signing ─────────────────────────────────────────────────
+// ── B ────────────────────────────────────────────────────────────────────────────
 console.log('\nB  price falls between signing and landing');
-const sigB = await signCommit(b2, dealId, usd(1)); // signed at $1.00 (1 buyer in)
-await send('buyer 3 commits normally first', b3, { address: POOL, abi: POOL_ABI, functionName: 'commit', args: [dealId] }); // 2 buyers: $0.75
-before = await bal(b2);
-const claimB = await claimable(b2);
-const bRes = await relay(sigB); // lands as buyer 3: $0.50
-check('relayer accepted it', bRes.status === 200, `${bRes.status} ${bRes.body.txHash ? EXPLORER + '/tx/' + bRes.body.txHash : JSON.stringify(bRes.body)}`);
-check('buyer 2 escrowed the live $0.50, not the $1.00 signed', bRes.body.pricePaid === usd(0.5).toString(), fmt(bRes.body.pricePaid ?? 0));
-check('$0.50 excess reported by the relayer', bRes.body.excessCredited === usd(0.5).toString(), fmt(bRes.body.excessCredited ?? 0));
-check('$0.50 is in buyer 2\'s claimable balance', (await claimable(b2)) - claimB === usd(0.5));
-delta = before - (await bal(b2));
-check('buyer 2 balance fell by exactly the $1.00 signed', delta === usd(1), `fell by ${fmt(delta)}`);
-
+const sigB = await signOrder(b2, dealId, 2, usd(0.40));
+await rec.send('buyer 3 orders 4 normally first', b3, { address: POOL, abi: POOL_ABI, functionName: 'commit', args: [dealId, 4] });
+before = await usdcOf(b2);
+const b = await relay(sigB);
+rec.check('relayer accepted it', b.status === 200, `${b.status} ${b.body.txHash ?? JSON.stringify(b.body)}`);
+rec.check('buyer 2 escrowed the live $0.10 x 2, with $0.20 credited back',
+  b.body.escrow === usd(0.20).toString() && b.body.excessCredited === usd(0.20).toString(),
+  `escrow ${fmt(b.body.escrow ?? 0)}, excess ${fmt(b.body.excessCredited ?? 0)}`);
+fell = before - (await usdcOf(b2));
+rec.check('buyer 2 balance fell by exactly the $0.40 signed', fell === usd(0.40), fmt(fell));
 const replay = await relay(sigB);
-check('replaying the same authorization is refused with its name only', replay.status === 400 && replay.body.error === 'AuthorizationAlreadyUsed' && Object.keys(replay.body).length === 1, `${replay.status} ${JSON.stringify(replay.body).slice(0, 90)}`);
+rec.check('replay refused with its name only', replay.status === 400 && replay.body.error === 'AuthorizationAlreadyUsed' && Object.keys(replay.body).length === 1, `${replay.status} ${JSON.stringify(replay.body)}`);
 
-// ── C: price rises after signing ─────────────────────────────────────────────────
-console.log('\nC  price rises between signing and landing');
-const sigC = await signCommit(b4, dealId, usd(0.5)); // signed at $0.50 (3 buyers in)
-await send('buyer 2 withdraws', b2, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId] }); // 2 buyers: $0.75
-await send('buyer 3 withdraws', b3, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId] }); // 1 buyer: $1.00
-before = await bal(b4);
-const c409 = await relay(sigC); // would land as buyer 2: $0.75 > $0.50
-check('relayer answers 409 with the new price', c409.status === 409 && c409.body.requiredPrice === usd(0.75).toString(), `${c409.status} ${JSON.stringify(c409.body)}`);
-check('the 409 carries no viem text or signature', !/viem|0x[0-9a-f]{64}/i.test(JSON.stringify(c409.body)));
-check('buyer 4 balance did not move', (await bal(b4)) === before);
+// ── C ────────────────────────────────────────────────────────────────────────────
+console.log('\nC  the quantity is bound to the signature');
+// Signed for 1 unit at $0.20 — enough to pay for 2 units at $0.10 — so the price
+// check passes and only the quantity bound into the nonce can reject the swap.
+const sigBind = await signOrder(b4, dealId, 1, usd(0.20));
+before = await usdcOf(b4);
+const swapped = await relay({ ...sigBind, units: 2 });
+rec.check('the same signature sent as 2 units is refused', swapped.status !== 200, `${swapped.status} ${JSON.stringify(swapped.body)}`);
+rec.check('the refusal carries no viem text or signature', !/viem|0x[0-9a-f]{64}/i.test(JSON.stringify(swapped.body)));
+rec.check('buyer 4 balance did not move', (await usdcOf(b4)) === before);
 
-// Sent with validAfter as the number 0, not the string "0": a client doing that
-// was once rejected as "Missing field".
-const cRes = await relay({ ...(await signCommit(b4, dealId, usd(0.75))), validAfter: 0 });
-check('re-signed at $0.75, accepted', cRes.status === 200 && cRes.body.pricePaid === usd(0.75).toString(), `${cRes.status} ${fmt(cRes.body.pricePaid ?? 0)}`);
-delta = before - (await bal(b4));
-check('buyer 4 balance fell by exactly $0.75', delta === usd(0.75), `fell by ${fmt(delta)}`);
+// ── D ────────────────────────────────────────────────────────────────────────────
+console.log('\nD  price rises between signing and landing');
+const sigC = await signOrder(b4, dealId, 1, usd(0.10));   // quoted at 8+1 = 9 units: $0.10
+await rec.send('buyer 2 withdraws', b2, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId] });
+const d409 = await relay(sigC);                             // would land at 7 units: $0.20
+rec.check('relayer answers 409 with the new total, $0.20', d409.status === 409 && d409.body.requiredTotal === usd(0.20).toString(), `${d409.status} ${JSON.stringify(d409.body)}`);
+rec.check('the 409 carries no viem text or signature', !/viem|0x[0-9a-f]{64}/i.test(JSON.stringify(d409.body)));
+rec.check('buyer 4 balance did not move', (await usdcOf(b4)) === before);
+const d = await relay(await signOrder(b4, dealId, 1, usd(0.20)));
+rec.check('re-signed at $0.20, accepted', d.status === 200 && d.body.escrow === usd(0.20).toString(), `${d.status} ${fmt(d.body.escrow ?? 0)}`);
+fell = before - (await usdcOf(b4));
+rec.check('buyer 4 balance fell by exactly $0.20', fell === usd(0.20), fmt(fell));
 
-// ── settle, claim, conservation ──────────────────────────────────────────────────
-process.stdout.write('\nwaiting for the deadline (chain time)');
-while (Number((await pub.getBlock()).timestamp) < Number(deadline)) { process.stdout.write('.'); await new Promise((r) => setTimeout(r, 15_000)); }
-console.log(' reached');
+// ── settle and claim ─────────────────────────────────────────────────────────────
+// In: b1 2 @ $0.30, b3 4 @ $0.20, b4 1 @ $0.20 = 7 units, clears at $0.20.
+await waitForDeadline(deadline);
+const s = await rec.send('settle', supplier, { address: SETTLER, abi: SETTLER_ABI, functionName: 'settle', args: [dealId] });
+const sev = events(s, SETTLER_ABI).find((e) => e.eventName === 'Settled');
+rec.check('clears at $0.20 on 7 units', sev.args.clearingPrice === usd(0.20) && Number(sev.args.totalUnits) === 7, `${fmt(sev.args.clearingPrice)}, ${sev.args.totalUnits} units`);
+rec.check('conservation: $1.60 in = $1.40 supplier + $0.20 refunds', sev.args.totalRefunds === usd(0.20) && usd(1.60) === usd(0.20) * 7n + sev.args.totalRefunds, `refunds ${fmt(sev.args.totalRefunds)}`);
+console.log('');
+await claimAll(rec, 'supplier', supplier, usd(1.40), 13);
+await claimAll(rec, 'buyer 1', b1, usd(0.20), 2);
+await claimAll(rec, 'buyer 2', b2, usd(0.40), 0);
+await claimAll(rec, 'buyer 3', b3, 0n, 4);
+await claimAll(rec, 'buyer 4', b4, 0n, 1);
+await checkEmpty(rec);
 
-const s = await send('settle', supplier, { address: SETTLER, abi: SETTLER_ABI, functionName: 'settle', args: [dealId] });
-const ev = s.logs.map((l) => { try { return decodeEventLog({ abi: SETTLER_ABI, data: l.data, topics: l.topics }); } catch { return null; } }).find((e) => e?.eventName === 'Settled');
-// Remaining: buyer 1 ($1.00), buyer 4 ($0.75). Two buyers clear at $0.75.
-check('clears at $0.75 with 2 buyers', ev.args.clearingPrice === usd(0.75) && ev.args.buyerCount === 2, `${fmt(ev.args.clearingPrice)}, ${ev.args.buyerCount}`);
-const commitsIn = usd(1) + usd(0.75);
-check('conservation: commits in == supplier + refunds', commitsIn === usd(0.75) * 2n + ev.args.totalRefunds, `${fmt(commitsIn)} == ${fmt(usd(0.75) * 2n)} + ${fmt(ev.args.totalRefunds)}`);
-
-for (const [label, acct, owed] of [['supplier', supplier, usd(1.5)], ['buyer 1', b1, usd(0.25)], ['buyer 2', b2, usd(1)], ['buyer 3', b3, usd(0.75)]]) {
-  const c = await claimable(acct);
-  check(`${label} is owed ${fmt(owed)}`, c === owed, fmt(c));
-  if (c > 0n) await send(`${label} claims`, acct, { address: SETTLER, abi: SETTLER_ABI, functionName: 'claim' });
-}
-const poolLeft = await bal({ address: POOL });
-check('pool holds nothing once everyone has claimed', poolLeft === 0n, fmt(poolLeft));
-
-const relayerEnd = BigInt(parseUnits(String((await (await fetch(`${RELAYER_URL}/health`)).json()).usdcBalance), 6));
-console.log(`\nrelayer spent ${fmt(relayerStart - relayerEnd)} on gas for 3 relayed commits`);
-record.relayerSpent = (relayerStart - relayerEnd).toString();
-record.failures = failures;
-writeFileSync(new URL('../secrets/gasless-run.json', import.meta.url), JSON.stringify(record, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2));
-console.log(failures === 0 ? '\ngasless flow verified from chain\n' : `\n${failures} check(s) failed\n`);
-process.exit(failures === 0 ? 0 : 1);
+const end = await (await fetch(`${RELAYER_URL}/health`)).json();
+console.log(`\nrelayer spent ${fmt(usd(health.usdcBalance) - usd(end.usdcBalance))} on gas for 3 relayed orders`);
+rec.done();

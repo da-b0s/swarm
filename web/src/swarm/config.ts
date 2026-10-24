@@ -63,14 +63,14 @@ const CONTRACTS = {
     // Deployed and wired from a deployer wallet we control, then verified from
     // chain: bytecode at all three, all three owner wiring calls landed,
     // constructor links agree in both directions, USDC predeploy correct.
-    // Redeployed 24 Oct 2026 from the final source (no via_ir): byte-identical,
-    // apart from immutables and metadata, to what mainnet will be deployed from.
-    // Earlier sets (0x5b646D21…, 0x97e7B643…) are retired.
-    DealFactory: '0xAd305D088FCc2BD0482C7A457F6d3E1f7fEb98cb' as `0x${string}`,
-    DemandPool:  '0xc9f1D52E835Fa42d2BB271167f7B1855dDAbb524' as `0x${string}`,
-    Settler:     '0xe8d210A3735cdbd74218c18Ed9e020515f32914f' as `0x${string}`,
-    SwarmPass:   ZERO as `0x${string}`,  // set when v2 deploys
-    deployBlock: 68880557n,
+    // Swarm v2 (quantities, token delivery), deployed 24 Oct 2026 and verified:
+    // wiring from chain, and all four contracts byte-identical to the local build.
+    // Swarm Pass has its faucet on. Earlier v1 sets are retired.
+    DealFactory: '0xdF7ab518C23aff70ecd2Dd61e639fbEd62F2D5aD' as `0x${string}`,
+    DemandPool:  '0x0C04e8Bf223F4C9ab45678273b8D692Ef9550B36' as `0x${string}`,
+    Settler:     '0xfD29dd3c3003713f529912315F5e47C9c88F8DD3' as `0x${string}`,
+    SwarmPass:   '0x28ac46d52C34a53565c481849361b8DB2cb3E4ca' as `0x${string}`,
+    deployBlock: 68895718n,
     deployed: true,
   },
 } as const

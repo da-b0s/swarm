@@ -198,18 +198,19 @@ addresses are explicitly zero and the UI refuses to offer a commit against them.
 | `DealFactory` | Supplier posts a deal: price curve, minimum, deadline, caps |
 | `DemandPool` | Commits, withdrawals, live price, clearing-price calculation |
 | `Settler` | Atomic N-party settlement and difference refunds |
+| `SwarmPass` | _pending_ | [`0x28ac46d5…b3E4ca`](https://explorer.testnet.arc.io/address/0x28ac46d52C34a53565c481849361b8DB2cb3E4ca) |
 | `CommitRelayer` | EIP-3009 gasless commits |
 
 ### Deployed addresses
 
 | Contract | Arc Mainnet (5042) | Arc Testnet (5042002) |
 |---|---|---|
-| `DealFactory` | _pending_ | [`0xAd305D08…Eb98cb`](https://explorer.testnet.arc.io/address/0xAd305D088FCc2BD0482C7A457F6d3E1f7fEb98cb) |
-| `DemandPool` | _pending_ | [`0xc9f1D52E…bb524`](https://explorer.testnet.arc.io/address/0xc9f1D52E835Fa42d2BB271167f7B1855dDAbb524) |
-| `Settler` | _pending_ | [`0xe8d210A3…32914f`](https://explorer.testnet.arc.io/address/0xe8d210A3735cdbd74218c18Ed9e020515f32914f) |
+| `DealFactory` | _pending_ | [`0xdF7ab518…F2D5aD`](https://explorer.testnet.arc.io/address/0xdF7ab518C23aff70ecd2Dd61e639fbEd62F2D5aD) |
+| `DemandPool` | _pending_ | [`0x0C04e8Bf…550B36`](https://explorer.testnet.arc.io/address/0x0C04e8Bf223F4C9ab45678273b8D692Ef9550B36) |
+| `Settler` | _pending_ | [`0xfD29dd3c…C7DD3`](https://explorer.testnet.arc.io/address/0xfD29dd3c3003713f529912315F5e47C9c88F8DD3) |
 | `CommitRelayer` | _pending_ | _pending_ |
 
-Testnet redeployed at block 68,880,557 on 24 October from the final source, and wired; its bytecode matches a local build of this repo byte for byte, apart from immutables and metadata. The first set (`0x5b646D21…`), which ran the lifecycle in [docs/testnet-lifecycle.md](docs/testnet-lifecycle.md), is retired. Every claim above is checked from
+Swarm v2 — quantities and token delivery, see [docs/mechanism-v2.md](docs/mechanism-v2.md) — deployed to testnet at block 68,895,718 on 24 October and wired; all four contracts match a local build of this repo byte for byte, apart from immutables and metadata. The first set (`0x5b646D21…`), which ran the lifecycle in [docs/testnet-lifecycle.md](docs/testnet-lifecycle.md), is retired. Every claim above is checked from
 chain rather than taken from a deploy log — `node tools/verify-deploy.mjs` confirms
 bytecode, all three owner wiring calls, the constructor links in both directions,
 the USDC predeploy address and that the factory is unpaused holding zero escrow.
