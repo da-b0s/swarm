@@ -147,7 +147,7 @@ delta = before - (await bal(b2));
 check('buyer 2 balance fell by exactly the $1.00 signed', delta === usd(1), `fell by ${fmt(delta)}`);
 
 const replay = await relay(sigB);
-check('replaying the same authorization is refused before broadcast', replay.status !== 200 && /AuthorizationAlreadyUsed/.test(JSON.stringify(replay.body)), `${replay.status} ${JSON.stringify(replay.body).slice(0, 90)}`);
+check('replaying the same authorization is refused with its name only', replay.status === 400 && replay.body.error === 'AuthorizationAlreadyUsed' && Object.keys(replay.body).length === 1, `${replay.status} ${JSON.stringify(replay.body).slice(0, 90)}`);
 
 // ── C: price rises after signing ─────────────────────────────────────────────────
 console.log('\nC  price rises between signing and landing');
@@ -157,9 +157,12 @@ await send('buyer 3 withdraws', b3, { address: POOL, abi: POOL_ABI, functionName
 before = await bal(b4);
 const c409 = await relay(sigC); // would land as buyer 2: $0.75 > $0.50
 check('relayer answers 409 with the new price', c409.status === 409 && c409.body.requiredPrice === usd(0.75).toString(), `${c409.status} ${JSON.stringify(c409.body)}`);
+check('the 409 carries no viem text or signature', !/viem|0x[0-9a-f]{64}/i.test(JSON.stringify(c409.body)));
 check('buyer 4 balance did not move', (await bal(b4)) === before);
 
-const cRes = await relay(await signCommit(b4, dealId, usd(0.75)));
+// Sent with validAfter as the number 0, not the string "0": a client doing that
+// was once rejected as "Missing field".
+const cRes = await relay({ ...(await signCommit(b4, dealId, usd(0.75))), validAfter: 0 });
 check('re-signed at $0.75, accepted', cRes.status === 200 && cRes.body.pricePaid === usd(0.75).toString(), `${cRes.status} ${fmt(cRes.body.pricePaid ?? 0)}`);
 delta = before - (await bal(b4));
 check('buyer 4 balance fell by exactly $0.75', delta === usd(0.75), `fell by ${fmt(delta)}`);

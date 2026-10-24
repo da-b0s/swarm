@@ -9,7 +9,7 @@
  *   RPC_URL         — Arc RPC endpoint
  *   CHAIN_ID        — expected chain id (numeric)
  *   POOL_ADDRESS    — deployed DemandPool address
- *   ALLOWED_ORIGIN  — CORS origin (default *)
+ *   ALLOWED_ORIGIN  — CORS origin allowed (default: refuse all cross-origin requests)
  *   PORT            — HTTP port (default 3100)
  */
 
@@ -21,11 +21,11 @@ import {
   createWalletClient,
   http as viemHttp,
   parseAbi,
-  decodeErrorResult,
   formatUnits,
   type Hex,
   type Chain,
   type Account,
+  ContractFunctionRevertedError,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
@@ -253,21 +253,21 @@ async function relay(body: CommitBody): Promise<RelayResult> {
     estimatedGas = (raw * 120n) / 100n
     void sim  // simulation succeeded; we only needed the revert check
   } catch (e: unknown) {
-    // Decode a named contract error from the simulation revert.
-    const errData = (e as { cause?: { data?: Hex } })?.cause?.data
-    if (errData) {
-      try {
-        const decoded = decodeErrorResult({ abi: POOL_ABI, data: errData })
-        throw Object.assign(new Error(`Contract revert: ${decoded.errorName}`), {
-          code: decoded.errorName,
-          args: decoded.args,
-        })
-      } catch (inner) {
-        if ((inner as { code?: string }).code) throw inner
-        // Decode failed; fall through and throw the raw error.
-      }
+    // viem throws ContractFunctionExecutionError wrapping a ContractFunctionRevertedError.
+    // Walk the cause chain to find the revert; its .data is already decoded by viem.
+    const revertErr = (e as { walk?: (pred: (err: unknown) => boolean) => unknown })
+      .walk?.(err => err instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | undefined
+
+    if (revertErr?.data) {
+      const { errorName, args: errorArgs } = revertErr.data
+      throw Object.assign(new Error(`Contract revert: ${errorName}`), {
+        code: errorName,
+        args: errorArgs,
+      })
     }
-    throw e
+    // Not a decoded contract revert — re-throw as an opaque relay failure so
+    // the HTTP layer returns 500 without leaking viem internals to the client.
+    throw Object.assign(new Error('Simulation failed'), { code: 'SimulationFailed' })
   }
 
   // 3. Send — serialised through the mutex so concurrent requests never take
@@ -326,9 +326,11 @@ async function relay(body: CommitBody): Promise<RelayResult> {
       if (Date.now() >= nextReplace && curFee < feeCap) {
         curFee = bumpFee(curFee)
         if (curFee > feeCap) curFee = feeCap
+        // Advance the timer whether the replacement succeeds or throws — so a
+        // rejected send doesn't cause repeated bump attempts every 2 seconds.
+        nextReplace = Date.now() + REPLACE_INTERVAL_MS
         try {
           await sendAtFee(curFee)
-          nextReplace = Date.now() + REPLACE_INTERVAL_MS  // reset timer after bump (fix #4)
         } catch {
           // Replacement rejected; keep polling existing hashes.
         }
@@ -471,10 +473,14 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
-    // Validate required fields.
+    // Validate required fields — check for absent/null/empty-string only;
+    // numeric zero ("0" or 0) is a valid value (e.g. validAfter).
     const required_fields = ['dealId', 'buyer', 'authorizedAmount', 'validAfter', 'validBefore', 'salt', 'signature'] as const
     for (const f of required_fields) {
-      if (!body[f]) { json(res, 400, { error: `Missing field: ${f}` }); return }
+      const v = body[f]
+      if (v === undefined || v === null || v === '') {
+        json(res, 400, { error: `Missing field: ${f}` }); return
+      }
     }
 
     // Rate limit per buyer.
@@ -491,6 +497,7 @@ const server = http.createServer(async (req, res) => {
       })
     } catch (e: unknown) {
       const err = e as { code?: string; args?: unknown[]; message?: string }
+      // Named contract errors: return structured responses the frontend can act on.
       if (err.code === 'PriceRoseBeyondAuthorization' && Array.isArray(err.args) && err.args.length > 0) {
         json(res, 409, { error: 'PriceRoseBeyondAuthorization', requiredPrice: err.args[0]?.toString() })
         return
@@ -499,7 +506,14 @@ const server = http.createServer(async (req, res) => {
         json(res, 403, { error: 'Blocklisted' })
         return
       }
-      json(res, 400, { error: err.message ?? 'Relay failed', code: err.code })
+      if (err.code && err.code !== 'SimulationFailed') {
+        // Other named contract errors (AlreadyCommitted, DeadlinePassed, etc.) — name only, no viem text.
+        json(res, 400, { error: err.code })
+        return
+      }
+      // Unrecognised error: log detail server-side only, return opaque 500 to caller.
+      console.error('[relay error]', err.message ?? String(e))
+      json(res, 500, { error: 'Relay failed' })
     }
     return
   }

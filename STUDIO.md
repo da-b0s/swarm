@@ -626,8 +626,28 @@ the same way. Queued as Turn 4e.
 ## Turn 4e — relayer error mapping
 
 Prompt: [`turn-04e-relayer-errors.md`](studio/prompts/turn-04e-relayer-errors.md)
+Result: [`turn-04e`](studio/runs/turn-04e.json) · status `completed` · `relayer/server.ts` only, as scoped
 
-_queued, not yet run_
+The relayer now walks viem's error chain to the `ContractFunctionRevertedError`
+and reads its already-decoded name, so named contract errors reach the status
+mapping. Anything unrecognised returns an opaque 500 and is logged server-side
+only; viem's message text, which echoes the buyer's signature, no longer reaches
+a client. A field sent as the number 0 is accepted, and a rejected replacement
+now advances the bump timer like a successful one.
+
+Verified by running, not reading. The same end-to-end scenario on testnet, with
+the checks tightened:
+
+- price risen after signing: **`409 {"error":"PriceRoseBeyondAuthorization","requiredPrice":"750000"}`**
+  — exactly what the frontend's re-sign flow keys off, and checked to carry no
+  viem text or signature;
+- replay: **`400 {"error":"AuthorizationAlreadyUsed"}`**, the name and nothing else;
+- the re-signed commit sent with `validAfter` as the number 0, accepted;
+- every money check from the first run passed again.
+
+That closes the gasless work: contract, 27 tests, relayer and frontend, each
+proven on a live chain.
+
 
 ## Turns 5+
 

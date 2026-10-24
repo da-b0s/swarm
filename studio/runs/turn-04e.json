@@ -1,0 +1,217 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the current server.ts in full before touching anything. Good. All four fixes are surgical. I'll apply them in one pass.\n\n**Fix 1** — replace the simulation `catch` block to use `ContractFunctionRevertedError`.  \n**Fix 2** — field presence check: `!body[f]` → explicit `undefined`/`null`/`''` test.  \n**Fix 3** — advance `nextReplace` whether replacement succeeds or throws.  \n**Fix 4** — fix startup comment.\n\nAlso: the HTTP error handler at the bottom still echoes `err.message` for unrecognised errors (returning viem text to the client). That needs to be a generic 500 with server-side logging only. Fix 4 — startup comment: Fix 1 — replace the simulation catch block. `ContractFunctionExecutionError` exposes a `.walk()` method that traverses the cause chain; we find the first `ContractFunctionRevertedError` and read its `.data` which is already decoded: Fix 2 — field presence check: replace `!body[f]` with an explicit check that catches `0` and `\"0\"` as valid: Fix 3 — advance `nextReplace` whether replacement send succeeds or throws: Now fix the HTTP error handler — replace the catch block to log server-side and never return viem text to the client. Named contract errors keep their mapping; everything else returns 500 with no detail: Now typecheck: **Relayer `tsc --noEmit`:**\n```\n[Command succeeded with exit code 0]\n```\n\n---\n\nHere is what each fix does and why it is correct.\n\n**Fix 1 — simulation error decoding.**  \n`ContractFunctionExecutionError` (what `simulateContract` throws) carries a `.walk()` method that traverses its cause chain. The first `ContractFunctionRevertedError` in that chain has a `.data` property that is already decoded by viem: `{ errorName: string, args: readonly unknown[] }`. Reading it directly replaces the defunct `decodeErrorResult(hex)` path that was throwing because the input was not hex. The old `cause.data` cast is gone entirely. For errors where `revertErr?.data` is absent (RPC failure, network error) the catch now throws `{ code: 'SimulationFailed' }` — an opaque sentinel — so the HTTP handler's final branch logs it server-side and returns 500, never viem's internal message text.\n\n**Fix 2 — field presence check.**  \n`v === undefined || v === null || v === ''` is the correct absent-field test. The previous `!body[f]` treated `\"0\"` and `0` as absent because both are falsy, rejecting any valid `validAfter: 0` or `validAfter: \"0\"`.\n\n**Fix 3 — `nextReplace` advances unconditionally.**  \n`nextReplace = Date.now() + REPLACE_INTERVAL_MS` is now set before the `try/catch` around `sendAtFee`. Whether the replacement is accepted or rejected by the node, the next bump won't be attempted for another 30 seconds. The previous code only advanced it inside the `try`, so a rejected send left the timer in the past and triggered another bump on the very next 2-second poll.\n\n**Fix 4 — startup comment corrected** to \"refuse all cross-origin requests\" from \"default `*`\".",
+  "todos": null,
+  "filesChanged": [
+    "relayer/server.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 11,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import {\n   createPublicClient,\n   createWalletClient,\n   http as viemHttp,\n   parseAbi,\n-  decodeErrorResult,\n   formatUnits,\n-  type Hex,\n+  type Hex,\n+  type Chain,"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "- *   ALLOWED_ORIGIN  — CORS origin (default *)\n+ *   ALLOWED_ORIGIN  — CORS origin allowed (default: refuse all cross-origin requests)"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 17,
+      "removedLines": 17,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   } catch (e: unknown) {\n-    // Decode a named contract error from the simulation revert.\n-    const errData = (e as { cause?: { data?: Hex } })?.cause?.data\n-    if (errData) {\n-      try {\n-        const decoded = decodeErrorResult({ abi: POOL_ABI, data: errData })\n-        throw Object.assign(new Error(`Contract revert: ${decoded.errorName}`), {\n-          code: decoded.errorName,\n+    // viem throws ContractFunctionExecutionError wrapping a ContractFunctionRevertedError.\n+    // Walk the cause chain to find the revert; its .data is already decoded by viem.\n+    const revertErr = (e as { walk?: (pred: (err: unknown) => boolean) => unknown })\n+      .walk?.(err => err instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | undefined\n+\n+    if (revertErr?.data) {\n+      const { errorName, args: errorArgs } = revertErr.data"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    // Validate required fields.\n+    // Validate required fields — check for absent/null/empty-string only;\n+    // numeric zero (\"0\" or 0) is a valid value (e.g. validAfter).\n     const required_fields = ['dealId', 'buyer', 'authorizedAmount', 'validAfter', 'validBefore', 'salt', 'signature'] as const\n     for (const f of required_fields) {\n-      if (!body[f]) { json(res, 400, { error: `Missing field: ${f}` }); return }\n-    }\n+      const v = body[f]\n+      if (v === undefined || v === null || v === '') {\n+        json(res, 400, { error: `Missing field: ${f}` }); return\n+      }"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 12,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       if (Date.now() >= nextReplace && curFee < feeCap) {\n         curFee = bumpFee(curFee)\n         if (curFee > feeCap) curFee = feeCap\n+        // Advance the timer whether the replacement succeeds or throws — so a\n+        // rejected send doesn't cause repeated bump attempts every 2 seconds.\n+        nextReplace = Date.now() + REPLACE_INTERVAL_MS\n         try {\n-          await sendAtFee(curFee)\n-          nextReplace = Date.now() + REPLACE_INTERVAL_MS  // reset timer after bump (fix #4)\n-        } catch {\n-          // Replacement rejected; keep polling existing hashes.\n+          await sendAtFee(curFee)"
+    },
+    {
+      "path": "relayer/server.ts",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 12,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     } catch (e: unknown) {\n       const err = e as { code?: string; args?: unknown[]; message?: string }\n+      // Named contract errors: return structured responses the frontend can act on.\n       if (err.code === 'PriceRoseBeyondAuthorization' && Array.isArray(err.args) && err.args.length > 0) {\n         json(res, 409, { error: 'PriceRoseBeyondAuthorization', requiredPrice: err.args[0]?.toString() })\n         return\n       }\n-      if (err.code === 'Blocklisted') {\n-        json(res, 403, { error: 'Blocklisted' })\n+      if (err.code === 'Blocklisted') {"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test/SwarmGaslessTest.t.sol",
+      "contracts/test/SwarmTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}
