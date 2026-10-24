@@ -231,7 +231,10 @@ export function useLiveDealState(dealId: bigint | undefined) {
   let nextTier: { tier: DealTier; buyersNeeded: number } | undefined = undefined
   if (deal && buyerCount !== undefined) {
     for (let i = 0; i < deal.tiers.length; i++) {
-      if (count < deal.tiers[i].minBuyers) {
+      // The next tier is the first unreached one that is actually cheaper. Before
+      // the first threshold the live price is already tiers[0]'s, so tiers[0] is
+      // not a price drop and must be skipped.
+      if (count < deal.tiers[i].minBuyers && deal.tiers[i].pricePerUnit < currentPrice) {
         nextTier = { tier: deal.tiers[i], buyersNeeded: deal.tiers[i].minBuyers - count }
         break
       }
