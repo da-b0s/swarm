@@ -32,9 +32,15 @@ const chain = defineChain({
 });
 const EXPLORER = 'https://explorer.testnet.arc.io';
 const USDC = '0x3600000000000000000000000000000000000000';
-const FACTORY = '0x5b646D21e0b4a21364b226edFCDc5E5F4e6E110f';
-const POOL = '0x2Eab29C0d1F9FF0B0ba9385324611BbC2670CfEB';
-const SETTLER = '0xB4dFC8b4Baa856eB9B6bB7087Ed72615452874C5';
+// Addresses come from ../.env, which verify-deploy.mjs output is recorded into,
+// so a redeploy needs no edit here. Testnet only.
+const ENV = Object.fromEntries(readFileSync(new URL('../.env', import.meta.url), 'utf8')
+  .split(/\r?\n/).filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]));
+if (ENV.ARC_NETWORK !== 'testnet') throw new Error(`refusing: .env ARC_NETWORK is ${ENV.ARC_NETWORK}, not testnet`);
+const FACTORY = ENV.DEAL_FACTORY;
+const POOL = ENV.DEMAND_POOL;
+const SETTLER = ENV.SETTLER;
+for (const [k, v] of Object.entries({ FACTORY, POOL, SETTLER })) if (!/^0x[0-9a-fA-F]{40}$/.test(v ?? '')) throw new Error(`${k} missing from .env`);
 
 const abi = (name) => JSON.parse(
   readFileSync(new URL(`../onchain/contracts/out/${name}.sol/${name}.json`, import.meta.url), 'utf8'),

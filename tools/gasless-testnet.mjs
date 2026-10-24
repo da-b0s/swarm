@@ -37,9 +37,15 @@ const chain = defineChain({
 const EXPLORER = 'https://explorer.testnet.arc.io';
 const RELAYER_URL = process.env.RELAYER_URL ?? 'http://localhost:8787';
 const USDC = '0x3600000000000000000000000000000000000000';
-const FACTORY = '0x97e7B6431Ad839580A06B1CC5717d68be27D2212';
-const POOL = '0xe7860112eF7fF7a375b33fA703D3B3A38CC7A70d';
-const SETTLER = '0x2deDA8Fa1101C42Bc6f36AEEd898A583366816E8';
+// Addresses come from ../.env, which verify-deploy.mjs output is recorded into,
+// so a redeploy needs no edit here. Testnet only.
+const ENV = Object.fromEntries(readFileSync(new URL('../.env', import.meta.url), 'utf8')
+  .split(/\r?\n/).filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]));
+if (ENV.ARC_NETWORK !== 'testnet') throw new Error(`refusing: .env ARC_NETWORK is ${ENV.ARC_NETWORK}, not testnet`);
+const FACTORY = ENV.DEAL_FACTORY;
+const POOL = ENV.DEMAND_POOL;
+const SETTLER = ENV.SETTLER;
+for (const [k, v] of Object.entries({ FACTORY, POOL, SETTLER })) if (!/^0x[0-9a-fA-F]{40}$/.test(v ?? '')) throw new Error(`${k} missing from .env`);
 
 const abi = (n) => JSON.parse(readFileSync(new URL(`../onchain/contracts/out/${n}.sol/${n}.json`, import.meta.url), 'utf8')).abi;
 const FACTORY_ABI = abi('DealFactory'), POOL_ABI = abi('DemandPool'), SETTLER_ABI = abi('Settler');
