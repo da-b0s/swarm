@@ -83,3 +83,20 @@ anything found in the walkthrough.
    $0.30. It picks the first tier rather than the next *cheaper* one. It should
    read "2 more buyers and everyone pays $0.20". Correct once past the first
    threshold.
+
+2. **Connecting switched the wallet to Arc mainnet** on the testnet build — *fixed
+   locally, 24 Oct, to be synced to Studio.* The wallet library treats the first
+   chain in its list as the default, and mainnet was listed first. Where MetaMask
+   had no Arc mainnet this failed as "Connection Failed"; otherwise the commit
+   panel landed on the wrong chain. The active network is now listed first; checked
+   by connecting a stand-in wallet, which is no longer asked to switch at all.
+
+3. **First gasless signature failed in MetaMask** with "Expected a valid number
+   value, but received "300000n"" — *under investigation.* The request the app
+   builds was captured and is valid (`"value":"300000"`, chain 5042002), so the
+   app does not send that text. Retesting after the fix for issue 2, with MetaMask
+   reset (network set to Arc Testnet, site permission removed).
+
+4. **Wallets can only connect from inside a wallet's in-app browser** on phones:
+   only an injected connector is configured, no WalletConnect. Fine for testing;
+   Safari/Chrome users on a phone could not connect.
