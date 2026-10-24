@@ -1,0 +1,44 @@
+diff --git a/src/config.ts b/src/config.ts
+index 4dfa77f..31e30ef 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -8,13 +8,22 @@ import { mainnet } from 'wagmi/chains'
+ import { arc, arcTestnet } from 'viem/chains'
+ import { injected } from 'wagmi/connectors'
+ import { registerChain } from './tracing'
++import { ACTIVE_NETWORK } from './swarm/config'
+ 
+ // Pre-register chain RPC URLs so trace events show correct chain names immediately
+ registerChain(arc.id, arc.rpcUrls.default.http[0])
+ registerChain(arcTestnet.id, arcTestnet.rpcUrls.default.http[0])
+ 
++// The first chain is the one wagmi and ConnectKit ask the wallet to switch to
++// on connect. It must be the network this build runs on: with Arc mainnet listed
++// first, connecting on a testnet build switched the wallet to mainnet, which
++// failed outright where the wallet had no Arc mainnet configured and otherwise
++// left the commit panel on the wrong chain.
++const activeChain = ACTIVE_NETWORK === 'mainnet' ? arc : arcTestnet
++const otherArc = ACTIVE_NETWORK === 'mainnet' ? arcTestnet : arc
++
+ export const config = createConfig({
+-  chains: [arc, arcTestnet, mainnet], // mainnet needed for ENS resolution
++  chains: [activeChain, otherArc, mainnet], // mainnet needed for ENS resolution
+   connectors: [injected()],
+   transports: {
+     [arc.id]: http(),
+diff --git a/src/swarm/hooks.ts b/src/swarm/hooks.ts
+index a22ccc8..dec5bcf 100644
+--- a/src/swarm/hooks.ts
++++ b/src/swarm/hooks.ts
+@@ -231,7 +231,10 @@ export function useLiveDealState(dealId: bigint | undefined) {
+   let nextTier: { tier: DealTier; buyersNeeded: number } | undefined = undefined
+   if (deal && buyerCount !== undefined) {
+     for (let i = 0; i < deal.tiers.length; i++) {
+-      if (count < deal.tiers[i].minBuyers) {
++      // The next tier is the first unreached one that is actually cheaper. Before
++      // the first threshold the live price is already tiers[0]'s, so tiers[0] is
++      // not a price drop and must be skipped.
++      if (count < deal.tiers[i].minBuyers && deal.tiers[i].pricePerUnit < currentPrice) {
+         nextTier = { tier: deal.tiers[i], buyersNeeded: deal.tiers[i].minBuyers - count }
+         break
+       }

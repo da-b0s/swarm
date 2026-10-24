@@ -2,9 +2,12 @@
 pragma solidity 0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SwarmTypes} from "./SwarmTypes.sol";
 
 contract DealFactory {
+    using SafeERC20 for IERC20;
+
     // Key constraints:
     // - All math in 6-decimal USDC micro-units; no msg.value anywhere
     // - No block.prevrandao (Arc always returns 0)
@@ -119,8 +122,7 @@ contract DealFactory {
         {
             IERC20 token = IERC20(p.goodsToken);
             uint256 balBefore = token.balanceOf(address(this));
-            bool ok = token.transferFrom(msg.sender, address(this), stockAmount);
-            if (!ok) revert TransferFailed();
+            token.safeTransferFrom(msg.sender, address(this), stockAmount);
             if (token.balanceOf(address(this)) - balBefore != stockAmount) revert UnsupportedToken();
         }
 
@@ -237,7 +239,6 @@ contract DealFactory {
         uint256 amount = goodsDeposited[dealId];
         if (amount == 0) return;
         goodsDeposited[dealId] = 0;
-        bool ok = IERC20(deal.goodsToken).transfer(settler, amount);
-        if (!ok) revert TransferFailed();
+        IERC20(deal.goodsToken).safeTransfer(settler, amount);
     }
 }

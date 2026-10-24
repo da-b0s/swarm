@@ -3,12 +3,14 @@ pragma solidity 0.8.28;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {DealFactory} from "./DealFactory.sol";
 import {DemandPool} from "./DemandPool.sol";
 import {SwarmTypes} from "./SwarmTypes.sol";
 import {ISettler} from "./DemandPool.sol";
 
 contract Settler is ReentrancyGuard, ISettler {
+    using SafeERC20 for IERC20;
     // Key constraints:
     // - No block.chainid checks; no block.prevrandao
     // - ReentrancyGuard on settle, refundAll, claim, claimGoods
@@ -205,8 +207,7 @@ contract Settler is ReentrancyGuard, ISettler {
 
         goodsClaimable[token][msg.sender] = 0;
 
-        bool ok = IERC20(token).transfer(msg.sender, amount);
-        if (!ok) revert NothingToClaim(); // generic; real revert is from token
+        IERC20(token).safeTransfer(msg.sender, amount);
 
         emit GoodsClaimed(token, msg.sender, amount);
     }

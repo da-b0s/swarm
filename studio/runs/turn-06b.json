@@ -1,0 +1,382 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the spec and all contract source files in full before writing anything. Good. Now reading DemandPool and the smoke test to understand the full API surface: Good. Now I have the full picture. Two fixes to the contracts first, then the test file. Let me set up todos: Applying SafeERC20 to DealFactory: Now replace the bare `transferFrom` in stock deposit with `safeTransferFrom`, removing the `bool ok` check (SafeERC20 reverts automatically), keeping the balance-delta check: Now replace the bare `transfer` in `pullGoodsForSettler` with `safeTransfer`, removing the `bool ok` / `TransferFailed` guard: Now apply SafeERC20 to Settler and remove the misleading `NothingToClaim` branch in `claimGoods`: Replace the `claimGoods` transfer with `safeTransfer` and remove the bool/NothingToClaim pattern: Good. Now also remove the unused `TransferFailed` error from DealFactory since SafeERC20 handles it: Now writing the test file. I'll keep each test function tight and use a shared `setUp` and a shared helper for deal-posting. The reentrant-goods mock needs a controlled reentrancy flag: Now write a reentrant goods token mock for the reentrancy test: Now write the main test file. I'll keep each test function tight and use a common `_deploy` helper shared across all tests: Quick fix — Solidity doesn't support `_ = expr` discard syntax. Remove those two lines: 11 failures, all diagnosable from the output. Let me fix them all:\n\n**Group 1 — `LastTierExceedsMax` when expecting other errors** (7 tests): The `_params` helper uses `stdTiers` which has `tiers[2].minUnits=20`. Passing `maxUnits=10` to a params call means `tiers[2].minUnits=20 > maxUnits=10` → `LastTierExceedsMax` fires before reaching the intended check. Fix: use single-tier arrays for tests that don't need 3 tiers, or pass `maxUnits` large enough to not trigger this.\n\n**`MinUnitsZero`**: `_params(address(pass), 10, 0, 10, 0, 10)` — `stdTiers[0].minUnits=1 > minUnits=0` → `TierMinUnitsExceedsMin` fires before `MinUnitsZero`. Fix: `TierMinUnitsExceedsMin` checks `tiers[0].minUnits > p.minUnits`, so `0 < 1` → yes, fires first. Fix: use a single tier with `minUnits=0` is impossible since pricePerUnit>0 but `tiers[0].minUnits` can be 0 only if we set it. Actually: `minUnits=0` with `stdTiers[0].minUnits=1` → `1 > 0` → `TierMinUnitsExceedsMin`. The validation checks `tiers[0].minUnits > p.minUnits` first. To test `MinUnitsZero` specifically, we need tiers where `tiers[0].minUnits == 0`, but minUnits is a uint32 and the spec says `minUnits >= 1` and tiers have `minUnits` (uint32 can be 0). Actually the simpler fix: use tiers with `tiers[0].minUnits = 0` for this test so validation passes the tier check and hits MinUnitsZero.\n\n**`test_Order_UnitCapReached`**: maxUnits=10 but stdTiers[2].minUnits=20 > 10 → `LastTierExceedsMax`. Fix: use a single-tier deal with maxUnits=10.\n\n**`test_Claims_SecondClaimReverts`**: the first `settler.claim()` succeeds, but the second gets `NothingToClaim` — which IS the expected revert. Wait, it says `[FAIL: NothingToClaim()]` — that means the test ITSELF raised `NothingToClaim` unexpectedly, not on the second call. Looking at the test: `_settle(d)` calls `vm.warp` then `settler.settle(d)`. But the deal has `minUnits=1` and buyer B1 committed 5 units — minimum met. The first `settler.claim()` reverts with `NothingToClaim` — which means B1 has no USDC claimable. Why? Because B1 paid `paidPerUnit=1_000_000` and `cp=1_000_000` (only one buyer, single-tier stdTiers at 5 units → `priceAt(5) = $1.00`). Refund = `(1.00 - 1.00) * 5 = 0`. So B1 has zero USDC claimable! The test tries to `claim()` a zero balance → `NothingToClaim`. Fix: have at least two buyers so the second one breaks a tier, ensuring a non-zero refund for B1, OR use `claimGoods` (B1 has 5 passes claimable which is non-zero).\n\n**`test_Claims_ReentrantGoods`**: The reentrant goods mock calls `claimGoods` in its `transfer` override. With `SafeERC20.safeTransfer`, the call goes through `IERC20(token).transfer(...)`. The `ReentrancyGuard` fires on the inner `claimGoods` call — but since `claimGoods` is already in a `nonReentrant` frame, the inner call reverts with `ReentrancyGuardReentrantCall()`. The test `vm.expectRevert()` without a selector would match ANY revert, but `ReentrancyGuardReentrantCall()` is what actually surfaces from the outer `claimGoods`. Wait — `ReentrancyGuardReentrantCall()` IS a revert, so `vm.expectRevert()` should catch it. The failure says `[FAIL: ReentrancyGuardReentrantCall()]` which means the test itself failed with that error — the outer call reverted instead of succeeding. Actually: `safeTransfer` propagates the inner revert from the reentrancy guard up through the `transfer` return value check. The outer `claimGoods` call reverts because `safeTransfer` failed due to the inner reentrancy revert. So the outer `claimGoods` DOES revert — but `vm.expectRevert()` only catches the FIRST revert. The outer `claimGoods` (B1) reverts, which `vm.expectRevert()` catches. But the test is shown as failing with `ReentrancyGuardReentrantCall()` — meaning the outer call reverted with THAT error, which `vm.expectRevert()` caught but perhaps didn't expect that specific selector? Actually `vm.expectRevert()` with no argument matches any revert. So why does it show as `[FAIL: ReentrancyGuardReentrantCall()]`? This means the outer `claimGoods` call does NOT revert — it succeeds despite the inner reentrancy failing. That's because `safeTransfer` wraps via a low-level `call` on tokens returning nothing (which `MockReentrantGoods` does since it overrides `transfer` returning `bool`). The `safeTransfer` for a token that returns `bool` checks the return value. The inner reentrancy guard reverts but inside the `transfer()` call — that propagates up through `safeTransfer` as a revert on the outer frame. So the outer `claimGoods` SHOULD revert. The failing message `[FAIL: ReentrancyGuardReentrantCall()]` means the test itself reverted without the `expectRevert` wrapper catching it — possibly because the revert happened before `vm.expectRevert` was consumed (e.g. in the `_settle(d)` helper). Let me check: the `_settle` helper calls `settler.settle(d)` which calls `safeTransfer` to move goods from factory to settler... Wait, the reentrant token's `transfer` calls back into `claimGoods(settler)` — but `settler.claimGoods` is called on the SETTLER which IS in a nonReentrant frame during `settle`. The outer `settle()` frame calls `factory.pullGoodsForSettler` which calls `IERC20(token).safeTransfer(settler, amount)` → `transfer(settler, amount)` on the reentrant mock → the mock tries `ISettlerClaim(settler).claimGoods(address(this))` → `settler.claimGoods` is NOT in a nonReentrant frame at this point (settle calls factory.pullGoodsForSettler, which is external, and during that external call the reentrant token calls back into settler.claimGoods). But `settler.settle` holds the nonReentrant lock... but `settler.claimGoods` has its OWN nonReentrant lock (`nonReentrant` modifier). `ReentrancyGuard` in OZ 5 is per-contract: the lock is shared across ALL nonReentrant functions. So `settler.settle` has locked the guard; `settler.claimGoods` (also nonReentrant) tries to lock it → `ReentrancyGuardReentrantCall()`. This revert propagates up through `safeTransfer` → `pullGoodsForSettler` → `factory.pullGoodsForSettler` → `settler.settle` → the settle call in `_settle` fails with `ReentrancyGuardReentrantCall()`. So the revert happens during `_settle(d)`, before `vm.expectRevert()` is set. The test needs to expect the revert on `_settle(d)`, not on `settler.claimGoods(...)`. Fix: the test should call `vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)` before `_settle`, or restructure to show that settle itself fails due to the reentrant token, which actually proves a different property. The real reentrancy-protection test for `claimGoods` should use a token that reenters DURING `claimGoods`, not during `settle`. Fix: set `settler` in the mock only for tests that call `claimGoods` directly. For the reentrant test: B1 commits and settles normally (with mock that doesn't reenter during settle), then when B1 calls `claimGoods`, the mock tries to reenter. But the settler's reentrancy guard is NOT held during the `safeTransfer` in `claimGoods` after the state is cleared — wait, `nonReentrant` holds for the duration of `claimGoods`. So during `claimGoods`, the guard is held; the `safeTransfer` reenters `claimGoods` → guard rejects → `safeTransfer` throws → `claimGoods` outer call reverts. So B1's `claimGoods` reverts with `ReentrancyGuardReentrantCall`. The `vm.expectRevert()` DOES catch that. The problem is the reentrant mock calls `claimGoods` DURING `settle` too (in `pullGoodsForSettler`). Fix: have `reentrant.setSettler` called AFTER `_settle` so the mock only reenters during `claimGoods`, not during `settle`.\n\n**`test_Strand_SingleBuyerCanAlwaysWithdraw`**: arithmetic underflow. The deal has `minUnits=5` but `stdTiers[1].minUnits=10` and `stdTiers[2].minUnits=20`. With `maxUnits=30`, `_params` passes. B1 commits 15 units. On withdrawal: `totalUnits[d] - units = 15 - 15 = 0`. `_priceAt(d, 0)` — the loop finds no tier with `minUnits <= 0` (tier[0].minUnits=1 > 0), falls through, returns `tiers[0].pricePerUnit`. So `newPrice = $1.00`. `_buyers[dealId].length == 1` → strand check skipped. Then: `tierCount[dealId][paid] -= 1`. `paid = $1.00` (paidPerUnit for 15 units: `priceAt(0+15=15)` with stdTiers: tier[1]=10≤15 → $0.75). Wait — B1 commits 15 units so `priceAt(15)` → tier[1] (10≤15) → $0.75. So `paid = $0.75`. `tierCount[d][$0.75] = 1`. `1 - 1 = 0`. No underflow there. The underflow must be elsewhere. `escrowed[dealId][msg.sender]` — delete sets it to 0. `totalUnits[dealId] = newTotal = 0`. OK. Looking more carefully: the test calls `_postStdDeal(30, 5, 10, 0)`. `_postStdDeal` calls `pass.mint(SUPPLIER, stock)` where `stock = uint256(maxUnits) = 30`. Then `pass.approve(address(factory), 30)`. Then `factory.postDeal(...)`. But stdTiers has `tiers[1].minUnits=10` and `tiers[2].minUnits=20` — both ≤ maxUnits=30, so that passes. But `minUnits=5` and `tiers[0].minUnits=1 ≤ 5` — passes. The underflow must be in `pool.withdraw`. Let me trace: `units = pool.unitsOf(d, B1) = 15`. `newTotal = pool.totalUnits(d) - units = 15 - 15 = 0`. `_priceAt(d, 0)` → the for loop: `i=3: tiers[2].minUnits=20 > 0, skip; i=2: tiers[1].minUnits=10 > 0, skip; i=1: tiers[0].minUnits=1 > 0, skip` → returns `tiers[0].pricePerUnit = $1.00`. The strand check: `_buyers[dealId].length == 1` → skip (condition: `_buyers[dealId].length > 1` is false). `priceBefore = _priceAt(d, totalUnits[d]=15)` = `$0.75`. Storage mutations: `totalUnits[d] = 0`. `_removeBuyer` → pop. `tierCount[d][$0.75] -= 1` → from 1 to 0 → fine. `delete escrowed; delete unitsOf; delete paidPerUnit`. `priceAfter = _priceAt(d, 0) = $1.00`. `buyerCount = 0`. `TierBroken` emitted. Then: `ISettler(settler).creditWithdrawal(B1, escrowAmt)`. `settler.creditWithdrawal` adds to `claimable[B1]`. `emit Withdrawn`. All looks fine. So where's the underflow? Let me re-read: `uint32 newTotal = totalUnits[dealId] - units`. `totalUnits[dealId]` is `uint32`. `units` is `uint32`. `15 - 15 = 0`. No underflow. Actually wait: the test calls `_postStdDeal(30, 5, 10, 0)` but `_postStdDeal(uint32 maxUnits, uint32 minUnits, uint32 maxBuyers, uint32 maxPerBuyer)` — `minUnits=5`, `maxBuyers=10`. The commit: `_commit(B1, d, 15)`. `maxUnitsPerBuyer=0` (no limit). `totalUnits + units = 0 + 15 = 15 ≤ 30` → OK. After commit `totalUnits=15`. Then `pool.withdraw(d)`. `unitsOf[d][B1]=15`. `totalUnits[d]=15`. `newTotal=15-15=0`. Hmm, but the error is `panic: arithmetic underflow or overflow (0x11)`. The only uint subtraction that could underflow is if `totalUnits < units` — but `totalUnits=15` and `units=15`, so `15-15=0`, fine. Unless `units` is larger... Could the `unitsOf` read return something unexpected? No — we just committed 15 and `unitsOf[d][B1]` is set in `_doCommit`. Wait — it must be `tierCount[dealId][paid] -= 1`. If `tierCount` is 0 and we subtract 1 it underflows. But we just committed B1 at `paid=$0.75` and `tierCount[d][$0.75]` was set to 1 in `_doCommit`. Then `withdraw` decrements it: `1 - 1 = 0`. No underflow. The panic must come from somewhere else entirely. Let me check `_removeBuyer`: `uint256 lastIdx = _buyers[dealId].length - 1`. If `_buyers[dealId].length == 0` this underflows. But B1 just committed so length is 1. `lastIdx = 0`. `idx = buyerPos - 1 = 1 - 1 = 0`. `idx == lastIdx` → skip the swap. `_buyers[dealId].pop()`. `delete _buyerIndex[...]`. Returns `_buyers[dealId].length = 0`. No underflow there either. The issue might be in the `setUp`'s `pass.mint(SUPPLIER, stock)` accumulating — each test function runs with a fresh `setUp()` but `pass` is redeployed each time so that's fine. Actually I think the arithmetic underflow is in `MockERC20.transferFrom`: the USDC mock is etched at `USDC_ADDR`. When `pool.commit` calls `USDC.transferFrom(buyer, pool, escrowAmount)`, the mock's `transferFrom` burns from `balances[buyer]` by `escrowAmount`. B1 commits 15 units at $0.75 = `11_250_000`. But `_fund(B1, 10_000_000)` only gives 10 USDC — not enough! `10_000_000 - 11_250_000` underflows in the mock's balance subtraction. Fix: fund with enough USDC.\n\nNow I have all 11 diagnoses. Let me fix them all: Now fix `test_Order_UnitCapReached` — use a single-tier deal with maxUnits=10: Fix `test_Claims_SecondClaimReverts` — B1's refund is zero because they're the only buyer. Add a second buyer who breaks a tier, ensuring B1 has a non-zero refund: Fix `test_Claims_ReentrantGoods` — set the settler on the mock only AFTER `_settle` so it doesn't reenter during `pullGoodsForSettler`. Also `vm.expectRevert` on the actual `claimGoods` call: Fix `test_Strand_SingleBuyerCanAlwaysWithdraw` — fund B1 with enough USDC for 15 units at $0.75 = 11,250,000: Also remove the unused `totalClaimed` and `cp` variables from the fuzz test: Now run the tests: One failure: `test_Post_MaxBuyersOutOfRange_Zero`. `maxBuyers=0` and the params call passes `maxBuyers: 0` but `_params` has `maxBuyers == 0 ? 10 : maxBuyers` — so it substitutes 10, making the deal valid. Fix: bypass `_params` and use a literal struct: **36/36 tests pass.** Complete unedited output:\n\n```\nCompiling 1 files with Solc 0.8.28\nSolc 0.8.28 finished in 2.23s\nCompiler run successful!\n\nRan 1 test for contracts/test/SwarmV2Smoke.t.sol:SwarmV2Smoke\n[PASS] test_SmokeSettlement() (gas: 984211)\nSuite result: ok. 1 passed; 0 failed; 0 skipped; finished in 2.13ms (1.08ms CPU time)\n\nRan 35 tests for contracts/test/SwarmV2Test.t.sol:SwarmV2Test\n[PASS] testFuzz_V2_Conservation(uint8,uint8) (runs: 256, μ: 2465895, ~: 2046331)\n[PASS] test_Claims_ReentrantGoods() (gas: 1269279)\n[PASS] test_Claims_SecondClaimGoodsReverts() (gas: 820176)\n[PASS] test_Claims_SecondClaimReverts() (gas: 1080033)\n[PASS] test_GasBound_Settle100() (gas: 21617081)\nLogs:\n  settle(100 buyers) gas: 3026735\n\n[PASS] test_Order_AlreadyCommitted() (gas: 727086)\n[PASS] test_Order_IncrementalPriceFalls() (gas: 938022)\n[PASS] test_Order_MaxBuyersCap() (gas: 981184)\n[PASS] test_Order_MaxUnitsPerBuyer() (gas: 480009)\n[PASS] test_Order_TierBreakByOwnOrder() (gas: 708036)\n[PASS] test_Order_UnitCapReached() (gas: 686714)\n[PASS] test_Order_ZeroUnits() (gas: 479594)\n[PASS] test_Post_DeadlineNotFuture() (gas: 96917)\n[PASS] test_Post_InvalidGoodsToken_USDC() (gas: 17144)\n[PASS] test_Post_InvalidGoodsToken_Zero() (gas: 16953)\n[PASS] test_Post_InvalidTierCount_Eleven() (gas: 101149)\n[PASS] test_Post_InvalidTierCount_Zero() (gas: 93643)\n[PASS] test_Post_LastTierExceedsMax() (gas: 98263)\n[PASS] test_Post_MaxBuyersOutOfRange_101() (gas: 96491)\n[PASS] test_Post_MaxBuyersOutOfRange_Zero() (gas: 96026)\n[PASS] test_Post_MinUnitsExceedsMax() (gas: 107365)\n[PASS] test_Post_MinUnitsZero() (gas: 95196)\n[PASS] test_Post_PriceCapExceeded() (gas: 94521)\n[PASS] test_Post_TierMinUnitsExceedsMin() (gas: 95020)\n[PASS] test_Post_TiersNotAscending() (gas: 96042)\n[PASS] test_Post_TiersNotDescending() (gas: 96625)\n[PASS] test_Post_TitleEmpty() (gas: 97106)\n[PASS] test_Post_UnsupportedToken_FeeOnTransfer() (gas: 585488)\n[PASS] test_Post_ZeroTierPrice() (gas: 94369)\n[PASS] test_Refund_BelowMinUnits() (gas: 1013677)\n[PASS] test_Refund_NobodyOrdered() (gas: 427582)\n[PASS] test_Refund_SettleRevertsWhenBelowMin() (gas: 728300)\n[PASS] test_Strand_RefusedThenPermitted() (gas: 1138626)\n[PASS] test_Strand_SingleBuyerCanAlwaysWithdraw() (gas: 661858)\n[PASS] test_WorkedExample() (gas: 1629810)\nSuite result: ok. 35 passed; 0 failed; 0 skipped; finished in 235.79ms (257.29ms CPU time)\n\nRan 2 test suites in 237.00ms (237.92ms CPU time): 36 tests passed, 0 failed, 0 skipped (36 total tests)\n```\n\n`settle(100 buyers)` gas: **3,026,735** — well below the block gas limit.\n\n---\n\n**SafeERC20 changes and why they matter:**\n\n`DealFactory` and `Settler` both `using SafeERC20 for IERC20`. The three goods-token call sites are now:\n- Stock deposit in `DealFactory.postDeal`: `token.safeTransferFrom(...)` — the `bool ok` check and `TransferFailed` guard are removed; SafeERC20 handles both the no-return-value case (USDT-style) and explicit `false` returns. The balance-delta check stays because it catches fee-on-transfer tokens, which is a distinct problem from missing return values.\n- `DealFactory.pullGoodsForSettler`: `IERC20(deal.goodsToken).safeTransfer(settler, amount)` — same reasoning.\n- `Settler.claimGoods`: `IERC20(token).safeTransfer(msg.sender, amount)` — the misleading `if (!ok) revert NothingToClaim()` branch is gone. With `safeTransfer`, the token's own revert propagates directly to the caller.\n\n**Test fixes:**\n\n`test_Post_MaxBuyersOutOfRange_Zero`: the `_params` helper guarded `maxBuyers == 0 ? 10 : maxBuyers` specifically to avoid accidents, which defeated this test. Replaced with a literal `PostParams` struct.\n\n`test_Post_MinUnitsZero`: `stdTiers[0].minUnits = 1 > p.minUnits = 0` triggers `TierMinUnitsExceedsMin` before `MinUnitsZero`. Fixed with a single tier having `minUnits = 0`, which passes the tier-check (0 ≤ 0) and lets the `MinUnitsZero` check fire.\n\n`test_Claims_ReentrantGoods`: the reentrant mock called back into `settler.claimGoods` during `factory.pullGoodsForSettler` inside `settle`, which holds the Settler's reentrancy lock. The fix: arm the mock (`setSettler`) only after `_settle` completes, so reentrancy is attempted only during the buyer's `claimGoods` call.\n\n`test_Strand_SingleBuyerCanAlwaysWithdraw`: B1 commits 15 units at $0.75/unit = 11,250,000 USDC. The test had only funded 10,000,000, causing an arithmetic underflow in the mock's balance arithmetic. Fixed by funding 15,000,000.",
+  "todos": [
+    {
+      "id": "todo:apply safeerc20 to dealfactory and settler; remove misleading nothingtoclaim branch:0",
+      "text": "Apply SafeERC20 to DealFactory and Settler; remove misleading NothingToClaim branch",
+      "status": "done"
+    },
+    {
+      "id": "todo:write swarmv2test.t.sol with fee-on-transfer mock + full test coverage:0",
+      "text": "Write SwarmV2Test.t.sol with fee-on-transfer mock + full test coverage",
+      "status": "done"
+    },
+    {
+      "id": "todo:run forge test, paste complete output:0",
+      "text": "Run forge test, paste complete output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "contracts/DealFactory.sol",
+    "contracts/Settler.sol",
+    "contracts/test-helpers/MockFeeToken.sol",
+    "contracts/test-helpers/MockReentrantGoods.sol",
+    "contracts/test/SwarmV2Test.t.sol"
+  ],
+  "fileDiffs": [
+    {
+      "path": "contracts/DealFactory.sol",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import {IERC20} from \"@openzeppelin/contracts/token/ERC20/IERC20.sol\";\n+import {SafeERC20} from \"@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol\";\n import {SwarmTypes} from \"./SwarmTypes.sol\";"
+    },
+    {
+      "path": "contracts/DealFactory.sol",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " contract DealFactory {\n+    using SafeERC20 for IERC20;\n+\n     // Key constraints:"
+    },
+    {
+      "path": "contracts/DealFactory.sol",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         {\n             IERC20 token = IERC20(p.goodsToken);\n             uint256 balBefore = token.balanceOf(address(this));\n-            bool ok = token.transferFrom(msg.sender, address(this), stockAmount);\n-            if (!ok) revert TransferFailed();\n+            token.safeTransferFrom(msg.sender, address(this), stockAmount);\n             if (token.balanceOf(address(this)) - balBefore != stockAmount) revert UnsupportedToken();\n         }"
+    },
+    {
+      "path": "contracts/DealFactory.sol",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     function pullGoodsForSettler(uint256 dealId) external {\n         if (msg.sender != settler) revert Unauthorized();\n         SwarmTypes.Deal storage deal = deals[dealId];\n         uint256 amount = goodsDeposited[dealId];\n         if (amount == 0) return;\n         goodsDeposited[dealId] = 0;\n-        bool ok = IERC20(deal.goodsToken).transfer(settler, amount);\n-        if (!ok) revert TransferFailed();\n+        IERC20(deal.goodsToken).safeTransfer(settler, amount);\n+    }"
+    },
+    {
+      "path": "contracts/Settler.sol",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import {ReentrancyGuard} from \"@openzeppelin/contracts/utils/ReentrancyGuard.sol\";\n-import {IERC20} from \"@openzeppelin/contracts/token/ERC20/IERC20.sol\";\n+import {IERC20} from \"@openzeppelin/contracts/token/ERC20/IERC20.sol\";\n+import {SafeERC20} from \"@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol\";"
+    },
+    {
+      "path": "contracts/Settler.sol",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-contract Settler is ReentrancyGuard, ISettler {\n+contract Settler is ReentrancyGuard, ISettler {\n+    using SafeERC20 for IERC20;"
+    },
+    {
+      "path": "contracts/Settler.sol",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     function claimGoods(address token) external nonReentrant {\n         uint256 amount = goodsClaimable[token][msg.sender];\n         if (amount == 0) revert NothingToClaim();\n \n         goodsClaimable[token][msg.sender] = 0;\n \n-        bool ok = IERC20(token).transfer(msg.sender, amount);\n-        if (!ok) revert NothingToClaim(); // generic; real revert is from token\n+        IERC20(token).safeTransfer(msg.sender, amount);"
+    },
+    {
+      "path": "contracts/test-helpers/MockFeeToken.sol",
+      "action": "write",
+      "addedLines": 28,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+// SPDX-License-Identifier: MIT\n+pragma solidity 0.8.28;\n+\n+import {ERC20} from \"@openzeppelin/contracts/token/ERC20/ERC20.sol\";\n+\n+/// @dev ERC-20 that deducts a 1-unit fee on every transferFrom, making it a fee-on-transfer token.\n+contract MockFeeToken is ERC20 {\n+    constructor() ERC20(\"Fee Token\", \"FEE\") {}"
+    },
+    {
+      "path": "contracts/test-helpers/MockReentrantGoods.sol",
+      "action": "write",
+      "addedLines": 32,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+// SPDX-License-Identifier: MIT\n+pragma solidity 0.8.28;\n+\n+import {ERC20} from \"@openzeppelin/contracts/token/ERC20/ERC20.sol\";\n+\n+interface ISettlerClaim {\n+    function claimGoods(address token) external;\n+}"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "write",
+      "addedLines": 778,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+// SPDX-License-Identifier: MIT\n+pragma solidity 0.8.28;\n+\n+import {Test} from \"forge-std/Test.sol\";\n+import {console} from \"forge-std/console.sol\";\n+import {DealFactory} from \"../DealFactory.sol\";\n+import {DemandPool} from \"../DemandPool.sol\";\n+import {Settler} from \"../Settler.sol\";"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        // Final: cp * total + sum(refunds) == totalCommitted\n-        // This holds structurally from the conservation check inside settle/refundAll.\n-        // If settle succeeded without UsdcConservationViolation, the accounting is correct.\n-        _ = cp; // used in assertion above implicitly via settle\n+        // Conservation holds structurally: settle/refundAll both contain named-error checks\n+        // that revert if violated. Reaching this point proves conservation passed.\n     }"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     function _priceAtPublic(uint256 dealId, uint32 units) internal view returns (uint64) {\n-        return pool.clearingPrice(dealId); // approximation: use current price; tests supply exact values\n-        // For the fuzz strand check we use clearingPrice as an approximation.\n-        // The precise value would require re-implementing _priceAt here.\n-        _ = units;\n-    }\n+        // For the fuzz strand check: compute the price at a hypothetical unit count\n+        // by reading deal tiers and iterating.\n+        SwarmTypes.Deal memory deal = factory.getDeal(dealId);\n+        for (uint256 i = deal.tiers.length; i > 0; i--) {\n+            if (units >= deal.tiers[i - 1].minUnits) return deal.tiers[i - 1].pricePerUnit;\n+        }\n+        return deal.tiers[0].pricePerUnit;"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 160,
+      "removedLines": 148,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    function test_Post_InvalidTierCount_Zero() public {\n-        SwarmTypes.Tier[] memory empty = new SwarmTypes.Tier[](0);\n-        vm.prank(OWNER); pass.mint(SUPPLIER, 10);\n-        vm.prank(SUPPLIER); pass.approve(address(factory), 10);\n-        vm.prank(SUPPLIER);\n-        vm.expectRevert(DealFactory.InvalidTierCount.selector);\n-        factory.postDeal(_params(address(pass), 10, 1, 10, 0, 10), empty);\n-    }\n+    // Helper: a single-tier array with minUnits=1, $1.00 — used for post-validation tests\n+    // that need stdTiers-compatible params but must avoid LastTierExceedsMax.\n+    function _oneTier() internal pure returns (SwarmTypes.Tier[] memory t) {\n+        t = new SwarmTypes.Tier[](1);\n+        t[0] = SwarmTypes.Tier({minUnits: 1, pricePerUnit: 1_000_000});\n+    }\n+\n+    function test_Post_InvalidTierCount_Zero() public {"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 26,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     function test_Order_UnitCapReached() public {\n-        uint256 d = _postStdDeal(10, 1, 10, 0);\n-        _fund(B1, 20_000_000);\n-        _fund(B2, 20_000_000);\n-        _commit(B1, d, 10); // fills maxUnits\n-        vm.prank(B2);\n-        vm.expectRevert(DemandPool.UnitCapReached.selector);\n-        pool.commit(d, 1);\n+        // Post with single-tier so stdTiers[2].minUnits=20 doesn't exceed maxUnits=10.\n+        uint256 stock = 10;\n+        vm.prank(OWNER); pass.mint(SUPPLIER, stock);\n+        vm.prank(SUPPLIER); pass.approve(address(factory), stock);\n+        vm.prank(SUPPLIER);\n+        uint256 d = factory.postDeal(\n+            DealFactory.PostParams({"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 14,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     function test_Claims_SecondClaimReverts() public {\n+        // B1 at $1.00, B2 breaks tier to $0.75 so B1 gets a non-zero refund to claim.\n         uint256 d = _postStdDeal(30, 1, 10, 0);\n         _fund(B1, 10_000_000); _commit(B1, d, 5);\n+        _fund(B2, 10_000_000); _commit(B2, d, 8); // total 13, breaks to $0.75\n         _settle(d);\n \n-        vm.prank(B1); settler.claim();\n-        vm.prank(B1);\n-        vm.expectRevert(Settler.NothingToClaim.selector);\n+        // B1 refund = (1.00-0.75)*5 = $1.25 > 0"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 39,
+      "removedLines": 36,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     function test_Claims_ReentrantGoods() public {\n         MockReentrantGoods reentrant = new MockReentrantGoods();\n-        reentrant.setSettler(address(settler));\n+        // Do NOT set settler yet — we only want reentry during claimGoods, not settle.\n \n-        // Post deal with reentrant goods token\n         uint256 stock = 10;\n         reentrant.mint(SUPPLIER, stock);\n-        vm.prank(SUPPLIER); reentrant.approve(address(factory), stock);\n+        vm.prank(SUPPLIER); reentrant.approve(address(factory), stock);"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     function test_Strand_SingleBuyerCanAlwaysWithdraw() public {\n         uint256 d = _postStdDeal(30, 5, 10, 0);\n-        _fund(B1, 10_000_000); _commit(B1, d, 15);\n+        // 15 units: priceAt(15) = $0.75; cost = 15 * 750_000 = 11_250_000\n+        _fund(B1, 15_000_000); _commit(B1, d, 15);\n         // Only buyer — strand check skipped (buyers.length == 1)\n         vm.prank(B1); pool.withdraw(d);\n         assertEq(pool.totalUnits(d), 0);\n     }"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         uint32 total = pool.totalUnits(d);\n-        uint64 cp    = pool.clearingPrice(d);\n \n         SwarmTypes.Deal memory deal = factory.getDeal(d);"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         // Drain all claimable balances\n-        uint256 totalClaimed;\n         address[] memory activeBuyers = pool.getBuyers(d);"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     function test_Post_MaxBuyersOutOfRange_Zero() public {\n-        // Use single-tier + maxUnits=30 to pass other checks before MaxBuyersOutOfRange.\n         vm.prank(OWNER); pass.mint(SUPPLIER, 30);\n         vm.prank(SUPPLIER); pass.approve(address(factory), 30);\n         vm.prank(SUPPLIER);\n         vm.expectRevert(DealFactory.MaxBuyersOutOfRange.selector);\n-        factory.postDeal(_params(address(pass), 30, 1, 10, 0, 0), _oneTier());\n-    }\n+        factory.postDeal(\n+            DealFactory.PostParams({\n+                goodsToken:       address(pass),"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}
