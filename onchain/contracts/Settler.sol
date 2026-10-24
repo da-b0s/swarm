@@ -10,56 +10,106 @@ import {ISettler} from "./DemandPool.sol";
 
 contract Settler is ReentrancyGuard, ISettler {
     // Key constraints:
-    // - All math in 6-decimal USDC micro-units; no msg.value anywhere
-    // - No block.prevrandao (Arc always returns 0)
-    // - ReentrancyGuard on settle, refundAll, claim
-    // - settle and refundAll are mutually exclusive; both check state==0 first (AlreadySettled)
-    // - Commit-time escrow: refund = escrowed[buyer] - clearingPrice; supplier gets cp * N
-    // - Conservation: sum(escrowed) == cp * N + sum(refunds), enforced via ConservationViolation named error
-    // - claimable[address] accumulates across deals and is never reset between deals
-    // - claim() zeroes claimable[msg.sender] then calls pool.pullForSettler — pull payments only
-    // - settle and refundAll are never gated by pause (no pause in Settler)
-    // - creditWithdrawal: callable only by DemandPool; credits claimable without moving USDC
+    // - No block.chainid checks; no block.prevrandao
+    // - ReentrancyGuard on settle, refundAll, claim, claimGoods
+    // - settle and refundAll are mutually exclusive (both check state==0)
+    // - Pull payments: claimable[address] for USDC; goodsClaimable[token][address] for ERC-20
+    // - claimable accumulates across deals; claim() drains entire balance
+    // - claimGoods(token) drains the caller's balance for a specific token
+    // - Conservation checked in-transaction with named errors, both assets:
+    //     USDC:  Σ escrowed == cp * totalUnits + Σ refunds
+    //     Goods: maxUnits * tokensPerUnit == Σ delivered + unsold
+    // - creditWithdrawal: callable only by DemandPool; credits claimable
+    // - settle and refundAll are never gated by pause
 
     DealFactory public immutable factory;
-    DemandPool public immutable pool;
+    DemandPool  public immutable pool;
     IERC20 public constant USDC = IERC20(0x3600000000000000000000000000000000000000);
 
-    mapping(address => uint256) public claimable;
+    mapping(address => uint256) public claimable;                        // USDC
+    mapping(address => mapping(address => uint256)) public goodsClaimable; // token → owner → amount
 
     address public owner;
 
-    event Settled(uint256 indexed dealId, uint64 clearingPrice, uint32 buyerCount, uint256 totalRefunds);
-    event Refunded(uint256 indexed dealId, address indexed buyer, uint256 amount);
+    // ── Events ────────────────────────────────────────────────────────────────
+
+    event Settled(
+        uint256 indexed dealId,
+        uint64  clearingPrice,
+        uint32  totalUnits,
+        uint32  buyerCount,
+        uint256 totalRefunds,
+        uint256 unitsDelivered
+    );
+    event Refunded(uint256 indexed dealId, address indexed buyer, uint256 usdcAmount);
     event Claimed(address indexed claimant, uint256 amount);
+    event GoodsClaimed(address indexed token, address indexed claimant, uint256 amount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    // ── Errors ────────────────────────────────────────────────────────────────
 
     error DealNotOpen();
     error DeadlineNotReached();
-    error MinBuyersNotMet();
-    error MinBuyersMet();
+    error MinUnitsNotMet();
+    error MinUnitsMet();
     error AlreadySettled();
     error NothingToClaim();
     error Unauthorized();
     error InvalidAddress();
-    error ConservationViolation();
+    error UsdcConservationViolation();
+    error GoodsConservationViolation();
+
+    // ── Modifiers ─────────────────────────────────────────────────────────────
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
         _;
     }
 
+    // ── Constructor ───────────────────────────────────────────────────────────
+
     constructor(address dealFactory, address demandPool, address _owner) {
-        if (dealFactory == address(0) || demandPool == address(0) || _owner == address(0)) revert InvalidAddress();
+        if (dealFactory == address(0) || demandPool == address(0) || _owner == address(0))
+            revert InvalidAddress();
         factory = DealFactory(dealFactory);
-        pool = DemandPool(demandPool);
-        owner = _owner;
+        pool    = DemandPool(demandPool);
+        owner   = _owner;
     }
+
+    // ── ISettler ──────────────────────────────────────────────────────────────
 
     function creditWithdrawal(address buyer, uint256 amount) external {
         if (msg.sender != address(pool)) revert Unauthorized();
         claimable[buyer] += amount;
     }
+
+    // ── internal helpers ──────────────────────────────────────────────────────
+
+    function _creditBuyers(
+        uint256 dealId,
+        address[] memory buyers,
+        uint64  cp,
+        address goodsToken,
+        uint256 tokensPerUnit
+    ) private returns (uint256 totalRefunds, uint256 totalEscrowed, uint256 unitsDelivered) {
+        for (uint256 i = 0; i < buyers.length; i++) {
+            address buyer  = buyers[i];
+            uint32  units  = pool.unitsOf(dealId, buyer);
+            uint64  paid   = pool.paidPerUnit(dealId, buyer);
+            uint256 escrow = pool.escrowed(dealId, buyer);
+
+            uint256 refund = (uint256(paid) - uint256(cp)) * uint256(units);
+            claimable[buyer] += refund;
+            totalRefunds     += refund;
+            totalEscrowed    += escrow;
+
+            uint256 goods = uint256(units) * tokensPerUnit;
+            goodsClaimable[goodsToken][buyer] += goods;
+            unitsDelivered += uint256(units);
+        }
+    }
+
+    // ── settle ────────────────────────────────────────────────────────────────
 
     function settle(uint256 dealId) external nonReentrant {
         SwarmTypes.Deal memory deal = factory.getDeal(dealId);
@@ -68,31 +118,42 @@ contract Settler is ReentrancyGuard, ISettler {
         if (block.timestamp < deal.deadline) revert DeadlineNotReached();
 
         address[] memory buyers = pool.getBuyers(dealId);
-        if (buyers.length < deal.minBuyers) revert MinBuyersNotMet();
+        uint32 totalUnitsSold = pool.totalUnits(dealId);
+        if (totalUnitsSold < deal.minUnits) revert MinUnitsNotMet();
 
         uint64 cp = pool.clearingPrice(dealId);
 
         factory.setDealState(dealId, 1);
 
-        uint256 buyerCount = buyers.length;
-        uint256 totalRefunds = 0;
-        uint256 totalEscrowed = 0;
+        // Pull all deposited goods from the factory to this contract so claimGoods can distribute.
+        factory.pullGoodsForSettler(dealId);
 
-        for (uint256 i = 0; i < buyerCount; i++) {
-            uint64 paid = pool.escrowed(dealId, buyers[i]);
-            uint256 refund = uint256(paid) - uint256(cp);
-            claimable[buyers[i]] += refund;
-            totalRefunds += refund;
-            totalEscrowed += uint256(paid);
+        (uint256 totalRefunds, uint256 totalEscrowed, uint256 unitsDelivered) =
+            _creditBuyers(dealId, buyers, cp, deal.goodsToken, deal.tokensPerUnit);
+
+        // Supplier USDC credit
+        uint256 supplierUsdc = uint256(cp) * uint256(totalUnitsSold);
+        claimable[deal.supplier] += supplierUsdc;
+
+        // Supplier unsold stock
+        uint256 unsoldUnits = uint256(deal.maxUnits) - uint256(totalUnitsSold);
+        uint256 unsoldGoods = unsoldUnits * deal.tokensPerUnit;
+        if (unsoldGoods > 0) {
+            goodsClaimable[deal.goodsToken][deal.supplier] += unsoldGoods;
         }
 
-        uint256 supplierCredit = uint256(cp) * buyerCount;
-        claimable[deal.supplier] += supplierCredit;
+        // Conservation: USDC
+        if (totalEscrowed != supplierUsdc + totalRefunds) revert UsdcConservationViolation();
 
-        if (totalEscrowed != supplierCredit + totalRefunds) revert ConservationViolation();
+        // Conservation: goods
+        uint256 totalStock     = uint256(deal.maxUnits) * deal.tokensPerUnit;
+        uint256 totalDelivered = unitsDelivered * deal.tokensPerUnit;
+        if (totalStock != totalDelivered + unsoldGoods) revert GoodsConservationViolation();
 
-        emit Settled(dealId, cp, uint32(buyerCount), totalRefunds);
+        emit Settled(dealId, cp, totalUnitsSold, uint32(buyers.length), totalRefunds, unitsDelivered);
     }
+
+    // ── refundAll ─────────────────────────────────────────────────────────────
 
     function refundAll(uint256 dealId) external nonReentrant {
         SwarmTypes.Deal memory deal = factory.getDeal(dealId);
@@ -100,18 +161,31 @@ contract Settler is ReentrancyGuard, ISettler {
         if (deal.state != 0) revert AlreadySettled();
         if (block.timestamp < deal.deadline) revert DeadlineNotReached();
 
-        address[] memory buyers = pool.getBuyers(dealId);
-        if (buyers.length >= deal.minBuyers) revert MinBuyersMet();
+        uint32 totalUnitsSold = pool.totalUnits(dealId);
+        if (totalUnitsSold >= deal.minUnits) revert MinUnitsMet();
 
         factory.setDealState(dealId, 2);
 
+        // Pull all deposited goods back from the factory so the supplier can claimGoods.
+        factory.pullGoodsForSettler(dealId);
+
+        address[] memory buyers = pool.getBuyers(dealId);
         uint256 buyerCount = buyers.length;
         for (uint256 i = 0; i < buyerCount; i++) {
-            uint256 amt = uint256(pool.escrowed(dealId, buyers[i]));
-            claimable[buyers[i]] += amt;
-            emit Refunded(dealId, buyers[i], amt);
+            address buyer  = buyers[i];
+            uint256 escrow = pool.escrowed(dealId, buyer);
+            claimable[buyer] += escrow;
+            emit Refunded(dealId, buyer, escrow);
+        }
+
+        // Return all stock to supplier
+        uint256 stock = uint256(deal.maxUnits) * deal.tokensPerUnit;
+        if (stock > 0) {
+            goodsClaimable[deal.goodsToken][deal.supplier] += stock;
         }
     }
+
+    // ── claim (USDC) ──────────────────────────────────────────────────────────
 
     function claim() external nonReentrant {
         uint256 amount = claimable[msg.sender];
@@ -122,6 +196,22 @@ contract Settler is ReentrancyGuard, ISettler {
 
         emit Claimed(msg.sender, amount);
     }
+
+    // ── claimGoods ────────────────────────────────────────────────────────────
+
+    function claimGoods(address token) external nonReentrant {
+        uint256 amount = goodsClaimable[token][msg.sender];
+        if (amount == 0) revert NothingToClaim();
+
+        goodsClaimable[token][msg.sender] = 0;
+
+        bool ok = IERC20(token).transfer(msg.sender, amount);
+        if (!ok) revert NothingToClaim(); // generic; real revert is from token
+
+        emit GoodsClaimed(token, msg.sender, amount);
+    }
+
+    // ── admin ─────────────────────────────────────────────────────────────────
 
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert InvalidAddress();

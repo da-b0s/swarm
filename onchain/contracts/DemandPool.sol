@@ -25,7 +25,6 @@ interface IUSDC3009 is IERC20 {
     ) external;
 
     /// @dev Returns true if the nonce has been used (or cancelled) for the given authorizer.
-    ///      Exists on the real Arc USDC implementation.
     function authorizationState(address authorizer, bytes32 nonce) external view returns (bool);
 
     function isBlacklisted(address account) external view returns (bool);
@@ -34,68 +33,80 @@ interface IUSDC3009 is IERC20 {
 contract DemandPool is ReentrancyGuard {
     // Key constraints:
     // - All math in 6-decimal USDC micro-units; no msg.value anywhere
-    // - No block.prevrandao (Arc always returns 0)
+    // - No block.prevrandao (Arc always returns 0); no block.chainid checks
     // - ReentrancyGuard on commit, commitWithAuthorization, withdraw, pullForSettler
-    // - Commit-time escrow: each buyer pays clearingPrice(post-add); stored in escrowed[dealId][buyer]
-    // - tierCount[dealId][price] tracks buyers at each price tier for O(tiers) WouldStrandBuyer check
-    // - WouldStrandBuyer: withdraw refused if any remaining buyer escrowed less than newPrice
-    // - One commit per address per deal; swap-and-pop with index update for removal
+    // - Buyers order a quantity (units >= 1). Price tiers count total units ordered.
+    // - paidPerUnit[buyer] = priceAt(totalUnits + units) — the price including the buyer's order.
+    // - escrowed[dealId][buyer] = paidPerUnit * units
+    // - tierCount[dealId][price] tracks buyers at each per-unit price for O(tiers) strand check
+    // - WouldStrandBuyer: withdraw refused if any remaining buyer's paidPerUnit < newPrice
+    //   where newPrice = priceAt(totalUnits - unitsOf[caller])
+    // - One order per buyer; no adding to an existing order in v2
     // - Owner pause() (in factory) halts commit and commitWithAuthorization;
     //   withdraw/settle/refundAll/claim are never halted
-    // - Pull payments everywhere: withdraw() credits Settler.claimable, never transfers USDC directly
-    // - commit() and commitWithAuthorization() revert SettlerNotConfigured if settler not yet wired
+    // - Pull payments: withdraw credits Settler.claimable, never transfers USDC directly
     //
     // gasless commit (EIP-3009):
-    // - Uses receiveWithAuthorization (NOT transferWithAuthorization): the payee check
-    //   (`to == msg.sender`) means only the pool can submit the transfer, binding the
-    //   USDC movement to a commit. transferWithAuthorization could be submitted directly
-    //   to the USDC contract by anyone, depositing funds with no commit recorded.
-    // - The EIP-3009 nonce is keccak256(abi.encode(address(this), dealId, buyer, salt)).
-    //   Changing dealId or the pool address changes the nonce, invalidating the signature
-    //   for any other deal or contract. A relayer cannot redirect a signed commit.
-    // - If authorized amount > live price: escrow live price, credit excess via ISettler.creditWithdrawal.
-    // - If authorized amount < live price: revert PriceRoseBeyondAuthorization(newPrice).
-    // - A reused nonce hits USDC's replay guard, which we surface as AuthorizationAlreadyUsed.
+    // - Uses receiveWithAuthorization: the payee check (to == msg.sender) means only
+    //   the pool can submit the transfer, binding USDC movement to a commit.
+    // - Nonce = keccak256(abi.encode(address(this), dealId, buyer, units, salt)).
+    //   Binding units means a relayer cannot change how many units the signature buys.
+    // - If authorized > live total (units * priceAfter): credit excess via creditWithdrawal.
+    // - If authorized < live total: revert PriceRoseBeyondAuthorization(newTotal).
 
     DealFactory public immutable factory;
     IUSDC3009 public constant USDC = IUSDC3009(0x3600000000000000000000000000000000000000);
 
+    // Per-deal order book
     mapping(uint256 => address[]) private _buyers;
     mapping(uint256 => mapping(address => uint256)) private _buyerIndex; // 1-based
-    mapping(uint256 => mapping(address => uint64)) public escrowed; // per-buyer commit price
-    mapping(uint256 => mapping(uint64 => uint32)) public tierCount; // buyers escrowed at each price
+    mapping(uint256 => uint32) public totalUnits;                        // running sum of units ordered
+    mapping(uint256 => mapping(address => uint32)) public unitsOf;       // units ordered by buyer
+    mapping(uint256 => mapping(address => uint64)) public paidPerUnit;   // per-unit price at commit
+    mapping(uint256 => mapping(address => uint256)) public escrowed;     // paidPerUnit * units
+    mapping(uint256 => mapping(uint64 => uint32)) public tierCount;      // buyers at each per-unit price
 
     address public owner;
     address public settler;
     bool public settlerSet;
 
+    // ── Events ────────────────────────────────────────────────────────────────
+
     event Committed(
         uint256 indexed dealId,
         address indexed buyer,
-        uint64 pricePaid,
-        uint64 livePrice,
-        uint32 buyerCount
+        uint32  units,
+        uint64  paidPerUnit,
+        uint256 escrow,
+        uint64  livePrice,
+        uint32  totalUnits,
+        uint32  buyerCount
     );
     event Withdrawn(
         uint256 indexed dealId,
         address indexed buyer,
-        uint64 amountReturned,
-        uint64 livePrice,
-        uint32 buyerCount
+        uint256 amountReturned,
+        uint64  livePrice,
+        uint32  totalUnits,
+        uint32  buyerCount
     );
-    event TierBroken(uint256 indexed dealId, uint32 newBuyerCount, uint64 newPrice);
+    event TierBroken(uint256 indexed dealId, uint32 newTotalUnits, uint64 newPrice);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SettlerSet(address indexed settler);
-    /// @dev Emitted when a gasless commit's authorized amount exceeded the live
-    ///      price. The excess is credited to the buyer's claimable balance via the
-    ///      settler so the proof page can account for every dollar received.
+    /// @dev Emitted when a gasless commit's authorized amount exceeded the live cost.
+    ///      The excess is credited to the buyer's claimable balance via the settler.
     event ExcessCredited(uint256 indexed dealId, address indexed buyer, uint256 amount);
+
+    // ── Errors ────────────────────────────────────────────────────────────────
 
     error DealNotOpen();
     error DeadlinePassed();
     error AlreadyCommitted();
     error NotCommitted();
     error BuyerCapReached();
+    error UnitCapReached();            // totalUnits + units > maxUnits
+    error ZeroUnits();                 // units == 0
+    error UnitsPerBuyerExceeded();     // units > maxUnitsPerBuyer when set
     error WouldStrandBuyer();
     error SettlerNotConfigured();
     error Unauthorized();
@@ -103,18 +114,19 @@ contract DemandPool is ReentrancyGuard {
     error SettlerAlreadySet();
     error TransferFailed();
     error Paused();
-    /// @dev The price rose above the authorized amount between signing and landing.
-    ///      The relayer must re-quote, ask the buyer to re-sign, and retry.
-    error PriceRoseBeyondAuthorization(uint64 requiredPrice);
-    /// @dev The EIP-3009 authorization nonce was already consumed.
+    /// @dev Price rose above authorized amount. `newTotal` is the new required payment = priceAfter * units.
+    error PriceRoseBeyondAuthorization(uint256 newTotal);
     error AuthorizationAlreadyUsed();
-    /// @dev One or both addresses involved in the commit are USDC-blocklisted.
     error Blocklisted();
+
+    // ── Modifiers ─────────────────────────────────────────────────────────────
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
         _;
     }
+
+    // ── Constructor ───────────────────────────────────────────────────────────
 
     constructor(address dealFactory, address _owner) {
         if (dealFactory == address(0) || _owner == address(0)) revert InvalidAddress();
@@ -124,116 +136,138 @@ contract DemandPool is ReentrancyGuard {
 
     // ── Clearing price ────────────────────────────────────────────────────────
 
-    function _clearingPriceAt(uint256 dealId, uint256 count) private view returns (uint64) {
+    /// @dev priceAt(units) = pricePerUnit of the highest tier whose minUnits <= units,
+    ///      or tiers[0].pricePerUnit if below the first threshold.
+    function _priceAt(uint256 dealId, uint256 units) private view returns (uint64) {
         SwarmTypes.Deal memory deal = factory.getDeal(dealId);
-
-        if (deal.tiers.length == 0) {
-            return 0;
-        }
-
+        if (deal.tiers.length == 0) return 0;
         for (uint256 i = deal.tiers.length; i > 0; i--) {
-            if (count >= deal.tiers[i - 1].minBuyers) {
+            if (units >= deal.tiers[i - 1].minUnits) {
                 return deal.tiers[i - 1].pricePerUnit;
             }
         }
-
         return deal.tiers[0].pricePerUnit;
     }
 
+    /// @dev Live clearing price = priceAt(totalUnits).
     function clearingPrice(uint256 dealId) public view returns (uint64) {
-        return _clearingPriceAt(dealId, _buyers[dealId].length);
+        return _priceAt(dealId, totalUnits[dealId]);
     }
 
     // ── Shared commit logic ───────────────────────────────────────────────────
 
-    /**
-     * @dev Core state mutation shared by commit() and commitWithAuthorization().
-     *      All preconditions have been checked before this is called.
-     *      Returns the price actually escrowed.
-     */
-    function _doCommit(uint256 dealId, address buyer) private returns (uint64 priceAfter) {
-        uint64 priceBefore = _clearingPriceAt(dealId, _buyers[dealId].length);
-
-        _buyers[dealId].push(buyer);
-        _buyerIndex[dealId][buyer] = _buyers[dealId].length;
-
-        priceAfter = _clearingPriceAt(dealId, _buyers[dealId].length);
-
-        escrowed[dealId][buyer] = priceAfter;
-        tierCount[dealId][priceAfter] += 1;
-
-        if (priceAfter != priceBefore) {
-            emit TierBroken(dealId, uint32(_buyers[dealId].length), priceAfter);
-        }
-
-        emit Committed(dealId, buyer, priceAfter, priceAfter, uint32(_buyers[dealId].length));
-    }
-
-    function _checkCommitPreconditions(uint256 dealId, address buyer) private view {
+    function _checkCommitPreconditions(
+        uint256 dealId,
+        address buyer,
+        uint32  units
+    ) private view {
         if (!settlerSet) revert SettlerNotConfigured();
+        if (factory.paused()) revert Paused();
         SwarmTypes.Deal memory deal = factory.getDeal(dealId);
         if (deal.state != 0) revert DealNotOpen();
         if (block.timestamp >= deal.deadline) revert DeadlinePassed();
         if (_buyerIndex[dealId][buyer] != 0) revert AlreadyCommitted();
-        if (_buyers[dealId].length >= deal.cap) revert BuyerCapReached();
-        if (factory.paused()) revert Paused();
+        if (_buyers[dealId].length >= deal.maxBuyers) revert BuyerCapReached();
+        if (units == 0) revert ZeroUnits();
+        if (deal.maxUnitsPerBuyer != 0 && units > deal.maxUnitsPerBuyer) revert UnitsPerBuyerExceeded();
+        if (uint256(totalUnits[dealId]) + uint256(units) > uint256(deal.maxUnits)) revert UnitCapReached();
+    }
+
+    /**
+     * @dev Core state mutation shared by commit() and commitWithAuthorization().
+     *      All preconditions must be checked before calling.
+     *      @return priceAfterPerUnit  The per-unit price actually escrowed.
+     *      @return escrowAmount       priceAfterPerUnit * units (total USDC to be taken from buyer).
+     */
+    function _doCommit(
+        uint256 dealId,
+        address buyer,
+        uint32  units
+    ) private returns (uint64 priceAfterPerUnit, uint256 escrowAmount) {
+        uint64 priceBefore = _priceAt(dealId, totalUnits[dealId]);
+
+        // Add units first so that priceAt reflects the buyer's own contribution.
+        totalUnits[dealId] += units;
+
+        priceAfterPerUnit = _priceAt(dealId, totalUnits[dealId]);
+        escrowAmount      = uint256(priceAfterPerUnit) * uint256(units);
+
+        _buyers[dealId].push(buyer);
+        _buyerIndex[dealId][buyer]  = _buyers[dealId].length;
+        unitsOf[dealId][buyer]      = units;
+        paidPerUnit[dealId][buyer]  = priceAfterPerUnit;
+        escrowed[dealId][buyer]     = escrowAmount;
+        tierCount[dealId][priceAfterPerUnit] += 1;
+
+        if (priceAfterPerUnit != priceBefore) {
+            emit TierBroken(dealId, totalUnits[dealId], priceAfterPerUnit);
+        }
+
+        emit Committed(
+            dealId,
+            buyer,
+            units,
+            priceAfterPerUnit,
+            escrowAmount,
+            priceAfterPerUnit,
+            totalUnits[dealId],
+            uint32(_buyers[dealId].length)
+        );
     }
 
     // ── commit (standard approve + transferFrom) ──────────────────────────────
 
-    function commit(uint256 dealId) external nonReentrant {
-        _checkCommitPreconditions(dealId, msg.sender);
+    function commit(uint256 dealId, uint32 units) external nonReentrant {
+        _checkCommitPreconditions(dealId, msg.sender, units);
 
-        uint64 priceAfter = _doCommit(dealId, msg.sender);
+        (, uint256 escrowAmount) = _doCommit(dealId, msg.sender, units);
 
-        bool ok = USDC.transferFrom(msg.sender, address(this), priceAfter);
+        bool ok = USDC.transferFrom(msg.sender, address(this), escrowAmount);
         if (!ok) revert TransferFailed();
     }
 
     // ── commitWithAuthorization (EIP-3009 gasless) ────────────────────────────
 
     /**
-     * @dev Derive the EIP-3009 nonce that a buyer must use when signing for a
-     *      specific deal. Commits this contract address, dealId, buyer, and a
-     *      caller-supplied salt into a single bytes32.
-     *
-     *      Binding address(this) and dealId means the same signature cannot be
-     *      replayed against a different deal or a different pool contract.
-     *      The salt lets the buyer sign multiple times for the same deal (e.g.
-     *      after a PriceRoseBeyondAuthorization revert) without nonce collision.
+     * @dev Derive the EIP-3009 nonce for a gasless commit. Binds this contract,
+     *      dealId, buyer, units and a caller-supplied salt into a single bytes32.
+     *      Changing any of these values produces a different nonce; a relayer
+     *      cannot change how many units the buyer's signature covers.
      */
     function authorizationNonce(
         uint256 dealId,
         address buyer,
+        uint32  units,
         bytes32 salt
     ) public view returns (bytes32) {
-        return keccak256(abi.encode(address(this), dealId, buyer, salt));
+        return keccak256(abi.encode(address(this), dealId, buyer, units, salt));
     }
 
     /**
      * @dev Gasless commit. The buyer signs a ReceiveWithAuthorization for
-     *      `authorizedAmount` USDC to this contract. A relayer submits this
-     *      transaction and pays gas; the buyer is the signer, never msg.sender.
+     *      `authorizedAmount` USDC to this contract covering `units` units.
+     *      A relayer submits and pays gas; the buyer is the signer, never msg.sender.
      *
-     *      The authorized amount must be at least the live clearing price. If it
-     *      is larger (because the price fell between signing and landing), the
-     *      excess is credited to the buyer's claimable balance — the buyer pays
-     *      only the clearing price, just as with a standard commit.
-     *
-     *      If the price has risen above authorizedAmount, reverts with
-     *      PriceRoseBeyondAuthorization(newPrice) so the relayer can re-quote.
-     *
-     * @param dealId          The deal to commit to.
-     * @param buyer           The signer (their USDC is moved; they are recorded as the committer).
-     * @param authorizedAmount The value field in the signed authorization.
-     * @param validAfter      EIP-3009 validAfter.
-     * @param validBefore     EIP-3009 validBefore.
-     * @param salt            Mixed into the nonce; the buyer must use the same salt when signing.
-     * @param v,r,s           The buyer's signature over the ReceiveWithAuthorization struct.
+     *      If authorized > priceAfter * units: escrow the live cost, credit excess.
+     *      If authorized < priceAfter * units: revert PriceRoseBeyondAuthorization(newTotal).
      */
+    struct AuthParams {
+        uint256 dealId;
+        address buyer;
+        uint32  units;
+        uint256 authorizedAmount;
+        uint256 validAfter;
+        uint256 validBefore;
+        bytes32 salt;
+        uint8   v;
+        bytes32 r;
+        bytes32 s;
+    }
+
     function commitWithAuthorization(
         uint256 dealId,
         address buyer,
+        uint32  units,
         uint256 authorizedAmount,
         uint256 validAfter,
         uint256 validBefore,
@@ -242,77 +276,82 @@ contract DemandPool is ReentrancyGuard {
         bytes32 r,
         bytes32 s
     ) external nonReentrant {
-        // Screen for blocklisted addresses before doing anything — a blocklisted
-        // address causes the USDC transfer to revert and still burns gas.
-        if (USDC.isBlacklisted(buyer) || USDC.isBlacklisted(msg.sender)) revert Blocklisted();
+        _commitWithAuth(AuthParams({
+            dealId:           dealId,
+            buyer:            buyer,
+            units:            units,
+            authorizedAmount: authorizedAmount,
+            validAfter:       validAfter,
+            validBefore:      validBefore,
+            salt:             salt,
+            v:                v,
+            r:                r,
+            s:                s
+        }));
+    }
 
-        // Derive the nonce and check for replay BEFORE the commit preconditions
-        // (before AlreadyCommitted), so that a relayer replaying a spent nonce gets
-        // AuthorizationAlreadyUsed rather than AlreadyCommitted — a cleaner signal.
-        bytes32 nonce = authorizationNonce(dealId, buyer, salt);
-        if (USDC.authorizationState(buyer, nonce)) revert AuthorizationAlreadyUsed();
+    function _commitWithAuth(AuthParams memory a) private {
+        // Screen for blocklisted addresses first.
+        if (USDC.isBlacklisted(a.buyer) || USDC.isBlacklisted(msg.sender)) revert Blocklisted();
 
-        _checkCommitPreconditions(dealId, buyer);
+        // Pre-check nonce before preconditions so replay → AuthorizationAlreadyUsed.
+        bytes32 nonce = authorizationNonce(a.dealId, a.buyer, a.units, a.salt);
+        if (USDC.authorizationState(a.buyer, nonce)) revert AuthorizationAlreadyUsed();
 
-        // We need to know the price before we move state, so peek at
-        // what the price will be after adding the buyer.
-        uint64 priceAfter = _clearingPriceAt(dealId, _buyers[dealId].length + 1);
+        _checkCommitPreconditions(a.dealId, a.buyer, a.units);
 
-        // Revert early if the signed amount won't cover it — before any state change.
-        if (authorizedAmount < uint256(priceAfter)) {
-            revert PriceRoseBeyondAuthorization(priceAfter);
+        // Peek at cost with buyer's units included.
+        uint256 requiredTotal = uint256(_priceAt(a.dealId, uint256(totalUnits[a.dealId]) + uint256(a.units))) * uint256(a.units);
+        if (a.authorizedAmount < requiredTotal) {
+            revert PriceRoseBeyondAuthorization(requiredTotal);
         }
 
-        // Pull exactly authorizedAmount from the buyer via receiveWithAuthorization.
+        // Pull exactly authorizedAmount from the buyer.
         USDC.receiveWithAuthorization(
-            buyer,
+            a.buyer,
             address(this),
-            authorizedAmount,
-            validAfter,
-            validBefore,
+            a.authorizedAmount,
+            a.validAfter,
+            a.validBefore,
             nonce,
-            v, r, s
+            a.v, a.r, a.s
         );
 
-        // Now record the commit. The price is computed again inside _doCommit
-        // from the actual post-add count; it must match what we computed above
-        // (same block, count increased by exactly 1).
-        uint64 escrowedPrice = _doCommit(dealId, buyer);
+        // Record the commit.
+        (, uint256 escrowAmount) = _doCommit(a.dealId, a.buyer, a.units);
 
-        // Credit any excess to the buyer's settler claimable balance.
-        uint256 excess = authorizedAmount - uint256(escrowedPrice);
+        // Credit any excess back to the buyer.
+        uint256 excess = a.authorizedAmount - escrowAmount;
         if (excess > 0) {
-            ISettler(settler).creditWithdrawal(buyer, excess);
-            emit ExcessCredited(dealId, buyer, excess);
+            ISettler(settler).creditWithdrawal(a.buyer, excess);
+            emit ExcessCredited(a.dealId, a.buyer, excess);
         }
     }
 
     // ── withdraw ──────────────────────────────────────────────────────────────
 
-    /// Returns the lowest price escrowed by any buyer in the deal EXCLUDING the caller's price.
-    function _lowestEscrowedExcluding(
+    /// @dev Returns the lowest paidPerUnit among remaining buyers, excluding the caller's tier.
+    function _lowestPaidExcluding(
         uint256 dealId,
         SwarmTypes.Tier[] memory tiers,
-        uint64 excludePrice
+        uint64  excludePrice
     ) private view returns (uint64 lowest) {
         for (uint256 i = tiers.length; i > 0; i--) {
-            uint64 tp = tiers[i - 1].pricePerUnit;
+            uint64 tp  = tiers[i - 1].pricePerUnit;
             uint32 cnt = tierCount[dealId][tp];
             if (tp == excludePrice && cnt > 0) cnt -= 1;
-            if (cnt > 0) {
-                return tp;
-            }
+            if (cnt > 0) return tp;
         }
         return 0;
     }
 
     function _removeBuyer(uint256 dealId, address buyer, uint256 buyerPos) private returns (uint256) {
         uint256 lastIdx = _buyers[dealId].length - 1;
-        uint256 idx = buyerPos - 1;
+        uint256 idx     = buyerPos - 1;
         if (idx != lastIdx) {
             address last = _buyers[dealId][lastIdx];
-            _buyers[dealId][idx] = last;
-            _buyerIndex[dealId][last] = idx + 1;
+            _buyers[dealId][idx]       = last;
+            _buyerIndex[dealId][last]  = idx + 1;
         }
         _buyers[dealId].pop();
         delete _buyerIndex[dealId][buyer];
@@ -329,28 +368,35 @@ contract DemandPool is ReentrancyGuard {
         uint256 buyerPos = _buyerIndex[dealId][msg.sender];
         if (buyerPos == 0) revert NotCommitted();
 
-        uint256 newCount = _buyers[dealId].length - 1;
-        uint64 newPrice = _clearingPriceAt(dealId, newCount);
+        uint32 units   = unitsOf[dealId][msg.sender];
+        uint32 newTotal = totalUnits[dealId] - units;
+        uint64 newPrice = _priceAt(dealId, newTotal);
 
-        if (newCount > 0) {
-            uint64 lowest = _lowestEscrowedExcluding(dealId, deal.tiers, escrowed[dealId][msg.sender]);
+        // Strand check: any remaining buyer whose paidPerUnit < newPrice would be undercharged.
+        if (_buyers[dealId].length > 1) {
+            uint64 lowest = _lowestPaidExcluding(dealId, deal.tiers, paidPerUnit[dealId][msg.sender]);
             if (lowest > 0 && lowest < newPrice) revert WouldStrandBuyer();
         }
 
-        uint64 amount = escrowed[dealId][msg.sender];
-        uint64 priceBefore = _clearingPriceAt(dealId, _buyers[dealId].length);
+        uint256 escrowAmt   = escrowed[dealId][msg.sender];
+        uint64  paid        = paidPerUnit[dealId][msg.sender];
+        uint64  priceBefore = _priceAt(dealId, totalUnits[dealId]);
 
+        totalUnits[dealId] = newTotal;
         _removeBuyer(dealId, msg.sender, buyerPos);
-        tierCount[dealId][amount] -= 1;
+        tierCount[dealId][paid] -= 1;
         delete escrowed[dealId][msg.sender];
+        delete unitsOf[dealId][msg.sender];
+        delete paidPerUnit[dealId][msg.sender];
 
-        uint64 priceAfter = _clearingPriceAt(dealId, _buyers[dealId].length);
+        uint64 priceAfter  = _priceAt(dealId, newTotal);
+        uint32 buyerCount  = uint32(_buyers[dealId].length);
         if (priceAfter != priceBefore) {
-            emit TierBroken(dealId, uint32(_buyers[dealId].length), priceAfter);
+            emit TierBroken(dealId, newTotal, priceAfter);
         }
 
-        ISettler(settler).creditWithdrawal(msg.sender, amount);
-        emit Withdrawn(dealId, msg.sender, amount, priceAfter, uint32(_buyers[dealId].length));
+        ISettler(settler).creditWithdrawal(msg.sender, escrowAmt);
+        emit Withdrawn(dealId, msg.sender, escrowAmt, priceAfter, newTotal, buyerCount);
     }
 
     // ── settler helpers ───────────────────────────────────────────────────────
@@ -376,7 +422,7 @@ contract DemandPool is ReentrancyGuard {
     function setSettler(address _settler) external onlyOwner {
         if (settlerSet) revert SettlerAlreadySet();
         if (_settler == address(0)) revert InvalidAddress();
-        settler = _settler;
+        settler  = _settler;
         settlerSet = true;
         emit SettlerSet(_settler);
     }
