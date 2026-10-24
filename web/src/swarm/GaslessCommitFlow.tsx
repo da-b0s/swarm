@@ -1,53 +1,46 @@
 /**
- * GaslessCommitFlow — buyer signs once, relayer submits and pays gas.
+ * GaslessCommitFlow v2 — buyer signs once for N units, relayer submits and pays gas.
  *
- * The buyer signs a ReceiveWithAuthorization EIP-712 message for
- * `authorizedAmount` USDC to the DemandPool. The relayer simulates,
- * screens, and relays the commitWithAuthorization call.
+ * Signs ReceiveWithAuthorization for `priceAt(totalUnits + units) × units` USDC.
+ * The nonce binds pool, dealId, buyer, units and salt — a relayer cannot change
+ * the quantity a signature covers.
  *
- * Domain: { name: "USDC", version: "2", chainId, verifyingContract: 0x3600… }
- * chainId comes from the active network config — never a constant.
- *
- * Price-rose (409): the relayer returns the required price; we show it and
- * let the buyer sign again at the new price. Never an unexplained failure.
- *
- * Excess credited: if the price fell between signing and landing, the
- * relayer returns excessCredited from the receipt, which we show as a
- * claim note.
+ * On 409: price rose above authorization; show the new total and ask to sign again.
+ * On excess: price fell after signing; the relayer returns the credited amount.
  */
 
 import { useState, useCallback } from 'react'
 import { useAccount, useSignTypedData, useSwitchChain, useReadContract } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Loader2, ExternalLink, CheckCircle, AlertCircle, Zap } from 'lucide-react'
-import { formatUsdcPrice, txUrl } from './utils'
+import { Loader2, ExternalLink, CheckCircle, AlertCircle, Zap, Plus, Minus } from 'lucide-react'
+import { formatUsdcPrice, txUrl, computeOrderTotal } from './utils'
 import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL } from './config'
 import { DEMAND_POOL_ABI } from './abis'
 import { useChainNow } from './hooks'
+import type { DealTier } from './hooks'
 
 interface Props {
-  dealId: bigint
-  clearingPrice: bigint
-  deadline: bigint
-  state: number
-  onCommitted: () => void
-  onFallback: () => void   // user chose the approve-then-commit path
+  dealId:           bigint
+  clearingPrice:    bigint
+  totalUnits:       number
+  tiers:            DealTier[]
+  maxUnits:         number
+  maxUnitsPerBuyer: number
+  deadline:         bigint
+  state:            number
+  goodsToken:       `0x${string}`
+  goodsSymbol:      string
+  tokensPerUnit:    bigint
+  onCommitted:      () => void
+  onFallback:       () => void
 }
 
-type GaslessStep =
-  | 'idle'
-  | 'signing'
-  | 'submitting'
-  | 'done'
-  | 'error'
+type GaslessStep = 'idle' | 'signing' | 'submitting' | 'done' | 'error'
 
 const CHAIN_ID = ARC_NETWORK.chainId
-
-// Validity window for the authorization: 10 minutes from now.
 const VALIDITY_WINDOW_SEC = 600
 
-// ReceiveWithAuthorization EIP-712 types (from the USDC FiatTokenV2.2 spec).
 const RECEIVE_WITH_AUTH_TYPES = {
   ReceiveWithAuthorization: [
     { name: 'from',        type: 'address' },
@@ -65,34 +58,53 @@ function randomSalt(): `0x${string}` {
 }
 
 export function GaslessCommitFlow({
-  dealId, clearingPrice, deadline, state, onCommitted, onFallback,
+  dealId, clearingPrice: _clearingPrice, totalUnits, tiers, maxUnits, maxUnitsPerBuyer,
+  deadline, state, goodsToken: _goodsToken, goodsSymbol, tokensPerUnit,
+  onCommitted, onFallback,
 }: Props) {
   const { address, isConnected, chainId: walletChain } = useAccount()
-  const { switchChain } = useSwitchChain()
+  const { switchChain }   = useSwitchChain()
   const { signTypedData } = useSignTypedData()
   const nowSec = useChainNow()
 
   const isPastDeadline = nowSec > 0 && Number(deadline) <= nowSec
-  const isOpen = state === 0
-  const wrongChain = isConnected && walletChain !== CHAIN_ID
+  const isOpen         = state === 0
+  const wrongChain     = isConnected && walletChain !== CHAIN_ID
 
-  // The price we'll sign for. Can be updated if a 409 raises it.
-  const [signPrice, setSignPrice] = useState<bigint | null>(null)
-  const priceToSign = signPrice ?? clearingPrice
+  // Quantity picker — clamp during render, never in an effect
+  const remainingStock = maxUnits - totalUnits
+  const perBuyerLimit  = maxUnitsPerBuyer > 0 ? maxUnitsPerBuyer : remainingStock
+  const maxOrderable   = Math.min(remainingStock, perBuyerLimit)
+  const [rawUnits, setUnits] = useState(1)
+  const units = maxOrderable > 0 ? Math.min(rawUnits, maxOrderable) : 1
 
-  const [step, setStep]   = useState<GaslessStep>('idle')
-  const [errMsg, setErrMsg] = useState('')
-  const [txHash, setTxHash] = useState<`0x${string}` | null>(null)
-  const [pricePaid, setPricePaid] = useState<bigint | null>(null)
-  const [excess, setExcess]       = useState<bigint | null>(null)
   const [salt, setSalt] = useState<`0x${string}`>(() => randomSalt())
 
-  // Read authorizationNonce from the pool (view call, no wallet needed).
+  // What the buyer will pay (includes their own units)
+  const { paidPerUnit: quotedPPU, total: quotedTotal, breaksTier } = computeOrderTotal(tiers, totalUnits, units)
+  const tokensReceived = BigInt(units) * tokensPerUnit
+
+  // On 409, show the updated total and ask to sign again
+  const [signTotal, setSignTotal] = useState<bigint | null>(null)
+  const totalToSign = signTotal ?? quotedTotal
+
+  const [step,     setStep]     = useState<GaslessStep>('idle')
+  const [errMsg,   setErrMsg]   = useState('')
+  const [txHash,   setTxHash]   = useState<`0x${string}` | null>(null)
+  const [pricePaid, setPricePaid] = useState<bigint | null>(null)
+  const [excess,    setExcess]    = useState<bigint | null>(null)
+
+  // Read authorizationNonce — v2 includes units in the nonce derivation
   const { data: nonce, refetch: refetchNonce } = useReadContract({
     address: CONTRACTS_ACTIVE.DemandPool,
     abi: DEMAND_POOL_ABI,
     functionName: 'authorizationNonce',
-    args: [dealId, address ?? '0x0000000000000000000000000000000000000000', salt],
+    args: [
+      dealId,
+      address ?? '0x0000000000000000000000000000000000000000',
+      units,        // bound in nonce
+      salt,
+    ],
     chainId: CHAIN_ID,
     query: { enabled: !!address },
   })
@@ -105,17 +117,9 @@ export function GaslessCommitFlow({
     setStep('signing')
 
     const validAfter  = 0n
-    // validBefore: chain time + 10 min. useChainNow() may return 0 until the
-    // first block arrives; fall back to local time for the initial render.
-    const baseNow = nowSec > 0 ? nowSec : Math.floor(Date.now() / 1000)
+    const baseNow     = nowSec > 0 ? nowSec : Math.floor(Date.now() / 1000)
     const validBefore = BigInt(baseNow + VALIDITY_WINDOW_SEC)
-
-    // Sign for the live price the buyer will actually pay: clearingPrice at
-    // count+1. The contract charges at most this amount; if another commit
-    // breaks a tier first the difference is credited back. If a withdrawal
-    // pushed the price up, the relayer returns 409 and we re-sign at the
-    // new price via the errMsg path already in place.
-    const authorizedAmount = priceToSign
+    const authorizedAmount = totalToSign
 
     try {
       const sig = await new Promise<`0x${string}`>((resolve, reject) => {
@@ -150,6 +154,7 @@ export function GaslessCommitFlow({
         body: JSON.stringify({
           dealId:           dealId.toString(),
           buyer:            address,
+          units:            units,
           authorizedAmount: authorizedAmount.toString(),
           validAfter:       validAfter.toString(),
           validBefore:      validBefore.toString(),
@@ -159,23 +164,21 @@ export function GaslessCommitFlow({
       })
 
       const data = await res.json() as {
-        txHash?: string
-        pricePaid?: string
+        txHash?:         string
+        pricePaid?:      string
         excessCredited?: string
-        error?: string
-        requiredPrice?: string
+        error?:          string
+        requiredPrice?:  string
       }
 
       if (res.status === 409 && data.requiredPrice) {
-        // Price rose above what we authorised. Show the new price and ask
-        // the buyer to sign again with a fresh salt and the new price.
-        const newPrice = BigInt(data.requiredPrice)
-        setSignPrice(newPrice)
+        const newTotal = BigInt(data.requiredPrice)
+        setSignTotal(newTotal)
         setSalt(randomSalt())
         void refetchNonce()
         setErrMsg(
-          `Price rose to ${formatUsdcPrice(newPrice)} before your commit landed. ` +
-          `Sign again at the new price to continue.`
+          `Price rose — order now costs ${formatUsdcPrice(newTotal)}. ` +
+          `Sign again at the new total to continue.`
         )
         setStep('idle')
         return
@@ -188,51 +191,44 @@ export function GaslessCommitFlow({
       }
 
       setTxHash(data.txHash as `0x${string}`)
-      setPricePaid(data.pricePaid ? BigInt(data.pricePaid) : null)
-      setExcess(data.excessCredited ? BigInt(data.excessCredited) : null)
+      setPricePaid(data.pricePaid      ? BigInt(data.pricePaid)      : null)
+      setExcess(  data.excessCredited  ? BigInt(data.excessCredited) : null)
       setStep('done')
       onCommitted()
     } catch (e: unknown) {
       setErrMsg((e as Error).message ?? 'Signing failed')
       setStep('error')
     }
-  }, [address, isConnected, wrongChain, nonce, nowSec, priceToSign, dealId, salt, signTypedData, refetchNonce, onCommitted])
+  }, [
+    address, isConnected, wrongChain, nonce, nowSec,
+    totalToSign, dealId, units, salt, signTypedData, refetchNonce, onCommitted,
+  ])
 
   const reset = () => {
     setStep('idle')
     setErrMsg('')
-    setSignPrice(null)
+    setSignTotal(null)
     setSalt(randomSalt())
     void refetchNonce()
   }
 
-  // ── Guards ───────────────────────────────────────────────────────────────────
-
   if (!RELAYER_URL) return null
-
   if (!isOpen || isPastDeadline) return null
 
   if (!isConnected) {
     return (
       <div className="space-y-3">
-        <div className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          <div className="flex items-center gap-2 mb-1">
-            <Zap className="size-3.5" style={{ color: 'var(--accent)' }} />
-            <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Gasless commit</span>
-          </div>
-          <p className="display text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
-            {formatUsdcPrice(priceToSign)} USDC
-          </p>
-          <p className="text-xs mt-1" style={{ color: 'var(--subtle)' }}>
-            Sign once — no gas prompt, commit your full balance
-          </p>
-        </div>
+        <GaslessPriceCard
+          units={units} quotedPPU={quotedPPU} totalToSign={totalToSign}
+          breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensReceived={tokensReceived}
+          maxOrderable={maxOrderable} onUnits={setUnits}
+        />
         <ConnectKitButton.Custom>
           {({ show }) => (
             <button onClick={show}
               className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99]"
               style={{ background: 'var(--accent)' }}>
-              Connect wallet to commit gaslessly
+              Connect wallet to order gaslessly
             </button>
           )}
         </ConnectKitButton.Custom>
@@ -264,13 +260,12 @@ export function GaslessCommitFlow({
             <div className="flex items-center gap-2">
               <CheckCircle className="size-4 shrink-0" style={{ color: 'var(--success)' }} />
               <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
-                Committed gaslessly
-                {pricePaid !== null && ` for ${formatUsdcPrice(pricePaid)}`}
+                Ordered gaslessly{pricePaid !== null && ` for ${formatUsdcPrice(pricePaid)}`}
               </span>
             </div>
             {excess !== null && excess > 0n && (
               <p className="text-sm" style={{ color: 'var(--ink-2)' }}>
-                Price fell before your commit landed.{' '}
+                Price fell before your order landed.{' '}
                 <span className="font-bold tabular-nums" style={{ color: 'var(--success)' }}>
                   {formatUsdcPrice(excess)}
                 </span>{' '}
@@ -286,20 +281,13 @@ export function GaslessCommitFlow({
           </motion.div>
         ) : (
           <motion.div key="price"
-            className="rounded-2xl p-4"
-            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
             initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.22 }}>
-            <div className="flex items-center gap-2 mb-1">
-              <Zap className="size-3.5" style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Gasless commit</span>
-            </div>
-            <p className="display text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
-              {formatUsdcPrice(priceToSign)} USDC
-            </p>
-            <p className="text-xs mt-1" style={{ color: 'var(--subtle)' }}>
-              Sign once — no gas prompt
-            </p>
+            <GaslessPriceCard
+              units={units} quotedPPU={quotedPPU} totalToSign={totalToSign}
+              breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensReceived={tokensReceived}
+              maxOrderable={maxOrderable} onUnits={setUnits}
+            />
           </motion.div>
         )}
       </AnimatePresence>
@@ -326,33 +314,104 @@ export function GaslessCommitFlow({
       )}
 
       {step === 'idle' && errMsg && (
-        <div className="rounded-2xl p-3" style={{ background: 'rgba(255,160,0,0.08)', border: '1px solid rgba(255,160,0,0.2)' }}>
+        <div className="rounded-2xl p-3"
+          style={{ background: 'rgba(255,160,0,0.08)', border: '1px solid rgba(255,160,0,0.2)' }}>
           <p className="text-sm" style={{ color: 'var(--warn, #b45309)' }}>{errMsg}</p>
         </div>
       )}
 
-      {step !== 'done' && (
+      {step !== 'done' && maxOrderable > 0 && (
         <button
           onClick={() => { void handleSign() }}
           disabled={busy || !nonce}
           className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100"
-          style={{ background: 'var(--accent)' }}
-        >
+          style={{ background: 'var(--accent)' }}>
           {busy
             ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Working…</span>
             : errMsg
-              ? `Sign again for ${formatUsdcPrice(priceToSign)}`
-              : `Join gaslessly for ${formatUsdcPrice(priceToSign)}`}
+              ? `Sign again for ${formatUsdcPrice(totalToSign)}`
+              : <span className="flex items-center justify-center gap-2">
+                  <Zap className="size-4" />
+                  {`Order ${units} unit${units !== 1 ? 's' : ''} gaslessly for ${formatUsdcPrice(totalToSign)}`}
+                </span>}
         </button>
       )}
 
-      <button
-        onClick={onFallback}
+      <button onClick={onFallback}
         className="w-full text-xs py-1 opacity-40 hover:opacity-70 transition-opacity"
-        style={{ color: 'var(--muted)' }}
-      >
+        style={{ color: 'var(--muted)' }}>
         Use approve-then-commit instead
       </button>
+    </div>
+  )
+}
+
+// ── Gasless price card ────────────────────────────────────────────────────────
+
+interface GaslessPriceCardProps {
+  units:          number
+  quotedPPU:      bigint
+  totalToSign:    bigint
+  breaksTier:     boolean
+  goodsSymbol:    string
+  tokensReceived: bigint
+  maxOrderable:   number
+  onUnits:        (n: number) => void
+}
+
+function GaslessPriceCard({
+  units, quotedPPU, totalToSign, breaksTier,
+  goodsSymbol, tokensReceived, maxOrderable, onUnits,
+}: GaslessPriceCardProps) {
+  return (
+    <div className="rounded-2xl p-4 space-y-3"
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      <div className="flex items-center gap-2">
+        <Zap className="size-3.5" style={{ color: 'var(--accent)' }} />
+        <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Gasless order</span>
+      </div>
+
+      {/* Quantity picker */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs" style={{ color: 'var(--muted)' }}>Quantity</span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onUnits(Math.max(1, units - 1))}
+            disabled={units <= 1}
+            className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
+            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            <Minus className="size-3.5" />
+          </button>
+          <span className="display text-xl font-bold tabular-nums w-10 text-center"
+            style={{ color: 'var(--ink)' }}>{units}</span>
+          <button
+            onClick={() => onUnits(Math.min(maxOrderable, units + 1))}
+            disabled={units >= maxOrderable}
+            className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
+            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            <Plus className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-baseline justify-between">
+          <span className="text-xs" style={{ color: 'var(--muted)' }}>
+            {formatUsdcPrice(quotedPPU)}/unit
+          </span>
+          <span className="display text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
+            {formatUsdcPrice(totalToSign)}
+          </span>
+        </div>
+        <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
+          You'll receive {tokensReceived.toString()} {goodsSymbol} · Sign once, no gas prompt
+        </p>
+        {breaksTier && (
+          <p className="text-xs mt-1 font-medium" style={{ color: 'var(--accent)' }}>
+            Your order unlocks this price for everyone.
+          </p>
+        )}
+      </div>
     </div>
   )
 }

@@ -1,18 +1,19 @@
-/** Shared formatting and math utilities for Swarm UI */
+/** Shared formatting and math utilities for Swarm v2 UI */
 
 import { ARC_NETWORK } from './config'
 
 /** Format 6-decimal micro-USDC bigint as "$X.XX" */
 export function formatUsdcPrice(raw: bigint | number): string {
   const n = typeof raw === 'bigint' ? Number(raw) : raw
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n / 1_000_000)
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: 'USD',
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).format(n / 1_000_000)
 }
 
-/** Format 18-decimal native Arc balance as "$X.XX" (divide by 10^12 first) */
+/** Format 18-decimal native Arc balance as "$X.XX" */
 export function formatNativeBalance(raw: bigint): string {
-  // Native is 18-dec USDC, ERC-20 view is 6-dec. raw / 1e12 gives 6-dec view.
-  const sixDec = raw / 1_000_000_000_000n
-  return formatUsdcPrice(sixDec)
+  return formatUsdcPrice(raw / 1_000_000_000_000n)
 }
 
 /** Shorten address: 0x1234...abcd */
@@ -30,7 +31,7 @@ export function addrUrl(addr: string): string {
   return `${ARC_NETWORK.explorerBase}/address/${addr}`
 }
 
-/** Format seconds remaining as "Xd Xh Xm Xs" */
+/** Format seconds remaining as "Xd Xh", "Xh Xm", "Xm Xs", or "Xs" */
 export function formatCountdown(seconds: number): string {
   if (seconds <= 0) return 'Ended'
   const d = Math.floor(seconds / 86400)
@@ -44,48 +45,70 @@ export function formatCountdown(seconds: number): string {
 }
 
 /**
- * Compute the clearing price for a given buyer count against the tier curve.
- * Mirrors the Solidity _clearingPriceAt logic exactly.
- * tiers[0] = highest price (lowest minBuyers), tiers[last] = lowest price (highest minBuyers).
+ * Compute the per-unit price for a given total-units count.
+ * Mirrors the Solidity _priceAt logic exactly:
+ *   priceAt(units) = pricePerUnit of highest tier whose minUnits ≤ units,
+ *                    or tiers[0].pricePerUnit below the first threshold.
  */
-export function computeClearingPrice(
-  tiers: readonly { minBuyers: number; pricePerUnit: bigint }[],
-  count: number,
+export function computePriceAt(
+  tiers: readonly { minUnits: number; pricePerUnit: bigint }[],
+  totalUnits: number,
 ): bigint {
   if (tiers.length === 0) return 0n
   for (let i = tiers.length - 1; i >= 0; i--) {
-    if (count >= tiers[i].minBuyers) return tiers[i].pricePerUnit
+    if (totalUnits >= tiers[i].minUnits) return tiers[i].pricePerUnit
   }
   return tiers[0].pricePerUnit
 }
 
 /**
- * Check the WouldStrandBuyer precondition client-side before attempting withdraw.
- * Returns { blocked: true, reason: string } if the withdrawal would be blocked,
- * or { blocked: false } if it is safe to proceed.
+ * Compute the total a buyer pays for `units` when current totalUnits is
+ * `existingTotal`. The price includes the buyer's own units:
+ *   paidPerUnit = priceAt(existingTotal + units)
+ *   total       = paidPerUnit × units
+ * Returns { paidPerUnit, total, breaksTier }.
+ */
+export function computeOrderTotal(
+  tiers: readonly { minUnits: number; pricePerUnit: bigint }[],
+  existingTotal: number,
+  units: number,
+): { paidPerUnit: bigint; total: bigint; breaksTier: boolean } {
+  const priceBefore   = computePriceAt(tiers, existingTotal)
+  const paidPerUnit   = computePriceAt(tiers, existingTotal + units)
+  const total         = paidPerUnit * BigInt(units)
+  return { paidPerUnit, total, breaksTier: paidPerUnit < priceBefore }
+}
+
+/**
+ * Check the WouldStrandBuyer precondition client-side.
+ * In v2, the strand check is in units: after the buyer removes their units,
+ * any remaining buyer whose paidPerUnit < newPrice would be undercharged.
  *
- * callerPrice: what the caller escrowed (uint64)
- * tierCountMap: map from pricePerUnit → count of buyers at that price
- * tiers: the deal's tier array
- * currentCount: current buyer count
+ * callerPaidPerUnit:  per-unit price the caller locked in at commit
+ * callerUnits:        units the caller ordered
+ * existingTotal:      current totalUnits (including caller's units)
+ * tierCountMap:       map from pricePerUnit → count of buyers at that price
+ * tiers:              the deal's tier array
  */
 export function checkWouldStrandBuyer(
-  callerPrice: bigint,
+  callerPaidPerUnit: bigint,
+  callerUnits: number,
+  existingTotal: number,
   tierCountMap: Map<bigint, number>,
-  tiers: readonly { minBuyers: number; pricePerUnit: bigint }[],
-  currentCount: number,
-): { blocked: false } | { blocked: true; reason: string; nextSafeCount: number } {
-  const newCount = currentCount - 1
-  if (newCount <= 0) return { blocked: false } // last buyer, no one left to strand
+  tiers: readonly { minUnits: number; pricePerUnit: bigint }[],
+  currentBuyerCount: number,
+): { blocked: false } | { blocked: true; reason: string } {
+  if (currentBuyerCount <= 1) return { blocked: false } // last buyer, nobody left to strand
 
-  const newPrice = computeClearingPrice(tiers, newCount)
+  const newTotal = existingTotal - callerUnits
+  const newPrice = computePriceAt(tiers, newTotal)
 
-  // Find lowest price among remaining buyers (excluding caller)
+  // Find the lowest per-unit price among remaining buyers (excluding caller's tier entry)
   let lowestRemaining = 0n
   for (let i = tiers.length - 1; i >= 0; i--) {
     const tp = tiers[i].pricePerUnit
     let cnt = tierCountMap.get(tp) ?? 0
-    if (tp === callerPrice && cnt > 0) cnt -= 1
+    if (tp === callerPaidPerUnit && cnt > 0) cnt -= 1
     if (cnt > 0) {
       lowestRemaining = tp
       break
@@ -93,13 +116,11 @@ export function checkWouldStrandBuyer(
   }
 
   if (lowestRemaining > 0n && lowestRemaining < newPrice) {
-    // Find the next safe count: lowest threshold > currentCount
-    // One more buyer would bring count to currentCount+1; check if new price ≤ lowestRemaining
-    const nextSafeCount = currentCount + 1
     return {
       blocked: true,
-      reason: `You can't withdraw right now — leaving would push the price back up to ${formatUsdcPrice(newPrice)}, above what the newest buyer paid (${formatUsdcPrice(lowestRemaining)}). One more buyer joins and you're free to go.`,
-      nextSafeCount,
+      reason: `Withdrawing would push the price back up to ${formatUsdcPrice(newPrice)}/unit, ` +
+              `above what another buyer paid (${formatUsdcPrice(lowestRemaining)}/unit). ` +
+              `More orders would need to join first.`,
     }
   }
 
@@ -109,23 +130,22 @@ export function checkWouldStrandBuyer(
 /** Parse a Solidity revert error name from a wagmi error message */
 export function parseRevertReason(error: unknown): string {
   const msg = (error as { message?: string })?.message ?? ''
-  // Common Swarm named errors
-  if (msg.includes('WouldStrandBuyer'))    return 'Withdrawal would strand another buyer'
-  if (msg.includes('DeadlinePassed'))      return 'The deadline has passed'
-  if (msg.includes('DeadlineNotReached'))  return 'The deadline has not passed yet'
-  if (msg.includes('MinBuyersNotMet'))     return 'Not enough buyers committed'
-  if (msg.includes('AlreadyCommitted'))    return 'You already committed to this deal'
-  if (msg.includes('BuyerCapReached'))     return 'This deal is full'
-  if (msg.includes('DealNotOpen'))         return 'This deal is no longer open'
+  if (msg.includes('WouldStrandBuyer'))     return 'Withdrawal would strand another buyer'
+  if (msg.includes('DeadlinePassed'))       return 'The deadline has passed'
+  if (msg.includes('DeadlineNotReached'))   return 'The deadline has not passed yet'
+  if (msg.includes('MinUnitsNotMet'))       return 'Minimum units not reached'
+  if (msg.includes('AlreadyCommitted'))     return 'You already ordered in this deal'
+  if (msg.includes('BuyerCapReached'))      return 'This deal is full (buyer cap)'
+  if (msg.includes('UnitCapReached'))       return 'Not enough stock remaining'
+  if (msg.includes('UnitsPerBuyerExceeded'))return 'Exceeds the per-buyer limit'
+  if (msg.includes('ZeroUnits'))            return 'Quantity must be at least 1'
+  if (msg.includes('DealNotOpen'))          return 'This deal is no longer open'
   if (msg.includes('SettlerNotConfigured')) return 'Contract not yet wired (contact support)'
   if (msg.includes('user rejected') || msg.includes('User rejected')) return 'Cancelled'
-  // Allowance before balance: an ERC-20 allowance shortfall also contains the
-  // word "insufficient", and reporting it as a balance problem sends the user
-  // off to top up a wallet that was never short of funds.
   if (msg.includes('insufficient allowance') || msg.includes('InsufficientAllowance')) {
     return 'The approval did not cover the current price — approve again to retry'
   }
   if (msg.includes('insufficient funds')) return 'Not enough USDC to cover gas'
-  if (msg.includes('insufficient')) return 'Insufficient USDC balance'
+  if (msg.includes('insufficient'))       return 'Insufficient USDC balance'
   return 'Transaction failed — please try again'
 }

@@ -6,7 +6,7 @@ import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown } from '
 import { DEAL_FACTORY_ABI } from './abis'
 import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP } from './config'
 import { useChainNow } from './hooks'
-import { formatUsdcPrice, txUrl, parseRevertReason, computeClearingPrice } from './utils'
+import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt } from './utils'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 
@@ -74,18 +74,18 @@ export function SupplierView({ onDealPosted: _onDealPosted }: { onDealPosted: (i
   const updateTier = (i: number, field: keyof TierInput, val: string) =>
     setTiers(t => t.map((tier, j) => j === i ? { ...tier, [field]: val } : tier))
 
-  // Parsed tiers for chart
+  // Parsed tiers for chart — v2 uses minUnits
   const parsedTiers = tiers.map(t => ({
-    minBuyers: parseInt(t.minBuyers) || 0,
+    minUnits: parseInt(t.minBuyers) || 0,
     pricePerUnit: parsePriceToMicro(t.pricePerUnit) ?? 0n,
-  })).filter(t => t.minBuyers > 0 && t.pricePerUnit > 0n)
+  })).filter(t => t.minUnits > 0 && t.pricePerUnit > 0n)
 
-  // Chart: show curve at key buyer counts
+  // Chart: show curve at key unit counts
   const chartPoints = (() => {
     if (parsedTiers.length === 0) return []
-    const maxCount = Math.max(...parsedTiers.map(t => t.minBuyers), parseInt(cap) || 100)
+    const maxCount = Math.max(...parsedTiers.map(t => t.minUnits), parseInt(cap) || 100)
     const pts = []
-    for (const t of parsedTiers) pts.push({ x: t.minBuyers, y: Number(t.pricePerUnit) / 1_000_000 })
+    for (const t of parsedTiers) pts.push({ x: t.minUnits, y: Number(t.pricePerUnit) / 1_000_000 })
     pts.push({ x: maxCount, y: Number(parsedTiers[parsedTiers.length - 1].pricePerUnit) / 1_000_000 })
     return pts
   })()
@@ -97,9 +97,9 @@ export function SupplierView({ onDealPosted: _onDealPosted }: { onDealPosted: (i
   const toSvgX = (x: number) => (x / maxCount) * 260
   const toSvgY = (y: number) => 80 - ((y - minPrice) / (maxPrice - minPrice || 1)) * 70
 
-  // Current clearing price at current simulated buyer count for supplier preview
+  // Current clearing price at cap for supplier preview
   const capNum = parseInt(cap) || 100
-  const currentClearingAtFull = parsedTiers.length ? computeClearingPrice(parsedTiers, capNum) : 0n
+  const currentClearingAtFull = parsedTiers.length ? computePriceAt(parsedTiers, capNum) : 0n
   const supplierRevAtFull = currentClearingAtFull * BigInt(capNum)
 
   const handlePost = () => {
@@ -117,9 +117,22 @@ export function SupplierView({ onDealPosted: _onDealPosted }: { onDealPosted: (i
     if (chainNow === 0) { setValidationErr('Still reading chain time — try again in a moment.'); return }
     const deadline = BigInt(chainNow + Math.round(hours * 3600))
     const tierArgs = tiers.map(t => ({
-      minBuyers: parseInt(t.minBuyers),
+      minUnits:     parseInt(t.minBuyers),
       pricePerUnit: parsePriceToMicro(t.pricePerUnit)!,
     }))
+
+    // v2 postDeal: PostParams struct + tiers[]
+    const postParams = {
+      goodsToken:        '0x0000000000000000000000000000000000000000' as `0x${string}`,
+      tokensPerUnit:     0n,
+      minUnits:          minNum,
+      maxUnits:          capNum,
+      maxUnitsPerBuyer:  0,
+      maxBuyers:         0,
+      deadline,
+      title:             '',
+      description:       '',
+    }
 
     setBusy(true)
     writeContract(
@@ -127,7 +140,7 @@ export function SupplierView({ onDealPosted: _onDealPosted }: { onDealPosted: (i
         address: CONTRACTS_ACTIVE.DealFactory,
         abi: DEAL_FACTORY_ABI,
         functionName: 'postDeal',
-        args: [tierArgs, minNum, deadline, capNum],
+        args: [postParams, tierArgs],
         chainId: CHAIN_ID,
       },
       {
@@ -226,7 +239,7 @@ export function SupplierView({ onDealPosted: _onDealPosted }: { onDealPosted: (i
               {parsedTiers.map((t, i) => (
                 <text
                   key={i}
-                  x={10 + toSvgX(t.minBuyers)}
+                  x={10 + toSvgX(t.minUnits)}
                   y={8 + toSvgY(Number(t.pricePerUnit) / 1_000_000) - 4}
                   fontSize={7}
                   fill="var(--muted)"

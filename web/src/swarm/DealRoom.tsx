@@ -1,32 +1,40 @@
 import { useState, useEffect } from 'react'
 import { useWriteContract, useWaitForTransactionReceipt, useAccount } from 'wagmi'
 import { motion } from 'framer-motion'
-import { ExternalLink, Users, Clock, Share2, Copy, Check } from 'lucide-react'
+import { ExternalLink, Users, Clock, Share2, Copy, Check, Package, Layers } from 'lucide-react'
 import { PriceHero } from './PriceHero'
 import { TierProgress } from './TierProgress'
 import { CommitFlow } from './CommitFlow'
-import { useLiveDealState, useBlockCountdown, useClaimable } from './hooks'
+import {
+  useLiveDealState, useBlockCountdown, useClaimable, useGoodsClaimable,
+  useGoodsTokenMeta, useChainNow,
+} from './hooks'
 import { useDealHistory } from './useDealHistory'
 import { SETTLER_ABI } from './abis'
 import { formatUsdcPrice, formatCountdown, shortAddr, txUrl } from './utils'
 import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'
 
-interface Props {
-  dealId: bigint
+interface Props { dealId: bigint }
+
+const fadeUp = {
+  initial: { opacity: 0, y: 10 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.24, ease: [0.25, 0.1, 0.25, 1.0] as number[] },
 }
 
-const fadeUp = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.24, ease: [0.25, 0.1, 0.25, 1.0] as number[] } }
-
-/** Hash a 4-char hex prefix to a hue 0–359 */
 function addrHue(addr: string): number {
-  const hex = addr.slice(2, 6)
-  return parseInt(hex, 16) % 360
+  return parseInt(addr.slice(2, 6), 16) % 360
 }
 
 export function DealRoom({ dealId }: Props) {
-  const { deal, dealLoading, buyerCount, clearingPrice, nextTier, tierProgress, refetchAll } = useLiveDealState(dealId)
+  const {
+    deal, dealLoading, buyerCount, totalUnits, clearingPrice,
+    nextTier, tierProgress, refetchAll,
+  } = useLiveDealState(dealId)
+
   const secondsLeft = useBlockCountdown(deal?.deadline)
-  const history = useDealHistory(deal ? dealId : undefined)
+  const history     = useDealHistory(deal ? dealId : undefined)
+  const tokenMeta   = useGoodsTokenMeta(deal?.goodsToken)
   const [copied, setCopied] = useState(false)
 
   const handleShare = () => {
@@ -37,41 +45,70 @@ export function DealRoom({ dealId }: Props) {
     }).catch(() => { /* ignore */ })
   }
 
+  // Share line counts units, not buyers
   const shareLabel = (() => {
     if (!deal || !nextTier) return null
-    const needed = nextTier.buyersNeeded
+    const needed = nextTier.unitsNeeded
     const nextPrice = nextTier.tier.pricePerUnit
-    return `Bring ${needed} friend${needed === 1 ? '' : 's'} and your price drops to ${formatUsdcPrice(nextPrice)}`
+    return `${needed} more unit${needed === 1 ? '' : 's'} and everyone pays ${formatUsdcPrice(nextPrice)}`
   })()
 
   if (dealLoading || !deal) {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-4">
-        <div className="size-8 rounded-full border-2 animate-spin" style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
+        <div className="size-8 rounded-full border-2 animate-spin"
+          style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
         <p className="text-sm" style={{ color: 'var(--muted)' }}>Loading deal…</p>
       </div>
     )
   }
 
+  const count       = buyerCount  ?? 0
+  const unitCount   = totalUnits  ?? 0
+  const symbol      = tokenMeta?.symbol ?? '…'
   const recentHistory = history.slice(0, 12)
-  const count = buyerCount ?? 0
 
   return (
     <div className="w-full max-w-md mx-auto px-4 pb-8 space-y-5">
+
+      {/* Title + goods info */}
+      <motion.div className="space-y-1" {...fadeUp}>
+        <h1 className="text-xl font-bold leading-tight" style={{ color: 'var(--ink)' }}>
+          {deal.title}
+        </h1>
+        {deal.description && (
+          <p className="text-sm" style={{ color: 'var(--ink-2)' }}>{deal.description}</p>
+        )}
+        <div className="flex items-center gap-1.5 pt-0.5">
+          <Package className="size-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
+          <span className="text-xs" style={{ color: 'var(--muted)' }}>
+            1 unit = {deal.tokensPerUnit.toString()} {symbol}
+          </span>
+        </div>
+      </motion.div>
+
       {/* Hero price */}
       <motion.div
         className="rounded-3xl p-6 flex flex-col items-center"
-        style={{ background: 'var(--surface)', backdropFilter: 'blur(40px) saturate(180%)', WebkitBackdropFilter: 'blur(40px) saturate(180%)', border: '1px solid var(--border)' }}
+        style={{
+          background: 'var(--surface)',
+          backdropFilter: 'blur(40px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+          border: '1px solid var(--border)',
+        }}
         {...fadeUp}
       >
+        <p className="text-xs mb-1" style={{ color: 'var(--muted)' }}>
+          Current price / unit
+        </p>
         <PriceHero price={clearingPrice} loading={dealLoading} />
         <div className="mt-5 w-full">
           <TierProgress
-            buyerCount={count}
+            buyerCount={unitCount}
             tiers={deal.tiers}
-            minBuyers={deal.minBuyers}
+            minBuyers={deal.minUnits}
             progress={tierProgress}
-            nextTier={nextTier}
+            nextTier={nextTier ? { tier: nextTier.tier, buyersNeeded: nextTier.unitsNeeded } : undefined}
           />
         </div>
       </motion.div>
@@ -82,24 +119,43 @@ export function DealRoom({ dealId }: Props) {
         {...fadeUp}
         transition={{ ...fadeUp.transition, delay: 0.05 }}
       >
-        <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        {/* Units sold / cap */}
+        <div className="rounded-2xl p-4 flex flex-col gap-1"
+          style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-1.5">
-            <Users className="size-3.5" style={{ color: 'var(--muted)' }} />
-            <span className="text-xs" style={{ color: 'var(--muted)' }}>Buyers</span>
+            <Layers className="size-3.5" style={{ color: 'var(--muted)' }} />
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>Units sold</span>
           </div>
-          <span className="display text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>{count}</span>
-          <span className="text-xs" style={{ color: 'var(--subtle)' }}>cap {deal.cap}</span>
+          <span className="display text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
+            {unitCount}
+            <span className="text-base font-normal" style={{ color: 'var(--subtle)' }}>
+              {' '}/ {deal.maxUnits}
+            </span>
+          </span>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <Users className="size-3" style={{ color: 'var(--subtle)' }} />
+            <span className="text-xs" style={{ color: 'var(--subtle)' }}>
+              {count} buyer{count !== 1 ? 's' : ''}
+            </span>
+          </div>
         </div>
 
-        <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        {/* Countdown */}
+        <div className="rounded-2xl p-4 flex flex-col gap-1"
+          style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-1.5">
             <Clock className="size-3.5" style={{ color: 'var(--muted)' }} />
             <span className="text-xs" style={{ color: 'var(--muted)' }}>Time left</span>
           </div>
-          <span className="display text-2xl font-bold tabular-nums" style={{ color: secondsLeft !== undefined && secondsLeft < 3600 ? 'var(--danger)' : 'var(--ink)' }}>
+          <span
+            className="display text-2xl font-bold tabular-nums"
+            style={{ color: secondsLeft !== undefined && secondsLeft < 3600 ? 'var(--danger)' : 'var(--ink)' }}
+          >
             {secondsLeft === undefined ? '—' : formatCountdown(secondsLeft)}
           </span>
-          <span className="text-xs" style={{ color: 'var(--subtle)' }}>min {deal.minBuyers} buyers</span>
+          <span className="text-xs" style={{ color: 'var(--subtle)' }}>
+            min {deal.minUnits} units
+          </span>
         </div>
       </motion.div>
 
@@ -108,10 +164,16 @@ export function DealRoom({ dealId }: Props) {
         <CommitFlow
           dealId={dealId}
           clearingPrice={clearingPrice}
+          totalUnits={unitCount}
           buyerCount={count}
           tiers={deal.tiers}
+          maxUnits={deal.maxUnits}
+          maxUnitsPerBuyer={deal.maxUnitsPerBuyer}
           deadline={deal.deadline}
           state={deal.state}
+          goodsToken={deal.goodsToken}
+          goodsSymbol={symbol}
+          tokensPerUnit={deal.tokensPerUnit}
           onCommitted={refetchAll}
         />
       </motion.div>
@@ -135,7 +197,7 @@ export function DealRoom({ dealId }: Props) {
         </motion.div>
       )}
 
-      {/* Recent commits — built from events, newest first */}
+      {/* Activity list — event-sourced, newest first */}
       {recentHistory.length > 0 && (
         <motion.div
           className="rounded-2xl overflow-hidden"
@@ -153,7 +215,7 @@ export function DealRoom({ dealId }: Props) {
               const hue = addrHue(entry.buyer)
               return (
                 <a
-                  key={entry.txHash + entry.logIndex}
+                  key={entry.txHash + String(entry.logIndex)}
                   href={txUrl(entry.txHash)}
                   target="_blank"
                   rel="noreferrer"
@@ -169,14 +231,16 @@ export function DealRoom({ dealId }: Props) {
                     {entry.buyer.slice(2, 4).toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <span className="mono text-sm block truncate" style={{ color: entry.withdrawn ? 'var(--muted)' : 'var(--ink-2)' }}>
+                    <span className="mono text-sm block truncate"
+                      style={{ color: entry.withdrawn ? 'var(--muted)' : 'var(--ink-2)' }}>
                       {shortAddr(entry.buyer)}
                     </span>
                     {entry.withdrawn ? (
                       <span className="text-xs" style={{ color: 'var(--subtle)' }}>left</span>
                     ) : (
                       <span className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>
-                        {formatUsdcPrice(entry.pricePaid)}
+                        {entry.units} unit{entry.units !== 1 ? 's' : ''}{' '}
+                        @ {formatUsdcPrice(entry.paidPerUnit)}/unit
                       </span>
                     )}
                   </div>
@@ -190,48 +254,69 @@ export function DealRoom({ dealId }: Props) {
 
       {/* Settle / Refund / Claim — shown after deadline */}
       {deal.state === 0 && secondsLeft !== undefined && secondsLeft === 0 && (
-        <SettleOrRefundPanel dealId={dealId} count={count} minBuyers={deal.minBuyers} onDone={refetchAll} />
+        <SettleOrRefundPanel
+          dealId={dealId}
+          totalUnits={unitCount}
+          minUnits={deal.minUnits}
+          goodsToken={deal.goodsToken}
+          goodsSymbol={symbol}
+          onDone={refetchAll}
+        />
+      )}
+
+      {/* Settled / refunded — show claim buttons */}
+      {(deal.state === 1 || deal.state === 2) && (
+        <ClaimPanel goodsToken={deal.goodsToken} goodsSymbol={symbol} onDone={refetchAll} />
       )}
     </div>
   )
 }
 
-// ── Settle/Refund/Claim panel ─────────────────────────────────────────────────
+// ── Settle/Refund panel ───────────────────────────────────────────────────────
 
 interface SettleProps {
   dealId: bigint
-  count: number
-  minBuyers: number
+  totalUnits: number
+  minUnits: number
+  goodsToken: `0x${string}`
+  goodsSymbol: string
   onDone: () => void
 }
 
-function SettleOrRefundPanel({ dealId, count, minBuyers, onDone }: SettleProps) {
+function SettleOrRefundPanel({ dealId, totalUnits, minUnits, goodsToken, goodsSymbol, onDone }: SettleProps) {
   const { address } = useAccount()
-  const { data: claimable, refetch: refetchClaimable } = useClaimable(address)
+  const { data: claimable,      refetch: refetchClaimable }      = useClaimable(address)
+  const { data: goodsClaimable, refetch: refetchGoodsClaimable } = useGoodsClaimable(goodsToken, address)
   const { writeContract } = useWriteContract()
-  const [hash, setHash] = useState<`0x${string}` | undefined>()
-  const [busy, setBusy] = useState(false)
+  const [hash, setHash]   = useState<`0x${string}` | undefined>()
+  const [busy, setBusy]   = useState(false)
   const { isSuccess } = useWaitForTransactionReceipt({ hash, chainId: ARC_NETWORK.chainId })
 
   useEffect(() => {
     if (!isSuccess) return
     onDone()
     void refetchClaimable()
+    void refetchGoodsClaimable()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuccess])
 
-  const canSettle = count >= minBuyers
+  const canSettle  = totalUnits >= minUnits
+  const claimableN = claimable      !== undefined ? BigInt(claimable)      : 0n
+  const goodsN     = goodsClaimable !== undefined ? BigInt(goodsClaimable) : 0n
 
-  const send = (fn: 'settle' | 'refundAll' | 'claim') => {
+  const send = (fn: 'settle' | 'refundAll' | 'claim' | 'claimGoods') => {
     setBusy(true)
     const onSuccess = (h: `0x${string}`) => { setHash(h); setBusy(false) }
-    const onError = () => setBusy(false)
-    if (fn === 'claim') {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim', args: [], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
-    } else if (fn === 'settle') {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'settle', args: [dealId], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
+    const onError   = () => setBusy(false)
+    const chainId   = ARC_NETWORK.chainId
+    if (fn === 'settle') {
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'settle',    args: [dealId], chainId }, { onSuccess, onError })
+    } else if (fn === 'refundAll') {
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'refundAll', args: [dealId], chainId }, { onSuccess, onError })
+    } else if (fn === 'claim') {
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim',     args: [],       chainId }, { onSuccess, onError })
     } else {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'refundAll', args: [dealId], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], chainId }, { onSuccess, onError })
     }
   }
 
@@ -242,40 +327,121 @@ function SettleOrRefundPanel({ dealId, count, minBuyers, onDone }: SettleProps) 
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
     >
       <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Deadline reached</p>
+
       {canSettle ? (
-        <button
-          onClick={() => send('settle')}
-          disabled={busy}
+        <button onClick={() => send('settle')} disabled={busy}
           className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
-          style={{ background: 'var(--accent)', color: '#fff' }}
-        >
+          style={{ background: 'var(--accent)', color: '#fff' }}>
           Settle deal
         </button>
       ) : (
-        <button
-          onClick={() => send('refundAll')}
-          disabled={busy}
+        <button onClick={() => send('refundAll')} disabled={busy}
           className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
-          style={{ background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)' }}
-        >
-          Refund all
+          style={{ background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)' }}>
+          Refund all (minimum not reached)
         </button>
       )}
-      {claimable !== undefined && BigInt(claimable) > 0n && (
-        <button
-          onClick={() => send('claim')}
-          disabled={busy}
+
+      {claimableN > 0n && (
+        <button onClick={() => send('claim')} disabled={busy}
           className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
-          style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}
-        >
-          Claim {formatUsdcPrice(BigInt(claimable))} USDC
+          style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}>
+          Claim {formatUsdcPrice(claimableN)} USDC
         </button>
       )}
+
+      {goodsN > 0n && (
+        <button onClick={() => send('claimGoods')} disabled={busy}
+          className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
+          style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}>
+          Claim {goodsN.toString()} {goodsSymbol}
+        </button>
+      )}
+
       {hash && (
-        <a href={txUrl(hash)} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs" style={{ color: 'var(--muted)' }}>
+        <a href={txUrl(hash)} target="_blank" rel="noreferrer"
+          className="flex items-center gap-1 text-xs" style={{ color: 'var(--muted)' }}>
           View transaction <ExternalLink className="size-3" />
         </a>
       )}
     </motion.div>
   )
 }
+
+// ── Claim panel (settled/refunded state) ──────────────────────────────────────
+
+interface ClaimPanelProps {
+  goodsToken:  `0x${string}`
+  goodsSymbol: string
+  onDone:      () => void
+}
+
+function ClaimPanel({ goodsToken, goodsSymbol, onDone }: ClaimPanelProps) {
+  const { address }  = useAccount()
+  const { data: claimable,      refetch: refetchClaimable }      = useClaimable(address)
+  const { data: goodsClaimable, refetch: refetchGoodsClaimable } = useGoodsClaimable(goodsToken, address)
+  const { writeContract } = useWriteContract()
+  const [hash, setHash]   = useState<`0x${string}` | undefined>()
+  const [busy, setBusy]   = useState(false)
+  const { isSuccess } = useWaitForTransactionReceipt({ hash, chainId: ARC_NETWORK.chainId })
+
+  useEffect(() => {
+    if (!isSuccess) return
+    onDone()
+    void refetchClaimable()
+    void refetchGoodsClaimable()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuccess])
+
+  const claimableN = claimable      !== undefined ? BigInt(claimable)      : 0n
+  const goodsN     = goodsClaimable !== undefined ? BigInt(goodsClaimable) : 0n
+
+  if (claimableN === 0n && goodsN === 0n) return null
+
+  const send = (fn: 'claim' | 'claimGoods') => {
+    setBusy(true)
+    const onSuccess = (h: `0x${string}`) => { setHash(h); setBusy(false) }
+    const onError   = () => setBusy(false)
+    if (fn === 'claim') {
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim', args: [], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
+    } else {
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
+    }
+  }
+
+  return (
+    <motion.div
+      className="rounded-2xl p-4 space-y-3"
+      style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}
+      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+    >
+      <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Your claims</p>
+
+      {claimableN > 0n && (
+        <button onClick={() => send('claim')} disabled={busy}
+          className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
+          style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}>
+          Claim {formatUsdcPrice(claimableN)} USDC
+        </button>
+      )}
+
+      {goodsN > 0n && (
+        <button onClick={() => send('claimGoods')} disabled={busy}
+          className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
+          style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}>
+          Claim {goodsN.toString()} {goodsSymbol}
+        </button>
+      )}
+
+      {hash && (
+        <a href={txUrl(hash)} target="_blank" rel="noreferrer"
+          className="flex items-center gap-1 text-xs" style={{ color: 'var(--muted)' }}>
+          View transaction <ExternalLink className="size-3" />
+        </a>
+      )}
+    </motion.div>
+  )
+}
+
+// Re-export useChainNow so existing imports from DealRoom still work
+export { useChainNow }

@@ -1,0 +1,407 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the patch, the spec, and all affected files before writing anything. Good. Now reading all the files I'll modify: Now reading the remaining files I'll replace or extend: Now reading CommitFlow, GaslessCommitFlow, and the remaining files: Good. Now reading utils.ts, useDealHistory.ts to understand what needs updating: Good. I have a complete picture. Now I understand exactly what needs to change. Setting up todos: Applying the patch to `src/config.ts` and the next-tier fix to `src/swarm/hooks.ts` simultaneously with other independent updates: Now add `SwarmPass` to config.ts and update hooks.ts next-tier fix, abis.ts, utils.ts simultaneously: Now rewrite `abis.ts` with full v2 ABIs: Now rewrite `hooks.ts` with v2 types, new hooks, and the patch's next-tier fix: Now update `utils.ts` with v2 unit-based price computation and strand check: Now update `useDealHistory.ts` with v2 event signatures (topic hashes for new Committed/Withdrawn signatures): Now rewrite `DealRoom.tsx` with all v2 changes: Now rewrite `CommitFlow.tsx` with v2 quantity picker: Now update `GaslessCommitFlow.tsx` for v2 (units param, authorizationNonce with units, total-based signing): Four issues: `GaslessCommitFlow` (`clearingPrice` unused, set-state-in-effect), `SupplierView` (`computeClearingPrice` renamed to `computePriceAt`, wrong types), `TierProgress` (`minBuyers` → `minUnits`). Let me fix all: Fix the `set-state-in-effect` in GaslessCommitFlow — derive `clampedUnits` during render instead of clamping via effect: Also do the same in CommitFlow.tsx: Now fix `TierProgress.tsx` — it still uses `minBuyers` which is now `minUnits`: Now fix `SupplierView.tsx` — it imports `computeClearingPrice` which is now `computePriceAt`: This is the v1 `SupplierView` — it calls `postDeal` with v1 args and uses `computeClearingPrice`. The contract errors show it also passes `[tierArgs, minNum, deadline, capNum]` which is a v1 signature. This whole component needs updating for v2. Let me read the rest first, then rewrite it: The supplier view needs a complete v2 rewrite. It's scheduled as a future turn. For now I need to fix the two immediate type errors (the import and the wrong call to `computeClearingPrice`/`parsedTiers` shape), which require minimal surgery to make it compile without breaking the visible UI: Now fix `parsedTiers` to use `minUnits` and `computePriceAt` call: Now fix the chart SVG `t.minBuyers` references and the tier-arg shape in `handlePost`: Now fix `handlePost` — the v1 args `[tierArgs, minNum, deadline, capNum]` won't compile with the v2 ABI. For now stub the call to the v2 PostParams struct (the supplier view rewrite comes next turn but the type error is in `SupplierView.tsx`): Now remove the unused `MAX_CAP` import from `SupplierView` if it's still used, and check if the `useChainNow` import from `hooks` is used (it is). Run check again: Zero errors, one warning (unused `useEffect` import). Fix it: Zero warnings, zero errors. Check the dev server is still up: All clean. Here's what changed:\n\n**`src/config.ts`** — active chain listed first so ConnectKit auto-switches to the right network on connect.\n\n**`src/swarm/config.ts`** — `SwarmPass` address field added (zero for now) to both network entries.\n\n**`src/swarm/abis.ts`** — full v2 ABIs for all four contracts: `DealFactory` (v2 `DealPosted` event with `goodsToken`, `PostParams` struct), `DemandPool` (v2 `Committed`/`Withdrawn` with units fields, new reads `totalUnits`/`unitsOf`/`paidPerUnit`/`escrowed`/`authorizationNonce` with units), `Settler` (`goodsClaimable`, `claimGoods`), `SwarmPass`, and generic `ERC20_ABI`.\n\n**`src/swarm/hooks.ts`** — `DealTier` uses `minUnits`; `DealData` has all v2 fields; new hooks `useTotalUnits`, `useUnitsOf`, `usePaidPerUnit`, `useEscrowed`, `useTierCounts`, `useGoodsClaimable`, `useGoodsTokenMeta`; `useLiveDealState` counts units for tier progress and the next-tier hint skips tiers not cheaper than the live price.\n\n**`src/swarm/utils.ts`** — `computePriceAt` (replaces `computeClearingPrice`, counts units not buyers); `computeOrderTotal` returns `paidPerUnit`, `total`, and whether the order breaks a tier; `checkWouldStrandBuyer` updated for units-based logic.\n\n**`src/swarm/useDealHistory.ts`** — topic hashes for v2 event signatures; entries carry `units` and `paidPerUnit`.\n\n**`src/swarm/TierProgress.tsx`** — `minBuyers` → `minUnits` in tier chip rendering.\n\n**`src/swarm/DealRoom.tsx`** — title, description, goods token info (\"1 unit = N SYMBOL\"), units-sold stat alongside buyer count, both USDC and goods claims in `SettleOrRefundPanel` and `ClaimPanel`.\n\n**`src/swarm/CommitFlow.tsx`** — quantity picker (Minus/Plus, clamped to stock and per-buyer limit), `computeOrderTotal` for total display, tier-break message, approve amount = `maxPPU × units`, `commit(dealId, units)` call.\n\n**`src/swarm/GaslessCommitFlow.tsx`** — quantity picker, signs for `priceAt(totalUnits + units) × units`, `authorizationNonce(dealId, buyer, units, salt)` includes units in nonce, POST body sends `units`, 409 shows new total.\n\n**`src/swarm/SupplierView.tsx`** — minimal compile fix (uses `computePriceAt`, tier shape uses `minUnits`); full v2 supplier form (goods token, tokensPerUnit, title, description) comes next turn.",
+  "todos": [
+    {
+      "id": "todo:apply patch: config.ts (active chain first) + hooks.ts (next-tier skip cheaper):0",
+      "text": "Apply patch: config.ts (active chain first) + hooks.ts (next-tier skip cheaper)",
+      "status": "done"
+    },
+    {
+      "id": "todo:update swarm/config.ts: add swarmpass zero address:0",
+      "text": "Update swarm/config.ts: add SwarmPass zero address",
+      "status": "done"
+    },
+    {
+      "id": "todo:regenerate abis.ts for v2 (all 4 contracts + goods erc20 metadata):0",
+      "text": "Regenerate abis.ts for v2 (all 4 contracts + goods ERC20 metadata)",
+      "status": "done"
+    },
+    {
+      "id": "todo:update hooks.ts: v2 types (units/minunits), new hooks, strand check in units:0",
+      "text": "Update hooks.ts: v2 types (units/minUnits), new hooks, strand check in units",
+      "status": "done"
+    },
+    {
+      "id": "todo:update utils.ts: computeprice in units, checkwouldstrandbuyer in units:0",
+      "text": "Update utils.ts: computePrice in units, checkWouldStrandBuyer in units",
+      "status": "done"
+    },
+    {
+      "id": "todo:update usedealhistory.ts: v2 event signatures (units, pricepaid in committed):0",
+      "text": "Update useDealHistory.ts: v2 event signatures (units, pricePaid in Committed)",
+      "status": "done"
+    },
+    {
+      "id": "todo:rewrite dealroom.tsx: title/desc, goods info, units stats, both-asset claims:0",
+      "text": "Rewrite DealRoom.tsx: title/desc, goods info, units stats, both-asset claims",
+      "status": "done"
+    },
+    {
+      "id": "todo:rewrite commitflow.tsx: quantity picker, total-pay display, v2 approve+commit:0",
+      "text": "Rewrite CommitFlow.tsx: quantity picker, total-pay display, v2 approve+commit",
+      "status": "done"
+    },
+    {
+      "id": "todo:update gaslesscommitflow.tsx: units param, authorizationnonce with units, v2 relay:0",
+      "text": "Update GaslessCommitFlow.tsx: units param, authorizationNonce with units, v2 relay",
+      "status": "done"
+    },
+    {
+      "id": "todo:run tsc + lint, paste actual output:0",
+      "text": "Run tsc + lint, paste actual output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/config.ts",
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/DealRoom.tsx",
+    "src/swarm/GaslessCommitFlow.tsx",
+    "src/swarm/SupplierView.tsx",
+    "src/swarm/TierProgress.tsx",
+    "src/swarm/abis.ts",
+    "src/swarm/config.ts",
+    "src/swarm/hooks.ts",
+    "src/swarm/useDealHistory.ts",
+    "src/swarm/utils.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/config.ts",
+      "action": "edit",
+      "addedLines": 17,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { registerChain } from './tracing'\n+import { ACTIVE_NETWORK } from './swarm/config'\n \n // Pre-register chain RPC URLs so trace events show correct chain names immediately\n registerChain(arc.id, arc.rpcUrls.default.http[0])\n registerChain(arcTestnet.id, arcTestnet.rpcUrls.default.http[0])\n \n-export const config = createConfig({\n-  chains: [arc, arcTestnet, mainnet], // mainnet needed for ENS resolution\n+// The first chain is the one wagmi and ConnectKit ask the wallet to switch to"
+    },
+    {
+      "path": "src/swarm/abis.ts",
+      "action": "write",
+      "addedLines": 246,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/** Swarm v2 contract ABIs — regenerated from compiled contracts */\n+\n+// ── DealFactory ───────────────────────────────────────────────────────────────\n+\n+export const DEAL_FACTORY_ABI = [\n+  // Events\n+  {\n+    type: 'event', name: 'DealPosted',"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "write",
+      "addedLines": 466,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+import { useState, useEffect } from 'react'\n+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'\n+import { ConnectKitButton } from 'connectkit'\n+import { motion, AnimatePresence } from 'framer-motion'\n+import { Loader2, ExternalLink, CheckCircle, AlertCircle, Lock, Plus, Minus } from 'lucide-react'\n+import {\n+  formatUsdcPrice, txUrl, parseRevertReason,\n+  checkWouldStrandBuyer, computeOrderTotal,"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // Quantity picker\n-  const remainingStock   = maxUnits - totalUnits\n-  const perBuyerLimit    = maxUnitsPerBuyer > 0 ? maxUnitsPerBuyer : remainingStock\n-  const maxOrderable     = Math.min(remainingStock, perBuyerLimit)\n-  const [units, setUnits] = useState(1)\n-\n-  // Clamp units when stock changes\n-  useEffect(() => {\n+  // Quantity picker — clamp during render, never in an effect\n+  const remainingStock = maxUnits - totalUnits\n+  const perBuyerLimit  = maxUnitsPerBuyer > 0 ? maxUnitsPerBuyer : remainingStock\n+  const maxOrderable   = Math.min(remainingStock, perBuyerLimit)\n+  const [rawUnits, setUnits] = useState(1)\n+  const units = maxOrderable > 0 ? Math.min(rawUnits, maxOrderable) : 1"
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 18,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   mainnet: {\n     // NOT DEPLOYED YET. Zero addresses rather than placeholders that look real.\n     DealFactory: ZERO as `0x${string}`,\n     DemandPool:  ZERO as `0x${string}`,\n     Settler:     ZERO as `0x${string}`,\n+    SwarmPass:   ZERO as `0x${string}`,\n     deployBlock: 0n,\n-    deployed: false,\n-  },\n+    deployed: false,"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "write",
+      "addedLines": 448,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+import { useState, useEffect } from 'react'\n+import { useWriteContract, useWaitForTransactionReceipt, useAccount } from 'wagmi'\n+import { motion } from 'framer-motion'\n+import { ExternalLink, Users, Clock, Share2, Copy, Check, Package, Layers } from 'lucide-react'\n+import { PriceHero } from './PriceHero'\n+import { TierProgress } from './TierProgress'\n+import { CommitFlow } from './CommitFlow'\n+import {"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "write",
+      "addedLines": 421,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * GaslessCommitFlow v2 — buyer signs once for N units, relayer submits and pays gas.\n+ *\n+ * Signs ReceiveWithAuthorization for `priceAt(totalUnits + units) × units` USDC.\n+ * The nonce binds pool, dealId, buyer, units and salt — a relayer cannot change\n+ * the quantity a signature covers.\n+ *\n+ * On 409: price rose above authorization; show the new total and ask to sign again."
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  dealId, clearingPrice, totalUnits, tiers, maxUnits, maxUnitsPerBuyer,\n+  dealId, clearingPrice: _clearingPrice, totalUnits, tiers, maxUnits, maxUnitsPerBuyer,"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // Quantity picker\n+  // Quantity picker — clamp during render, never in an effect\n   const remainingStock = maxUnits - totalUnits\n   const perBuyerLimit  = maxUnitsPerBuyer > 0 ? maxUnitsPerBuyer : remainingStock\n   const maxOrderable   = Math.min(remainingStock, perBuyerLimit)\n-  const [units, setUnits] = useState(1)\n-\n-  useEffect(() => {\n-    if (maxOrderable > 0 && units > maxOrderable) setUnits(maxOrderable)\n+  const [rawUnits, setUnits] = useState(1)\n+  const units = maxOrderable > 0 ? Math.min(rawUnits, maxOrderable) : 1"
+    },
+    {
+      "path": "src/swarm/GaslessCommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { useState, useCallback, useEffect } from 'react'\n+import { useState, useCallback } from 'react'"
+    },
+    {
+      "path": "src/swarm/hooks.ts",
+      "action": "write",
+      "addedLines": 352,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/** Swarm v2 contract hooks — thin wrappers around wagmi useReadContract */\n+\n+import { useReadContract, useReadContracts, useBlock } from 'wagmi'\n+import { useState, useEffect, useMemo, useRef } from 'react'\n+import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'\n+import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI, SETTLER_ABI, ERC20_ABI } from './abis'\n+\n+const CHAIN_ID = ARC_NETWORK.chainId"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { formatUsdcPrice, txUrl, parseRevertReason, computeClearingPrice } from './utils'\n+import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt } from './utils'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 27,
+      "removedLines": 27,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // Parsed tiers for chart\n+  // Parsed tiers for chart — v2 uses minUnits\n   const parsedTiers = tiers.map(t => ({\n-    minBuyers: parseInt(t.minBuyers) || 0,\n+    minUnits: parseInt(t.minBuyers) || 0,\n     pricePerUnit: parsePriceToMicro(t.pricePerUnit) ?? 0n,\n-  })).filter(t => t.minBuyers > 0 && t.pricePerUnit > 0n)\n+  })).filter(t => t.minUnits > 0 && t.pricePerUnit > 0n)\n \n-  // Chart: show curve at key buyer counts\n+  // Chart: show curve at key unit counts\n   const chartPoints = (() => {"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "               {/* Price labels */}\n               {parsedTiers.map((t, i) => (\n                 <text\n                   key={i}\n-                  x={10 + toSvgX(t.minBuyers)}\n+                  x={10 + toSvgX(t.minUnits)}\n                   y={8 + toSvgY(Number(t.pricePerUnit) / 1_000_000) - 4}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 27,
+      "removedLines": 14,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     const tierArgs = tiers.map(t => ({\n-      minBuyers: parseInt(t.minBuyers),\n+      minUnits:     parseInt(t.minBuyers),\n       pricePerUnit: parsePriceToMicro(t.pricePerUnit)!,\n     }))\n \n-    setBusy(true)\n-    writeContract(\n-      {\n+    // v2 postDeal: PostParams struct + tiers[]\n+    const postParams = {\n+      goodsToken:        '0x0000000000000000000000000000000000000000' as `0x${string}`,"
+    },
+    {
+      "path": "src/swarm/TierProgress.tsx",
+      "action": "write",
+      "addedLines": 86,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+import { motion } from 'framer-motion'\n+import { formatUsdcPrice } from './utils'\n+import type { DealTier } from './hooks'\n+\n+interface Props {\n+  buyerCount: number     // totalUnits in v2\n+  tiers: DealTier[]\n+  minBuyers: number      // minUnits threshold in v2"
+    },
+    {
+      "path": "src/swarm/useDealHistory.ts",
+      "action": "write",
+      "addedLines": 285,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * Event-sourced commit/withdraw history for a single v2 deal.\n+ *\n+ * v2 Committed: (uint256 dealId, address buyer, uint32 units, uint64 paidPerUnit,\n+ *                uint256 escrow, uint64 livePrice, uint32 totalUnits, uint32 buyerCount)\n+ * v2 Withdrawn: (uint256 dealId, address buyer, uint256 amountReturned, uint64 livePrice,\n+ *                uint32 totalUnits, uint32 buyerCount)\n+ * DealPosted:   (uint256 dealId, address supplier, address goodsToken, uint32 minUnits,"
+    },
+    {
+      "path": "src/swarm/utils.ts",
+      "action": "write",
+      "addedLines": 152,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/** Shared formatting and math utilities for Swarm v2 UI */\n+\n+import { ARC_NETWORK } from './config'\n+\n+/** Format 6-decimal micro-USDC bigint as \"$X.XX\" */\n+export function formatUsdcPrice(raw: bigint | number): string {\n+  const n = typeof raw === 'bigint' ? Number(raw) : raw\n+  return new Intl.NumberFormat('en-US', {"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

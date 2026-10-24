@@ -1,25 +1,35 @@
-/** Swarm contract hooks — thin wrappers around wagmi useReadContract */
+/** Swarm v2 contract hooks — thin wrappers around wagmi useReadContract */
 
 import { useReadContract, useReadContracts, useBlock } from 'wagmi'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'
-import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI, SETTLER_ABI } from './abis'
-
+import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI, SETTLER_ABI, ERC20_ABI } from './abis'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 
-// ─── Deal data ────────────────────────────────────────────────────────────────
+// ─── Deal types ───────────────────────────────────────────────────────────────
 
-export type DealTier = { minBuyers: number; pricePerUnit: bigint }
+export type DealTier = {
+  minUnits: number     // unit threshold to unlock this price
+  pricePerUnit: bigint // 6-decimal USDC per unit
+}
 
 export type DealData = {
-  supplier: `0x${string}`
-  tiers: DealTier[]
-  minBuyers: number
-  deadline: bigint
-  cap: number
-  state: number  // 0=Open, 1=Settled, 2=Refunded
+  supplier:         `0x${string}`
+  goodsToken:       `0x${string}`
+  tokensPerUnit:    bigint
+  tiers:            DealTier[]
+  minUnits:         number
+  maxUnits:         number
+  maxUnitsPerBuyer: number
+  maxBuyers:        number
+  deadline:         bigint
+  state:            number    // 0=Open, 1=Settled, 2=Refunded
+  title:            string
+  description:      string
 }
+
+// ─── Deal reads ───────────────────────────────────────────────────────────────
 
 export function useDeal(dealId: bigint | undefined) {
   const { data, isLoading, refetch } = useReadContract({
@@ -34,12 +44,21 @@ export function useDeal(dealId: bigint | undefined) {
   const deal = useMemo<DealData | undefined>(() => {
     if (!data) return undefined
     return {
-      supplier: data.supplier,
-      tiers: data.tiers.map(t => ({ minBuyers: Number(t.minBuyers), pricePerUnit: BigInt(t.pricePerUnit) })),
-      minBuyers: Number(data.minBuyers),
-      deadline: BigInt(data.deadline),
-      cap: Number(data.cap),
-      state: Number(data.state),
+      supplier:         data.supplier,
+      goodsToken:       data.goodsToken,
+      tokensPerUnit:    BigInt(data.tokensPerUnit),
+      tiers:            data.tiers.map(t => ({
+        minUnits:     Number(t.minUnits),
+        pricePerUnit: BigInt(t.pricePerUnit),
+      })),
+      minUnits:         Number(data.minUnits),
+      maxUnits:         Number(data.maxUnits),
+      maxUnitsPerBuyer: Number(data.maxUnitsPerBuyer),
+      maxBuyers:        Number(data.maxBuyers),
+      deadline:         BigInt(data.deadline),
+      state:            Number(data.state),
+      title:            data.title,
+      description:      data.description,
     }
   }, [data])
 
@@ -56,7 +75,7 @@ export function useDealCount() {
   })
 }
 
-// ─── Pool state ───────────────────────────────────────────────────────────────
+// ─── Pool reads ───────────────────────────────────────────────────────────────
 
 export function useBuyerCount(dealId: bigint | undefined) {
   return useReadContract({
@@ -69,14 +88,14 @@ export function useBuyerCount(dealId: bigint | undefined) {
   })
 }
 
-export function useBuyers(dealId: bigint | undefined) {
+export function useTotalUnits(dealId: bigint | undefined) {
   return useReadContract({
     address: CONTRACTS_ACTIVE.DemandPool,
     abi: DEMAND_POOL_ABI,
-    functionName: 'getBuyers',
+    functionName: 'totalUnits',
     args: dealId !== undefined ? [dealId] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: dealId !== undefined, refetchInterval: 5000 },
+    query: { enabled: dealId !== undefined, refetchInterval: 3000 },
   })
 }
 
@@ -91,6 +110,31 @@ export function useClearingPrice(dealId: bigint | undefined) {
   })
 }
 
+/** Returns the buyer's committed units (0 if not committed). */
+export function useUnitsOf(dealId: bigint | undefined, buyer: `0x${string}` | undefined) {
+  return useReadContract({
+    address: CONTRACTS_ACTIVE.DemandPool,
+    abi: DEMAND_POOL_ABI,
+    functionName: 'unitsOf',
+    args: dealId !== undefined && buyer ? [dealId, buyer] : undefined,
+    chainId: CHAIN_ID,
+    query: { enabled: dealId !== undefined && !!buyer, refetchInterval: 4000 },
+  })
+}
+
+/** Returns the per-unit price the buyer paid at commit time. */
+export function usePaidPerUnit(dealId: bigint | undefined, buyer: `0x${string}` | undefined) {
+  return useReadContract({
+    address: CONTRACTS_ACTIVE.DemandPool,
+    abi: DEMAND_POOL_ABI,
+    functionName: 'paidPerUnit',
+    args: dealId !== undefined && buyer ? [dealId, buyer] : undefined,
+    chainId: CHAIN_ID,
+    query: { enabled: dealId !== undefined && !!buyer, refetchInterval: 4000 },
+  })
+}
+
+/** Returns the total USDC escrowed by the buyer (paidPerUnit × units). */
 export function useEscrowed(dealId: bigint | undefined, buyer: `0x${string}` | undefined) {
   return useReadContract({
     address: CONTRACTS_ACTIVE.DemandPool,
@@ -102,9 +146,8 @@ export function useEscrowed(dealId: bigint | undefined, buyer: `0x${string}` | u
   })
 }
 
-// Fetch tierCount for each tier in a deal — used for WouldStrandBuyer simulation
+/** Fetch tierCount for each tier in a deal — used for WouldStrandBuyer simulation */
 export function useTierCounts(dealId: bigint | undefined, tiers: DealTier[]) {
-  // Build a stable key from tier prices to avoid memoization issues
   const tiersKey = tiers.map(t => t.pricePerUnit.toString()).join(',')
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -125,7 +168,6 @@ export function useTierCounts(dealId: bigint | undefined, tiers: DealTier[]) {
     query: { enabled: dealId !== undefined && tiers.length > 0, refetchInterval: 4000 },
   })
 
-  // Build tierCountMap inline (no useMemo — avoid React Compiler memoization warnings)
   const tierCountMap = new Map<bigint, number>()
   if (data) {
     tiers.forEach((t, i) => {
@@ -137,7 +179,7 @@ export function useTierCounts(dealId: bigint | undefined, tiers: DealTier[]) {
   return { tierCountMap, refetch }
 }
 
-// ─── Settler ─────────────────────────────────────────────────────────────────
+// ─── Settler reads ────────────────────────────────────────────────────────────
 
 export function useClaimable(who: `0x${string}` | undefined) {
   return useReadContract({
@@ -150,26 +192,64 @@ export function useClaimable(who: `0x${string}` | undefined) {
   })
 }
 
+/** How many tokens of `goodsToken` the address can claim from the Settler. */
+export function useGoodsClaimable(
+  goodsToken: `0x${string}` | undefined,
+  who: `0x${string}` | undefined,
+) {
+  const ZERO = '0x0000000000000000000000000000000000000000' as `0x${string}`
+  return useReadContract({
+    address: CONTRACTS_ACTIVE.Settler,
+    abi: SETTLER_ABI,
+    functionName: 'goodsClaimable',
+    args: goodsToken && who ? [goodsToken, who] : undefined,
+    chainId: CHAIN_ID,
+    query: {
+      enabled: !!goodsToken && goodsToken !== ZERO && !!who,
+      refetchInterval: 6000,
+    },
+  })
+}
+
+// ─── Goods token metadata ─────────────────────────────────────────────────────
+
+export type GoodsTokenMeta = { symbol: string; decimals: number }
+
+export function useGoodsTokenMeta(
+  goodsToken: `0x${string}` | undefined,
+): GoodsTokenMeta | undefined {
+  const ZERO = '0x0000000000000000000000000000000000000000' as `0x${string}`
+  const enabled = !!goodsToken && goodsToken !== ZERO
+
+  const { data: sym } = useReadContract({
+    address: goodsToken,
+    abi: ERC20_ABI,
+    functionName: 'symbol',
+    chainId: CHAIN_ID,
+    query: { enabled, staleTime: Infinity },
+  })
+  const { data: dec } = useReadContract({
+    address: goodsToken,
+    abi: ERC20_ABI,
+    functionName: 'decimals',
+    chainId: CHAIN_ID,
+    query: { enabled, staleTime: Infinity },
+  })
+
+  if (!sym || dec === undefined) return undefined
+  return { symbol: sym, decimals: Number(dec) }
+}
+
 // ─── Block-based countdown ───────────────────────────────────────────────────
 
 /**
- * Seconds remaining to the deadline, measured against CHAIN time.
- *
- * The contract compares `block.timestamp >= deal.deadline`, so the browser clock
- * is the wrong reference: a viewer whose clock runs minutes fast sees "Ended"
- * while commits still succeed, and one running slow sees time left while
- * `commit` reverts with DeadlinePassed. Neither is acceptable on the screen that
- * exists to tell people how long they have.
- *
- * So anchor on the latest block's timestamp and tick locally from that anchor
- * using elapsed wall time, which only measures an interval rather than trusting
- * the clock's absolute value. Re-anchors as new blocks arrive.
+ * Returns the current chain timestamp in seconds, anchored on the latest block
+ * and ticked locally from measured elapsed time. Returns 0 until the first
+ * block arrives — callers must not treat 0 as a valid timestamp.
  */
 export function useChainNow(): number {
   const { data: block } = useBlock({ chainId: CHAIN_ID, watch: true })
 
-  // The anchor lives in a ref, not state: writing it must not start a render,
-  // and nothing reads it during one.
   const anchorRef = useRef<{ chainTs: number; localMs: number } | null>(null)
   const [nowSec, setNowSec] = useState(0)
 
@@ -180,9 +260,6 @@ export function useChainNow(): number {
     anchorRef.current = { chainTs: blockTs, localMs: Date.now() }
   }, [blockTs])
 
-  // Tick from the anchor. Date.now() is only ever read inside this callback, so
-  // render stays pure and the value advances by measured elapsed time rather
-  // than by whatever the local clock claims the absolute time is.
   useEffect(() => {
     const tick = () => {
       const a = anchorRef.current
@@ -197,9 +274,8 @@ export function useChainNow(): number {
 }
 
 /**
- * Returns seconds remaining to deadline, driven by `useChainNow`.
- * Returns undefined until chain time is known, so callers can withhold a
- * countdown rather than render a wrong one.
+ * Returns seconds remaining to deadline, driven by chain time.
+ * Returns undefined until chain time is known.
  */
 export function useBlockCountdown(deadlineTimestamp: bigint | undefined): number | undefined {
   const now = useChainNow()
@@ -211,51 +287,62 @@ export function useBlockCountdown(deadlineTimestamp: bigint | undefined): number
 
 // ─── Computed live state ──────────────────────────────────────────────────────
 
-/** Full live state for a deal room — batched reads */
+/** Full live state for a v2 deal room — batched reads */
 export function useLiveDealState(dealId: bigint | undefined) {
   const { deal, isLoading: dealLoading, refetch: refetchDeal } = useDeal(dealId)
-  const { data: buyerCount, refetch: refetchCount } = useBuyerCount(dealId)
-  const { data: clearingPrice, refetch: refetchPrice } = useClearingPrice(dealId)
+  const { data: buyerCount,   refetch: refetchCount  } = useBuyerCount(dealId)
+  const { data: totalUnitsBN, refetch: refetchUnits  } = useTotalUnits(dealId)
+  const { data: clearingPriceBN, refetch: refetchPrice } = useClearingPrice(dealId)
 
   const refetchAll = () => {
     void refetchDeal()
     void refetchCount()
+    void refetchUnits()
     void refetchPrice()
   }
 
-  // Current price as bigint (0 if not loaded)
-  const currentPrice = clearingPrice ? BigInt(clearingPrice) : 0n
+  const currentPrice  = clearingPriceBN !== undefined ? BigInt(clearingPriceBN) : 0n
+  const totalUnitsNum = totalUnitsBN    !== undefined ? Number(totalUnitsBN)     : 0
+  const buyerCountNum = buyerCount      !== undefined ? Number(buyerCount)       : 0
 
-  // Next tier threshold (inline, no useMemo — deps include deal.tiers which isn't stable)
-  const count = buyerCount !== undefined ? Number(buyerCount) : 0
-  let nextTier: { tier: DealTier; buyersNeeded: number } | undefined = undefined
-  if (deal && buyerCount !== undefined) {
+  // Next cheaper tier: the first unreached tier that is cheaper than the
+  // current live price. Skipping tiers that are not cheaper means we never
+  // tell the user "X more units and everyone pays the same price".
+  let nextTier: { tier: DealTier; unitsNeeded: number } | undefined = undefined
+  if (deal && totalUnitsBN !== undefined) {
     for (let i = 0; i < deal.tiers.length; i++) {
-      // The next tier is the first unreached one that is actually cheaper. Before
-      // the first threshold the live price is already tiers[0]'s, so tiers[0] is
-      // not a price drop and must be skipped.
-      if (count < deal.tiers[i].minBuyers && deal.tiers[i].pricePerUnit < currentPrice) {
-        nextTier = { tier: deal.tiers[i], buyersNeeded: deal.tiers[i].minBuyers - count }
+      if (
+        totalUnitsNum < deal.tiers[i].minUnits &&
+        deal.tiers[i].pricePerUnit < currentPrice
+      ) {
+        nextTier = {
+          tier: deal.tiers[i],
+          unitsNeeded: deal.tiers[i].minUnits - totalUnitsNum,
+        }
         break
       }
     }
   }
 
-  // Progress to next tier (0..1)
+  // Progress toward next tier (0..1) measured in units
   let tierProgress = 1
-  if (deal && buyerCount !== undefined && nextTier) {
+  if (deal && totalUnitsBN !== undefined && nextTier) {
     let prevThreshold = 0
     for (let i = deal.tiers.length - 1; i >= 0; i--) {
-      if (count >= deal.tiers[i].minBuyers) { prevThreshold = deal.tiers[i].minBuyers; break }
+      if (totalUnitsNum >= deal.tiers[i].minUnits) {
+        prevThreshold = deal.tiers[i].minUnits
+        break
+      }
     }
-    const range = nextTier.tier.minBuyers - prevThreshold
-    tierProgress = range > 0 ? (count - prevThreshold) / range : 1
+    const range = nextTier.tier.minUnits - prevThreshold
+    tierProgress = range > 0 ? (totalUnitsNum - prevThreshold) / range : 1
   }
 
   return {
     deal,
     dealLoading,
-    buyerCount: buyerCount !== undefined ? count : undefined,
+    buyerCount:   buyerCount      !== undefined ? buyerCountNum   : undefined,
+    totalUnits:   totalUnitsBN    !== undefined ? totalUnitsNum   : undefined,
     clearingPrice: currentPrice,
     nextTier,
     tierProgress,

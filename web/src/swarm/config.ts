@@ -55,6 +55,7 @@ const CONTRACTS = {
     DealFactory: ZERO as `0x${string}`,
     DemandPool:  ZERO as `0x${string}`,
     Settler:     ZERO as `0x${string}`,
+    SwarmPass:   ZERO as `0x${string}`,
     deployBlock: 0n,
     deployed: false,
   },
@@ -68,6 +69,7 @@ const CONTRACTS = {
     DealFactory: '0xAd305D088FCc2BD0482C7A457F6d3E1f7fEb98cb' as `0x${string}`,
     DemandPool:  '0xc9f1D52E835Fa42d2BB271167f7B1855dDAbb524' as `0x${string}`,
     Settler:     '0xe8d210A3735cdbd74218c18Ed9e020515f32914f' as `0x${string}`,
+    SwarmPass:   ZERO as `0x${string}`,  // set when v2 deploys
     deployBlock: 68880557n,
     deployed: true,
   },

@@ -3,10 +3,10 @@ import { formatUsdcPrice } from './utils'
 import type { DealTier } from './hooks'
 
 interface Props {
-  buyerCount: number
+  buyerCount: number     // totalUnits in v2
   tiers: DealTier[]
-  minBuyers: number
-  progress: number          // 0..1 progress to next tier
+  minBuyers: number      // minUnits threshold in v2
+  progress: number       // 0..1 progress to next tier
   nextTier: { tier: DealTier; buyersNeeded: number } | undefined
 }
 
@@ -30,7 +30,7 @@ export function TierProgress({ buyerCount, tiers, minBuyers, progress, nextTier 
         ) : (
           <p className="text-sm font-medium" style={{ color: 'var(--ink-2)' }}>
             <span className="font-bold" style={{ color: 'var(--ink)' }}>
-              {nextTier.buyersNeeded} more {nextTier.buyersNeeded === 1 ? 'buyer' : 'buyers'}
+              {nextTier.buyersNeeded} more {nextTier.buyersNeeded === 1 ? 'unit' : 'units'}
             </span>{' '}
             and everyone pays{' '}
             <span className="font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
@@ -55,8 +55,8 @@ export function TierProgress({ buyerCount, tiers, minBuyers, progress, nextTier 
       {/* Tier curve mini-legend */}
       <div className="flex gap-2 flex-wrap">
         {tiers.map((t, i) => {
-          const unlocked = buyerCount >= t.minBuyers
-          const active = buyerCount >= t.minBuyers && (i === tiers.length - 1 || buyerCount < tiers[i + 1].minBuyers)
+          const unlocked = buyerCount >= t.minUnits
+          const active   = buyerCount >= t.minUnits && (i === tiers.length - 1 || buyerCount < tiers[i + 1].minUnits)
           return (
             <div
               key={i}
@@ -68,7 +68,7 @@ export function TierProgress({ buyerCount, tiers, minBuyers, progress, nextTier 
               }}
             >
               <span className="tabular-nums font-bold">{formatUsdcPrice(t.pricePerUnit)}</span>
-              <span>@ {t.minBuyers}+</span>
+              <span>@ {t.minUnits}+</span>
             </div>
           )
         })}
@@ -77,7 +77,7 @@ export function TierProgress({ buyerCount, tiers, minBuyers, progress, nextTier 
       {/* Minimum threshold status */}
       {!metMinimum && (
         <p className="text-xs" style={{ color: 'var(--muted)' }}>
-          {minBuyers - buyerCount} more needed to meet the deal minimum of {minBuyers}
+          {minBuyers - buyerCount} more units needed to meet the deal minimum of {minBuyers}
         </p>
       )}
     </div>
