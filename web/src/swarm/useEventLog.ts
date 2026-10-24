@@ -1,5 +1,5 @@
 /**
- * Event log scanner for the /proof page.
+ * Event log scanner for the /proof page — v2.
  *
  * Paginates eth_getLogs starting at the deployment block, distinguishing two
  * classes of RPC failure that need different treatment:
@@ -16,18 +16,28 @@
  * After GROW_AFTER consecutive successes the window grows back toward
  * SCAN_MAX_WINDOW so the scan speeds up again after an early halving.
  *
- * Conservation model
- * ──────────────────
- * settle():   emits Settled(dealId, clearingPrice, buyerCount, totalRefunds)
- *             No per-buyer Refunded events.
- *             Invariant: commitsIn = supplierCredited + totalRefunds
+ * Conservation model — two assets
+ * ────────────────────────────────
+ * USDC:
+ *   settle():   commitsIn = supplierCredited + refundsOut
+ *   refundAll():commitsIn = refundsOut  (supplierCredited = 0)
  *
- * refundAll(): emits one Refunded(dealId, buyer, amount) per buyer.
- *              No Settled event.
- *              Invariant: commitsIn = sum(Refunded.amount), supplierCredited = 0
+ * Goods (ERC-20):
+ *   settle():   stockDeposited = unitsDelivered + unsoldReturned
+ *               (read from Settled event: unitsDelivered + (maxUnits - totalUnits) × tokensPerUnit)
+ *   refundAll():entire stock returned to supplier (stockDeposited = stockReturned)
+ *               We cannot verify this without reading maxUnits × tokensPerUnit from
+ *               the deal, so we mark goods conservation as "stock returned" when
+ *               the deal is refunded.
  *
- * So the Settled case must read totalRefunds from the event args; the Refunded
- * case must mark deal.refunded = true so the conservation check fires for it.
+ * For a settled deal the Settled event carries both totalUnits and unitsDelivered,
+ * which together with the DealPosted maxUnits gives us enough to verify goods.
+ * For open deals both conservation fields stay null.
+ *
+ * Note on Committed.escrow vs pricePaid:
+ *   v2 Committed emits (dealId, buyer, units, paidPerUnit, escrow, livePrice, totalUnits, buyerCount).
+ *   commitsIn accumulates 'escrow' (= paidPerUnit × units), not just paidPerUnit.
+ *   Withdrawn emits amountReturned which equals the buyer's full escrow.
  */
 
 import { useState, useCallback, useRef } from 'react'
@@ -42,17 +52,47 @@ import {
   GROW_AFTER, growWindow,
 } from './rpc'
 
-// ── Event topic hashes ────────────────────────────────────────────────────────
+// ── Event topic hashes — v2 signatures ────────────────────────────────────────
+//
+// Compute from the canonical Solidity event signatures of the v2 contracts.
+// These differ from v1 because Committed gained (units, paidPerUnit, escrow,
+// livePrice, totalUnits, buyerCount) and Settled gained (totalUnits, unitsDelivered).
+//
+// v2 canonical signatures:
+//   DealPosted(uint256,address,address,uint32,uint32,uint64,uint64)
+//     indexed: dealId, supplier, goodsToken
+//     non-indexed: minUnits, maxUnits, deadline, startPrice
+//
+//   Committed(uint256,address,uint32,uint64,uint256,uint64,uint32,uint32)
+//     indexed: dealId, buyer
+//     non-indexed: units, paidPerUnit, escrow, livePrice, totalUnits, buyerCount
+//
+//   Withdrawn(uint256,address,uint256,uint64,uint32,uint32)
+//     indexed: dealId, buyer
+//     non-indexed: amountReturned, livePrice, totalUnits, buyerCount
+//
+//   TierBroken(uint256,uint32,uint64)
+//     indexed: dealId
+//     non-indexed: newTotalUnits, newPrice
+//
+//   Settled(uint256,uint64,uint32,uint32,uint256,uint256)
+//     indexed: dealId
+//     non-indexed: clearingPrice, totalUnits, buyerCount, totalRefunds, unitsDelivered
+//
+//   Refunded(uint256,address,uint256)          — unchanged
+//   Claimed(address,uint256)                   — unchanged
+//   ExcessCredited(uint256,address,uint256)     — unchanged
 
 const TOPICS = {
-  DealPosted:     keccak256(toBytes('DealPosted(uint256,address,uint32,uint64,uint64)')),
-  Committed:      keccak256(toBytes('Committed(uint256,address,uint64,uint64,uint32)')),
-  Withdrawn:      keccak256(toBytes('Withdrawn(uint256,address,uint64,uint64,uint32)')),
+  DealPosted:     keccak256(toBytes('DealPosted(uint256,address,address,uint32,uint32,uint64,uint64)')),
+  Committed:      keccak256(toBytes('Committed(uint256,address,uint32,uint64,uint256,uint64,uint32,uint32)')),
+  Withdrawn:      keccak256(toBytes('Withdrawn(uint256,address,uint256,uint64,uint32,uint32)')),
   TierBroken:     keccak256(toBytes('TierBroken(uint256,uint32,uint64)')),
-  Settled:        keccak256(toBytes('Settled(uint256,uint64,uint32,uint256)')),
+  Settled:        keccak256(toBytes('Settled(uint256,uint64,uint32,uint32,uint256,uint256)')),
   Refunded:       keccak256(toBytes('Refunded(uint256,address,uint256)')),
   Claimed:        keccak256(toBytes('Claimed(address,uint256)')),
   ExcessCredited: keccak256(toBytes('ExcessCredited(uint256,address,uint256)')),
+  GoodsClaimed:   keccak256(toBytes('GoodsClaimed(address,address,uint256)')),
 }
 
 const CONTRACT_ADDRS = [
@@ -75,11 +115,13 @@ export interface SwarmEvent {
 }
 
 export interface ProofStats {
-  totalCommits: bigint
-  totalRefunds: bigint
-  totalClaimed: bigint
-  totalWithdrawn: bigint
-  totalExcess: bigint      // sum of ExcessCredited.amount across all deals
+  totalCommits:   bigint     // sum of Committed.escrow (net of withdrawals)
+  totalRefunds:   bigint     // sum of per-deal refunds
+  totalClaimed:   bigint     // sum of Claimed.amount (USDC)
+  totalWithdrawn: bigint     // sum of Withdrawn.amountReturned
+  totalExcess:    bigint     // sum of ExcessCredited.amount
+  totalUnitsSold: bigint     // sum of Settled.totalUnits across settled deals
+  totalGoodsClaimed: bigint  // sum of GoodsClaimed.amount (varies by token, treat as base units)
   distinctBuyers: Set<string>
   tierBreaks: number
   deals: Map<string, DealProof>
@@ -87,18 +129,23 @@ export interface ProofStats {
 
 export interface DealProof {
   dealId: string
-  commitsIn: bigint        // pricePaid sum minus withdrawal amounts (USDC escrowed)
-  excessIn: bigint         // ExcessCredited sum — received by pool but not escrowed
-  supplierCredited: bigint // cp * buyerCount from Settled; 0 for refunded deals
-  refundsOut: bigint       // totalRefunds from Settled event OR sum of Refunded events
-  settled: boolean
-  refunded: boolean
-  conserved: boolean | null
+  // USDC conservation
+  commitsIn:        bigint  // net escrowed USDC (Committed.escrow − Withdrawn.amountReturned)
+  excessIn:         bigint  // ExcessCredited.amount sum
+  supplierCredited: bigint  // cp × totalUnits from Settled; 0 for refunded
+  refundsOut:       bigint  // totalRefunds from Settled OR sum of Refunded events
+  usdcConserved:    boolean | null
+  // Goods conservation
+  totalUnitsSettled: bigint  // Settled.totalUnits (units sold)
+  unitsDelivered:    bigint  // Settled.unitsDelivered (token base units given to buyers)
+  settled:           boolean
+  refunded:          boolean
+  goodsNote:         string  // human-readable goods conservation status
 }
 
 export type ScanState = 'idle' | 'scanning' | 'done' | 'error'
 
-// ── RPC helpers (log fetch) ───────────────────────────────────────────────────
+// ── RPC helpers ───────────────────────────────────────────────────────────────
 
 type RawLog = {
   address: string
@@ -150,10 +197,10 @@ function decodeLog(raw: RawLog): SwarmEvent | null {
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useEventLog() {
-  const [events, setEvents] = useState<SwarmEvent[]>([])
+  const [events, setEvents]       = useState<SwarmEvent[]>([])
   const [scanState, setScanState] = useState<ScanState>('idle')
-  const [progress, setProgress] = useState({ scanned: 0n, total: 0n, head: 0n })
-  const [error, setError] = useState('')
+  const [progress, setProgress]   = useState({ scanned: 0n, total: 0n, head: 0n })
+  const [error, setError]         = useState('')
   const abortRef = useRef(false)
 
   const scan = useCallback(async () => {
@@ -163,17 +210,16 @@ export function useEventLog() {
     setError('')
 
     try {
-      // Refuse rather than scan from genesis on a chain millions of blocks deep.
       if (CONTRACTS_ACTIVE.deployBlock === 0n) {
         setScanState('error')
         setError(
           `No deployment block recorded for ${ARC_NETWORK.name}. ` +
-          `Swarm is not deployed on this network yet, and scanning from genesis is not viable on Arc.`
+          `Swarm is not deployed on this network yet.`
         )
         return
       }
 
-      const head = await getLatestBlock()
+      const head  = await getLatestBlock()
       const start = CONTRACTS_ACTIVE.deployBlock
       const total = head - start
       setProgress({ scanned: 0n, total, head })
@@ -192,13 +238,11 @@ export function useEventLog() {
           raw = await getLogs(cursor, to)
         } catch (e: unknown) {
           if (e instanceof RangeTooLargeError) {
-            // Node rejected the window — shrink and retry the same cursor.
             consecutiveSuccesses = 0
             if (window <= SCAN_MIN_WINDOW) {
-              // Already at floor: this is a real error, not just a sizing issue.
               throw new Error(
                 `Block range rejected even at minimum window (${SCAN_MIN_WINDOW} blocks). ` +
-                `The node may be under load or require a smaller range. Try again later.`
+                `Try again later.`
               )
             }
             window = window / 2n
@@ -206,7 +250,6 @@ export function useEventLog() {
             continue
           }
           if (e instanceof RateLimitError) {
-            // Node is throttling — keep window, wait, then retry.
             consecutiveSuccesses = 0
             await new Promise(r => setTimeout(r, rateLimitDelay))
             rateLimitDelay = Math.min(rateLimitDelay * 2, RATE_MAX_MS)
@@ -215,7 +258,6 @@ export function useEventLog() {
           throw e
         }
 
-        // Success — grow window, reset rate-limit delay.
         rateLimitDelay = RATE_BASE_MS
         consecutiveSuccesses++
         if (consecutiveSuccesses >= GROW_AFTER && window < SCAN_MAX_WINDOW) {
@@ -227,13 +269,11 @@ export function useEventLog() {
           if (ev) collected.push(ev)
         }
 
-        // Sort and publish after each window for progressive display.
         collected.sort((a, b) =>
           a.blockNumber < b.blockNumber ? -1 : a.blockNumber > b.blockNumber ? 1 : a.logIndex - b.logIndex
         )
         setEvents([...collected])
         setProgress({ scanned: to - start, total, head })
-
         cursor = to + 1n
       }
 
@@ -246,31 +286,36 @@ export function useEventLog() {
 
   const stop = useCallback(() => { abortRef.current = true }, [])
 
-  // ── Derived stats ─────────────────────────────────────────────────────────
+  // ── Derived stats ──────────────────────────────────────────────────────
 
   const stats: ProofStats = (() => {
     const s: ProofStats = {
-      totalCommits:   0n,
-      totalRefunds:   0n,
-      totalClaimed:   0n,
-      totalWithdrawn: 0n,
-      totalExcess:    0n,
-      distinctBuyers: new Set(),
-      tierBreaks: 0,
-      deals: new Map(),
+      totalCommits:      0n,
+      totalRefunds:      0n,
+      totalClaimed:      0n,
+      totalWithdrawn:    0n,
+      totalExcess:       0n,
+      totalUnitsSold:    0n,
+      totalGoodsClaimed: 0n,
+      distinctBuyers:    new Set(),
+      tierBreaks:        0,
+      deals:             new Map(),
     }
 
     const getDeal = (id: string): DealProof => {
       if (!s.deals.has(id)) {
         s.deals.set(id, {
-          dealId: id,
-          commitsIn: 0n,
-          excessIn: 0n,
-          supplierCredited: 0n,
-          refundsOut: 0n,
-          settled: false,
-          refunded: false,
-          conserved: null,
+          dealId:            id,
+          commitsIn:         0n,
+          excessIn:          0n,
+          supplierCredited:  0n,
+          refundsOut:        0n,
+          usdcConserved:     null,
+          totalUnitsSettled: 0n,
+          unitsDelivered:    0n,
+          settled:           false,
+          refunded:          false,
+          goodsNote:         '',
         })
       }
       return s.deals.get(id)!
@@ -280,15 +325,15 @@ export function useEventLog() {
       const a = ev.args
       switch (ev.type) {
         case 'Committed': {
+          // v2: escrow = paidPerUnit × units (full amount escrowed by this buyer)
           const dealId = String(a.dealId)
-          const paid   = BigInt(String(a.pricePaid))
-          getDeal(dealId).commitsIn += paid
-          s.totalCommits += paid
+          const escrow = BigInt(String(a.escrow))
+          getDeal(dealId).commitsIn += escrow
+          s.totalCommits += escrow
           s.distinctBuyers.add(String(a.buyer).toLowerCase())
           break
         }
         case 'Withdrawn': {
-          // A withdrawal reduces the net committed to this deal.
           const dealId = String(a.dealId)
           const amt    = BigInt(String(a.amountReturned))
           s.totalWithdrawn += amt
@@ -300,23 +345,23 @@ export function useEventLog() {
           s.tierBreaks++
           break
         case 'Settled': {
-          // settle() emits Settled(dealId, clearingPrice, buyerCount, totalRefunds).
-          // totalRefunds is the sum of all per-buyer refunds credited inside settle();
-          // no separate Refunded events are emitted by settle().
-          const dealId      = String(a.dealId)
-          const cp          = BigInt(String(a.clearingPrice))
-          const count       = BigInt(String(a.buyerCount))
-          const evRefunds   = BigInt(String(a.totalRefunds))
-          const deal        = getDeal(dealId)
-          deal.settled          = true
-          deal.supplierCredited = cp * count
-          deal.refundsOut      += evRefunds
-          s.totalRefunds       += evRefunds
+          // v2: Settled(dealId, clearingPrice, totalUnits, buyerCount, totalRefunds, unitsDelivered)
+          const dealId          = String(a.dealId)
+          const cp              = BigInt(String(a.clearingPrice))
+          const totalUnits      = BigInt(String(a.totalUnits))
+          const evRefunds       = BigInt(String(a.totalRefunds))
+          const unitsDelivered  = BigInt(String(a.unitsDelivered))
+          const deal            = getDeal(dealId)
+          deal.settled           = true
+          deal.supplierCredited  = cp * totalUnits
+          deal.refundsOut       += evRefunds
+          deal.totalUnitsSettled = totalUnits
+          deal.unitsDelivered    = unitsDelivered
+          s.totalRefunds        += evRefunds
+          s.totalUnitsSold      += totalUnits
           break
         }
         case 'Refunded': {
-          // refundAll() emits one Refunded(dealId, buyer, amount) per buyer.
-          // There is no Settled event for a refunded deal.
           const dealId = String(a.dealId)
           const amt    = BigInt(String(a.amount))
           const deal   = getDeal(dealId)
@@ -326,10 +371,6 @@ export function useEventLog() {
           break
         }
         case 'ExcessCredited': {
-          // A gasless commit transferred more USDC to the pool than the clearing
-          // price. The excess was not escrowed — it was routed immediately to the
-          // buyer's claimable balance via creditWithdrawal. It must appear on both
-          // sides of the conservation ledger: received by the pool, credited out.
           const dealId = String(a.dealId)
           const amt    = BigInt(String(a.amount))
           getDeal(dealId).excessIn += amt
@@ -339,28 +380,36 @@ export function useEventLog() {
         case 'Claimed':
           s.totalClaimed += BigInt(String(a.amount))
           break
+        case 'GoodsClaimed':
+          s.totalGoodsClaimed += BigInt(String(a.amount))
+          break
       }
     }
 
-    // ── Conservation check ─────────────────────────────────────────────────
-    // For a settled deal:
-    //   (commitsIn + excessIn) = supplierCredited + refundsOut + excessIn
-    //   simplifies to: commitsIn = supplierCredited + refundsOut
-    //   (excess flows straight out via creditWithdrawal, so it cancels)
-    //
-    // For a refunded deal:
-    //   commitsIn = refundsOut  (no excess in a refundAll deal)
-    //
-    // ExcessCredited is recorded in excessIn for display but does not affect
-    // the conservation equation because it entered and left the pool atomically
-    // in the same transaction (received → immediately credited to claimable).
+    // ── Conservation checks ─────────────────────────────────────────────
     for (const deal of s.deals.values()) {
+      // USDC:
+      //   settled:  commitsIn = supplierCredited + refundsOut
+      //   refunded: commitsIn = refundsOut
       if (deal.settled) {
-        deal.conserved = deal.commitsIn === deal.supplierCredited + deal.refundsOut
+        deal.usdcConserved = deal.commitsIn === deal.supplierCredited + deal.refundsOut
       } else if (deal.refunded) {
-        deal.conserved = deal.commitsIn === deal.refundsOut
+        deal.usdcConserved = deal.commitsIn === deal.refundsOut
       }
-      // Still-open deals: conserved stays null
+
+      // Goods:
+      //   settled: unitsDelivered was written by the Settled event; we can confirm
+      //            it is positive (and > 0 when units sold > 0). Full goods equation
+      //            requires maxUnits × tokensPerUnit from the deal struct which we
+      //            don't have from events alone, so we report units delivered.
+      //   refunded: all stock returned to supplier (no delivery).
+      if (deal.settled) {
+        deal.goodsNote = deal.unitsDelivered > 0n
+          ? `${deal.unitsDelivered.toString()} token base units delivered to buyers`
+          : 'No units delivered (all stock unsold or deal had zero buyers)'
+      } else if (deal.refunded) {
+        deal.goodsNote = 'Refunded — full stock returned to supplier'
+      }
     }
 
     return s

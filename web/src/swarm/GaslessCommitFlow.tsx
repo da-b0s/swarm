@@ -165,14 +165,15 @@ export function GaslessCommitFlow({
 
       const data = await res.json() as {
         txHash?:         string
-        pricePaid?:      string
+        paidPerUnit?:    string
+        escrow?:         string
         excessCredited?: string
         error?:          string
-        requiredPrice?:  string
+        requiredTotal?:  string  // v2: 409 carries the new required total
       }
 
-      if (res.status === 409 && data.requiredPrice) {
-        const newTotal = BigInt(data.requiredPrice)
+      if (res.status === 409 && data.requiredTotal) {
+        const newTotal = BigInt(data.requiredTotal)
         setSignTotal(newTotal)
         setSalt(randomSalt())
         void refetchNonce()
@@ -191,8 +192,9 @@ export function GaslessCommitFlow({
       }
 
       setTxHash(data.txHash as `0x${string}`)
-      setPricePaid(data.pricePaid      ? BigInt(data.pricePaid)      : null)
-      setExcess(  data.excessCredited  ? BigInt(data.excessCredited) : null)
+      // v2: paidPerUnit = per-unit price; use it as the "price paid" display
+      setPricePaid(data.paidPerUnit     ? BigInt(data.paidPerUnit)     : null)
+      setExcess(   data.excessCredited  ? BigInt(data.excessCredited)  : null)
       setStep('done')
       onCommitted()
     } catch (e: unknown) {

@@ -26,6 +26,8 @@ import {
   type Chain,
   type Account,
   ContractFunctionRevertedError,
+  keccak256,
+  toBytes,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
@@ -77,9 +79,11 @@ const walletClient = createWalletClient({
 
 // ── ABI fragments ─────────────────────────────────────────────────────────────
 
+// v2 ABI — units added to commitWithAuthorization and Committed event;
+// PriceRoseBeyondAuthorization now carries the new total (uint256) not a per-unit price.
 const POOL_ABI = parseAbi([
-  'function commitWithAuthorization(uint256 dealId, address buyer, uint256 authorizedAmount, uint256 validAfter, uint256 validBefore, bytes32 salt, uint8 v, bytes32 r, bytes32 s) external',
-  'event Committed(uint256 indexed dealId, address indexed buyer, uint64 pricePaid, uint64 livePrice, uint32 buyerCount)',
+  'function commitWithAuthorization(uint256 dealId, address buyer, uint32 units, uint256 authorizedAmount, uint256 validAfter, uint256 validBefore, bytes32 salt, uint8 v, bytes32 r, bytes32 s) external',
+  'event Committed(uint256 indexed dealId, address indexed buyer, uint32 units, uint64 paidPerUnit, uint256 escrow, uint64 livePrice, uint32 totalUnits, uint32 buyerCount)',
   'event ExcessCredited(uint256 indexed dealId, address indexed buyer, uint256 amount)',
   'error AlreadyCommitted()',
   'error AuthorizationAlreadyUsed()',
@@ -88,9 +92,12 @@ const POOL_ABI = parseAbi([
   'error DeadlinePassed()',
   'error DealNotOpen()',
   'error Paused()',
-  'error PriceRoseBeyondAuthorization(uint64 requiredPrice)',
+  'error PriceRoseBeyondAuthorization(uint256 newTotal)',
   'error SettlerNotConfigured()',
   'error WouldStrandBuyer()',
+  'error ZeroUnits()',
+  'error UnitCapReached()',
+  'error UnitsPerBuyerExceeded()',
 ])
 
 const USDC_ABI = parseAbi([
@@ -188,11 +195,12 @@ function appendRelayLog(entry: Record<string, unknown>): void {
 interface CommitBody {
   dealId: string
   buyer: Hex
+  units: number   // v2: number of units the buyer is ordering
   authorizedAmount: string
   validAfter: string
   validBefore: string
   salt: Hex
-  signature: Hex  // packed 65-byte sig (r+s+v) OR object {v,r,s}
+  signature: Hex  // packed 65-byte sig (r+s+v)
 }
 
 function splitSig(sig: Hex): { v: number; r: Hex; s: Hex } {
@@ -209,7 +217,9 @@ function splitSig(sig: Hex): { v: number; r: Hex; s: Hex } {
 
 interface RelayResult {
   txHash: Hex
-  pricePaid: bigint
+  units: number
+  paidPerUnit: bigint
+  escrow: bigint
   excessCredited: bigint
   gasUsdcCost: string
 }
@@ -217,6 +227,7 @@ interface RelayResult {
 async function relay(body: CommitBody): Promise<RelayResult> {
   const { v, r, s } = splitSig(body.signature)
   const dealId           = BigInt(body.dealId)
+  const units            = body.units              // v2: uint32
   const authorizedAmount = BigInt(body.authorizedAmount)
   const validAfter       = BigInt(body.validAfter)
   const validBefore      = BigInt(body.validBefore)
@@ -239,15 +250,15 @@ async function relay(body: CommitBody): Promise<RelayResult> {
       address: POOL_ADDRESS,
       abi: POOL_ABI,
       functionName: 'commitWithAuthorization',
-      args: [dealId, buyer, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
+      args: [dealId, buyer, units, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
       account: account.address,
     })
-    // estimateContractGas gives a tighter figure; add 20% safety margin (fix #6).
+    // estimateContractGas gives a tighter figure; add 20% safety margin.
     const raw = await publicClient.estimateContractGas({
       address: POOL_ADDRESS,
       abi: POOL_ABI,
       functionName: 'commitWithAuthorization',
-      args: [dealId, buyer, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
+      args: [dealId, buyer, units, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
       account: account.address,
     })
     estimatedGas = (raw * 120n) / 100n
@@ -295,7 +306,7 @@ async function relay(body: CommitBody): Promise<RelayResult> {
           address: POOL_ADDRESS,
           abi: POOL_ABI,
           functionName: 'commitWithAuthorization',
-          args: [dealId, buyer, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
+          args: [dealId, buyer, units, authorizedAmount, validAfter, validBefore, salt, v, r as Hex, s as Hex],
           nonce,
           maxFeePerGas: fee,
           maxPriorityFeePerGas: 0n,
@@ -366,24 +377,48 @@ async function relay(body: CommitBody): Promise<RelayResult> {
   const gasPrice = receipt.effectiveGasPrice ?? MIN_GAS_PRICE
 
   // 5. Parse Committed and ExcessCredited from the receipt logs.
-  let pricePaid: bigint       = 0n
-  let excessCredited: bigint  = 0n
+  //
+  // v2 Committed(uint256 indexed dealId, address indexed buyer,
+  //              uint32 units, uint64 paidPerUnit, uint256 escrow,
+  //              uint64 livePrice, uint32 totalUnits, uint32 buyerCount)
+  //
+  // Non-indexed data layout (each slot = 32 bytes, big-endian):
+  //   [0]  units      (uint32  → right-aligned in 32 bytes)
+  //   [1]  paidPerUnit(uint64  → right-aligned)
+  //   [2]  escrow     (uint256 → full 32 bytes)
+  //   [3]  livePrice  (uint64)
+  //   [4]  totalUnits (uint32)
+  //   [5]  buyerCount (uint32)
+  //
+  // ExcessCredited(uint256 indexed dealId, address indexed buyer, uint256 amount)
+  //   [0]  amount (uint256)
+  //
+  // Topic hashes, computed from the v2 event signatures rather than typed in:
+  // a hand-written hash here once never matched, so every relayed order was
+  // reported back as 0 units and $0 paid.
+  const COMMITTED_TOPIC = keccak256(toBytes('Committed(uint256,address,uint32,uint64,uint256,uint64,uint32,uint32)')).toLowerCase()
+  const EXCESS_TOPIC    = keccak256(toBytes('ExcessCredited(uint256,address,uint256)')).toLowerCase()
 
-  // keccak256 topic hashes (verified against the compiled ABI):
-  //   Committed(uint256,address,uint64,uint64,uint32)
-  //   ExcessCredited(uint256,address,uint256)
-  const COMMITTED_TOPIC = '0x201b52d75ed359a2ae4baad1623cdef768038c57814a0a946233d073c8f470f6'
-  const EXCESS_TOPIC    = '0x3cfc150e50c4024ef3086c288297f0b4d66863e163f546bcc0871098df534b41'
+  let committedUnits: number  = 0
+  let paidPerUnit:  bigint    = 0n
+  let escrow:       bigint    = 0n
+  let excessCredited: bigint  = 0n
 
   for (const log of receipt.logs) {
     try {
-      const t0 = log.topics[0]?.toLowerCase()
+      const t0  = log.topics[0]?.toLowerCase()
+      const raw = (log.data ?? '0x').slice(2) // strip 0x; each word is 64 hex chars
+
       if (t0 === COMMITTED_TOPIC) {
-        // pricePaid is the first non-indexed arg (uint64), packed into first word of data
-        pricePaid = BigInt('0x' + (log.data ?? '0x').slice(2, 66))
+        // Slot 0: units (uint32, right-aligned)
+        committedUnits = parseInt(raw.slice(0, 64),   16)
+        // Slot 1: paidPerUnit (uint64, right-aligned)
+        paidPerUnit    = BigInt('0x' + raw.slice(64,  128))
+        // Slot 2: escrow (uint256, full word)
+        escrow         = BigInt('0x' + raw.slice(128, 192))
       } else if (t0 === EXCESS_TOPIC) {
-        // amount is the only non-indexed arg (uint256), first 32 bytes of data
-        excessCredited = BigInt('0x' + (log.data ?? '0x').slice(2, 66))
+        // Slot 0: amount (uint256)
+        excessCredited = BigInt('0x' + raw.slice(0, 64))
       }
     } catch { /* skip unparseable logs */ }
   }
@@ -399,14 +434,16 @@ async function relay(body: CommitBody): Promise<RelayResult> {
     ts:             new Date().toISOString(),
     dealId:         body.dealId,
     buyer:          buyer,
+    units:          committedUnits,
     txHash,
     block:          receipt.blockNumber.toString(),
-    pricePaid:      pricePaid.toString(),
+    paidPerUnit:    paidPerUnit.toString(),
+    escrow:         escrow.toString(),
     excessCredited: excessCredited.toString(),
     gasUsdcCost,
   })
 
-  return { txHash, pricePaid, excessCredited, gasUsdcCost }
+  return { txHash, units: committedUnits, paidPerUnit, escrow, excessCredited, gasUsdcCost }
 }
 
 // ── HTTP server ────────────────────────────────────────────────────────────────
@@ -482,6 +519,13 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: `Missing field: ${f}` }); return
       }
     }
+    // units is a required v2 field — allow 0 check separately (must be ≥ 1).
+    if (body.units === undefined || body.units === null) {
+      json(res, 400, { error: 'Missing field: units' }); return
+    }
+    if (!Number.isInteger(body.units) || body.units < 1) {
+      json(res, 400, { error: 'units must be a positive integer' }); return
+    }
 
     // Rate limit per buyer.
     const rl = checkRateLimit(body.buyer)
@@ -491,15 +535,18 @@ const server = http.createServer(async (req, res) => {
       const result = await relay(body)
       json(res, 200, {
         txHash:         result.txHash,
-        pricePaid:      result.pricePaid.toString(),
+        units:          result.units,
+        paidPerUnit:    result.paidPerUnit.toString(),
+        escrow:         result.escrow.toString(),
         excessCredited: result.excessCredited.toString(),
         gasUsdcCost:    result.gasUsdcCost,
       })
     } catch (e: unknown) {
       const err = e as { code?: string; args?: unknown[]; message?: string }
       // Named contract errors: return structured responses the frontend can act on.
+      // v2: PriceRoseBeyondAuthorization carries newTotal (the new required total, not per-unit price).
       if (err.code === 'PriceRoseBeyondAuthorization' && Array.isArray(err.args) && err.args.length > 0) {
-        json(res, 409, { error: 'PriceRoseBeyondAuthorization', requiredPrice: err.args[0]?.toString() })
+        json(res, 409, { error: 'PriceRoseBeyondAuthorization', requiredTotal: err.args[0]?.toString() })
         return
       }
       if (err.code === 'Blocklisted') {

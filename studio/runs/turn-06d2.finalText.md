@@ -1,0 +1,45 @@
+Reading the spec and all current files I need before writing anything. Now read the rest of the files I need: Now read the proof page and relayer: Now read the proof page: Good. Now I have everything. Let me set up the todos and work through all three pieces: Now update `useEventLog.ts` with v2 topic hashes and v2 conservation (goods asset): Now update `ProofPage.tsx` with v2 event summaries and goods conservation column: Now update the relayer for v2: new POOL_ABI with `units`, parse v2 `Committed` event, return `requiredTotal`: Now update `CommitBody` to add `units`, the `relay` function signature, and the simulation/send calls: Now update the `RelayResult` interface, then the relay function to thread `units` through simulation and send: Now update the simulate and estimateContractGas calls to include `units`: Now update `sendAtFee` to use v2 args: Now update the log parsing to read v2 `Committed` fields (`units`, `paidPerUnit`, `escrow`) and update the result/log: Now update the relay log and return value: Now update the HTTP layer: add `units` to required fields, update 200 response, change 409 to return `requiredTotal`: Now update the 200 response to return v2 fields and the 409 to return `requiredTotal`: Now update `GaslessCommitFlow.tsx` to read `requiredTotal` from 409 instead of `requiredPrice`: Also update the success handler to use v2 response fields (`paidPerUnit`, `escrow`): Now run lint + typecheck: Two TypeScript narrowing errors in `SupplierView` — the `if` blocks that mutate state during render need to be removed (state mutation during render is React-unsafe anyway). I'll fix those two render-phase side-effects by converting them to proper `useEffect` calls: Now find and replace the two render-phase state mutations with `useEffect`: Now fix both render-phase mutations: Now re-read the render section to fix the CTA that references `step === 'done' || postSuccess` — since `step` is now set to `'done'` inside the effect, simplify the render check: The render checks reference `step !== 'posting'` and `step !== 'done'` in conditions where TypeScript knows they can't be those values — I need to widen the `step` state so it can be all of the `PostStep` values. The issue is the conditions at lines 721 and 737. The `postSuccess` check at 721 is the type error because `step` there is narrowed. Let me simplify: `set-state-in-effect` errors. The right fix is to derive these values entirely from the wagmi receipt hooks — no `step` state for the approval result, and derive `newDealId` lazily from the receipt during render. Replace both effects and the `step`/`newDealId` state with derived values: Now replace both effects with useMemo / derived render logic: Now remove the `newDealId` state (replaced by `parsedDealId`) and the approval effect: Now remove the approval `useEffect`: Now update render to use `parsedDealId` instead of `newDealId`, and replace the `onDealPosted` call (which must still happen) with an `onClick` approach in the success card. Also update the step advancement for approval: use `approveSuccess` directly in render (which is already done), and call `onDealPosted` from `handlePost`'s success callback or from the success card. The simplest approach: call `onDealPosted(parsedDealId)` in a button click in the success card, or just call it when we navigate. Actually the best pattern here is to fire `onDealPosted` from the `handlePost` `onSuccess` — but we need the deal id which is in the receipt. 
+
+The cleanest fix: keep `onDealPosted` called from the success card's render when `parsedDealId` is available (using a one-shot callback in a button), OR just let the parent use it passively. Looking at `App.tsx` — the parent probably uses `onDealPosted` to navigate to the deal. Let me check: The parent calls `onDealPosted` to navigate. The success card shows a "View Deal" button — I'll call `onDealPosted(parsedDealId)` from that button's `onClick`. Update the success card render: The `step === 'done'` check is now dead code since step is never set to 'done' any more — that's fine. Now the `step` type is `'idle' | 'approving' | 'approved' | 'posting' | 'done'` but 'done' is never set. I need to also update the `busy` computation and remove the reference to `step === 'done'` in it: Good — no more `step === 'done'`. Now check what `busy` and the approval-step check looks like: Good. Now run the check: tsc clean. One unused variable warning — use it in the step check or rename with `_`. The `approveSuccess` is actually needed to gate the "Step 2: post deal" button; let me check the render condition again:
+
+The condition is now `step === 'approved' || step === 'posting'` — it doesn't use `approveSuccess` anymore since `step` is set to `'approved'` in `handleApprove`'s `onSuccess`. But looking back — `onSuccess` sets `approveTxHash`, and `approveConfirming` → `approveSuccess` is how we know it's confirmed. Actually `step` is set to `'approving'` and then `step === 'approved'` is only set via... wait, I removed the `setStep('approved')` call from the effect, but the render now uses `step === 'approved' || step === 'posting'`. `step` never reaches `'approved'` any more! Let me check: Right — `step` goes `idle → approving` (during wallet sign wait), and `postError` resets to `approved`. But it never gets SET to `'approved'` on success. The `approveSuccess` was the original signal. Fix: in `handleApprove`'s `onSuccess`, set step to `'approved'`: The `onSuccess` from `writeContract` fires when the tx hash is returned (wallet confirmed, tx broadcast) — not when it's on-chain. The on-chain confirmation comes from `useWaitForTransactionReceipt`. So the right flow is: use `approveSuccess` to drive the render condition. Let me use it in the render directly rather than as state: Zero warnings, zero errors. Now typecheck the relayer: All clean. Check dev server: All three pieces are done. Here's what changed:
+
+---
+
+**Supplier view (`src/swarm/SupplierView.tsx`) — full rewrite:**
+
+- Goods token address field: reads `symbol`, `decimals`, and connected wallet balance as soon as a valid address is entered. Shows a mismatch warning if the wallet can't cover the stock deposit.
+- SwarmPass faucet: when the testnet address is set and the wallet is connected, shows a "Get 100 test passes" button calling `faucet()`, with a cooldown message after it fires or reverts.
+- "1 unit = N SYMBOL" — supplier enters whole tokens per unit; converted to `tokensPerUnit` using the token's decimal count.
+- Title (required, live byte count, 80-byte max) and description (optional, 500-byte max) fields.
+- Tier builder uses units (`minUnits`/`pricePerUnit`); live curve chart and revenue preview at max units.
+- Parameters: stock (`maxUnits`), deal minimum, optional per-buyer limit, max buyers (1–100), duration.
+- Full client-side validation mirroring every named contract error before anything is signed.
+- Two-step flow: step indicator → "Approve token" → confirm → "Post deal" → confirm. On success, shows deal id and "Open deal room →" button calling `onDealPosted`.
+
+**Proof page (`src/swarm/ProofPage.tsx`) + event log (`src/swarm/useEventLog.ts`):**
+
+- v2 topic hashes: `Committed` gains `(uint32 units, uint64 paidPerUnit, uint256 escrow, ...)`, `Settled` gains `(uint32 totalUnits, ..., uint256 unitsDelivered)`, `DealPosted` gains `goodsToken`. `GoodsClaimed` added.
+- `commitsIn` now accumulates `Committed.escrow` (the full amount escrowed, not just `paidPerUnit`).
+- USDC conservation unchanged in meaning; goods conservation: settled deals report `unitsDelivered` from the `Settled` event; refunded deals show "full stock returned to supplier".
+- Summary stats add `totalUnitsSold` and `totalGoodsClaimed`. Deal table shows both USDC and goods sections. Event summaries updated for all v2 field names.
+
+**Relayer (`relayer/server.ts`):**
+
+- `POOL_ABI` regenerated for v2: `commitWithAuthorization` has `uint32 units` parameter; `Committed` event has `(units, paidPerUnit, escrow, livePrice, totalUnits, buyerCount)`; `PriceRoseBeyondAuthorization` takes `uint256 newTotal`; new errors `ZeroUnits`, `UnitCapReached`, `UnitsPerBuyerExceeded` added.
+- `units` field added to `CommitBody`; validated (must be a positive integer); threaded through simulate, estimateGas, and `writeContract` calls.
+- v2 `Committed` log parsed: slots 0/1/2 decoded as `units`, `paidPerUnit`, `escrow`.
+- 409 response now returns `requiredTotal` (was `requiredPrice`) matching the contract's `newTotal`.
+- 200 response returns `units`, `paidPerUnit`, `escrow` alongside `excessCredited` and `gasUsdcCost`.
+
+**GaslessCommitFlow (`src/swarm/GaslessCommitFlow.tsx`):**
+
+- Reads `requiredTotal` from 409 (was `requiredPrice`).
+- `paidPerUnit` read from 200 response for "ordered for X/unit" display.
+
+**Lint/typecheck output:**
+```
+oxlint: Found 0 warnings and 0 errors (frontend)
+tsc --noEmit: exit 0 (frontend)
+relayer/npx tsc --noEmit: exit 0
+```
