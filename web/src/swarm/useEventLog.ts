@@ -67,9 +67,9 @@ import {
 //     indexed: dealId, buyer
 //     non-indexed: units, paidPerUnit, escrow, livePrice, totalUnits, buyerCount
 //
-//   Withdrawn(uint256,address,uint256,uint64,uint32,uint32)
+//   Withdrawn(uint256,address,uint32,uint256,bool,uint64,uint32,uint32)   — v2.2
 //     indexed: dealId, buyer
-//     non-indexed: amountReturned, livePrice, totalUnits, buyerCount
+//     non-indexed: units, amountReturned, paidDirectly, livePrice, totalUnits, buyerCount
 //
 //   TierBroken(uint256,uint32,uint64)
 //     indexed: dealId
@@ -86,7 +86,7 @@ import {
 const TOPICS = {
   DealPosted:     keccak256(toBytes('DealPosted(uint256,address,address,uint32,uint32,uint64,uint64)')),
   Committed:      keccak256(toBytes('Committed(uint256,address,uint32,uint64,uint256,uint64,uint32,uint32)')),
-  Withdrawn:      keccak256(toBytes('Withdrawn(uint256,address,uint256,uint64,uint32,uint32)')),
+  Withdrawn:      keccak256(toBytes('Withdrawn(uint256,address,uint32,uint256,bool,uint64,uint32,uint32)')),
   TierBroken:     keccak256(toBytes('TierBroken(uint256,uint32,uint64)')),
   Settled:        keccak256(toBytes('Settled(uint256,uint64,uint32,uint32,uint256,uint256)')),
   Refunded:       keccak256(toBytes('Refunded(uint256,address,uint256)')),

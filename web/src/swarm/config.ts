@@ -63,14 +63,14 @@ const CONTRACTS = {
     // Deployed and wired from a deployer wallet we control, then verified from
     // chain: bytecode at all three, all three owner wiring calls landed,
     // constructor links agree in both directions, USDC predeploy correct.
-    // Swarm v2.1 (quantities, top-ups, token delivery), deployed 25 Oct 2026 and verified:
+    // Swarm v2.2 (quantities, top-ups, partial withdrawal, token delivery), deployed 25 Oct 2026 and verified:
     // wiring from chain, and all four contracts byte-identical to the local build.
     // Swarm Pass has its faucet on. Earlier v1 sets are retired.
-    DealFactory: '0x9a664F301AEB79f43F391B838A898D9bA354f9e1' as `0x${string}`,
-    DemandPool:  '0x4f064D867FA075CF5dbfe1BF2A3100C8B52CF8f5' as `0x${string}`,
-    Settler:     '0x3091FBDc63c96fA37e9f29df5F10B66F47044F44' as `0x${string}`,
+    DealFactory: '0xf17ee3d7920435ddc5ED2cd5e53D112758AA64d0' as `0x${string}`,
+    DemandPool:  '0x7cDcB6C4E92EAE829267C025FB9706B50F9736ae' as `0x${string}`,
+    Settler:     '0x6D4866A2bcc8a4F2Aa99eF268d420E1A3123e417' as `0x${string}`,
     SwarmPass:   '0x28ac46d52C34a53565c481849361b8DB2cb3E4ca' as `0x${string}`,
-    deployBlock: 69078388n,
+    deployBlock: 69088055n,
     deployed: true,
   },
 } as const
@@ -117,3 +117,15 @@ export const ARC_TX_FEES = {
   maxFeePerGas: 50_000_000_000n,        // 50 gwei cap, well above the 20 gwei floor
   maxPriorityFeePerGas: 1_000_000_000n, // 1 gwei
 } as const
+
+/**
+ * Settlers from earlier testnet deployments that may still owe a user USDC
+ * (refunds or withdrawals credited before a redeploy). The app shows a claim for
+ * any balance left on them. Empty on mainnet.
+ */
+export const RETIRED_SETTLERS: readonly `0x${string}`[] = ACTIVE_NETWORK === 'testnet'
+  ? [
+      '0x3091FBDc63c96fA37e9f29df5F10B66F47044F44', // v2.1, 25 Oct
+      '0xfD29dd3c3003713f529912315F5e47C9c88F8DD3', // v2,   24 Oct
+    ]
+  : []

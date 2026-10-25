@@ -1,0 +1,367 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the spec section and all current source files before writing anything. Now read the remaining files: Now read the remaining files I need: Now read the ProofPage and useEventLog to understand the Withdrawn event handling there: I have a complete picture. Now I know exactly what needs to be done. Let me set up the todo list and work through everything: Starting with the ABI update, then utils, then all UI components: Now add `WithdrawInvalidUnits` error to the ABI: Now update utils.ts — add `computeWithdrawReturn`, update `checkWouldStrandBuyer` for partial (pass `withdrawUnits` so it can handle partial cases, accounting for caller stays in deal), and add `WithdrawInvalidUnits` to `parseRevertReason`: Now update `useDealHistory.ts` for the new v2.2 `Withdrawn` signature: `units`, `amountReturned`, `paidDirectly`. A partial withdrawal reduces units and escrow rather than clearing the buyer: Now update `useEventLog.ts` — new Withdrawn topic hash (v2.2 adds `units` and `paidDirectly`): Now update the `Withdrawn` comment in useEventLog.ts to reflect v2.2 signature: Now write the unified `CommitFlow.tsx` — one panel, gasless default with visible fallback link, partial withdraw picker, return to summary after success: Now write the `DealList` component: Now write `GlobalClaimsBanner`: The banner needs to know which goods tokens to check. The cleanest approach: scan all deals (via dealCount + getDeal), collect distinct goodsTokens, then check `goodsClaimable(token, address)` for each. Also check `claimable(address)` for USDC. All batched via `useReadContracts`. Now rewrite `App.tsx` with `DealList` replacing the deal-ID box, banner wired in: Now run the check: Two issues: prefix unused `goodsToken` param with `_`, and convert the `setBusyToken(null)` in the `GlobalClaimsBanner` effect to a derived approach. The `busyToken` state is just for disabling the button while a tx is pending; `isSuccess` means it's done. The cleanest fix: move `setBusyToken(null)` out of the effect — reset it in `onSuccess` instead, and use `isSuccess` only to refetch. Or simpler: make `busyToken` transient by clearing it in the `onSuccess` callback instead.\n\nActually looking at the pattern: `busyToken` is set in the click handler and the effect resets it after success. I can instead track loading purely from `useWaitForTransactionReceipt`'s `isLoading` status — no state needed. But the simplest fix the linter accepts is to remove `setBusyToken` from the effect and instead call `setBusyToken(null)` from within the `onSuccess` callback (which already calls `setLastHash`): Now fix `GlobalClaimsBanner` — remove `setBusyToken(null)` from the effect and clear busy in the tx callbacks instead: Now clear `busyToken` in the tx callbacks: Zero warnings, zero errors. Check the dev server: Now check the relayer typecheck (it references the old `withdraw(dealId)` ABI directly, which is unchanged — relayer calls `commitWithAuthorization`, not `withdraw`): **Actual output:**\n\n```\noxlint: Found 0 warnings and 0 errors  (frontend)\ntsc --noEmit: exit 0                   (frontend)\nrelayer bunx tsc --noEmit: exit 0      (relayer)\n```\n\n---\n\nHere is what changed:\n\n**`src/swarm/abis.ts`** — `withdraw` updated to `withdraw(uint256 dealId, uint32 units)`. `Withdrawn` event updated to v2.2: `(dealId, buyer, units, amountReturned, paidDirectly, livePrice, totalUnits, buyerCount)`. `WithdrawInvalidUnits` error added.\n\n**`src/swarm/utils.ts`** — `computeWithdrawReturn(escrowed, withdrawUnits, totalUnits)` added: mirrors the Solidity `escrowed × units / unitsOf` formula exactly. `checkWouldStrandBuyer` gains an optional `withdrawUnits` param: for full withdrawals it uses `_lowestPaidExcluding` logic (excludes the caller's tier entry); for partial withdrawals it uses `_lowestPaidAll` (caller stays in the deal, so their own `paidPerUnit` must also hold). `WithdrawInvalidUnits` added to `parseRevertReason`.\n\n**`src/swarm/useDealHistory.ts`** — v2.2 `Withdrawn` topic hash updated. `WithdrawnArgs` gains `units` and `paidDirectly`. In `buildEntries`, a `Withdrawn` with `withdrawnUnits < accUnits` is now a partial withdrawal: `accUnits -= wUnits`, `accEscrow -= wAmount`, buyer stays active. Full withdrawal (resulting `newUnits === 0`) clears the entry as before.\n\n**`src/swarm/useEventLog.ts`** — `Withdrawn` topic hash updated to v2.2 signature. Comment updated.\n\n**`src/swarm/CommitFlow.tsx`** — complete rewrite as one unified panel. GaslessCommitFlow is eliminated as a separate component; all signing and relayer logic lives here. Layout: order summary (when committed) → order/add-lot section with gasless as default and a clearly-visible \"Pay the gas yourself instead\" link-button beneath the primary CTA → partial-withdraw section with `Minus`/`Plus` picker (1..myUnitsN, defaults to full), live USDC-returned display using `computeWithdrawReturn`, and the updated strand check. After success the panel shows a brief confirmation card and returns to the summary without dead-ending.\n\n**`src/swarm/DealList.tsx`** (new) — reads `dealCount` then batches `getDeal` + `totalUnits` calls for all deal IDs. Two tabs (Active/Ended), Active sorted by nearest deadline. Each card: title, fill bar, live price, units sold/stock, countdown (red when < 1 hour), next-tier hint. Clicking a card calls `onSelectDeal`. Empty state on the Active tab offers a \"Post a deal\" button.\n\n**`src/swarm/GlobalClaimsBanner.tsx`** (new) — scans all deals to collect distinct `goodsToken` addresses, then batches `Settler.claimable(address)` + `Settler.goodsClaimable(token, address)` for every token. Renders a sticky banner under the nav whenever anything is claimable, with a \"Claim $X USDC\" button and/or \"Claim N TOKEN\" buttons. Hidden when disconnected or nothing pending.\n\n**`src/App.tsx`** — `DealList` replaces the deal-ID input box. Navigation: `handleTabChange` sets `dealId = null` when switching away from the Deals tab; `handleSelectDeal` + `handleBack` manage the list↔room transition within the tab. `GlobalClaimsBanner` mounted between the nav and the body so it appears on every tab. `?deal=N` links still work: the initial `dealId` is read from the URL param on load.",
+  "todos": [
+    {
+      "id": "todo:update demand_pool_abi: withdraw(uint256,uint32), new withdrawn signature (v2.2):0",
+      "text": "Update DEMAND_POOL_ABI: withdraw(uint256,uint32), new Withdrawn signature (v2.2)",
+      "status": "done"
+    },
+    {
+      "id": "todo:update utils.ts: checkwouldstrandbuyer for partial, computewithdrawreturn helper:0",
+      "text": "Update utils.ts: checkWouldStrandBuyer for partial, computeWithdrawReturn helper",
+      "status": "done"
+    },
+    {
+      "id": "todo:write deallist component:0",
+      "text": "Write DealList component",
+      "status": "done"
+    },
+    {
+      "id": "todo:rewrite commitflow: unified panel done:0",
+      "text": "Rewrite CommitFlow: unified panel done",
+      "status": "done"
+    },
+    {
+      "id": "todo:update usedealhistory: new withdrawn signature, partial reduces not clears:0",
+      "text": "Update useDealHistory: new Withdrawn signature, partial reduces not clears",
+      "status": "done"
+    },
+    {
+      "id": "todo:update useeventlog: new withdrawn topic hash + conservation:0",
+      "text": "Update useEventLog: new Withdrawn topic hash + conservation",
+      "status": "done"
+    },
+    {
+      "id": "todo:write globalclaimsbanner component:0",
+      "text": "Write GlobalClaimsBanner component",
+      "status": "done"
+    },
+    {
+      "id": "todo:rewrite app.tsx: deallist replaces deal-id box, banner wired in:0",
+      "text": "Rewrite App.tsx: DealList replaces deal-ID box, banner wired in",
+      "status": "done"
+    },
+    {
+      "id": "todo:run tsc + lint, paste output:0",
+      "text": "Run tsc + lint, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/App.tsx",
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/DealList.tsx",
+    "src/swarm/GlobalClaimsBanner.tsx",
+    "src/swarm/abis.ts",
+    "src/swarm/useDealHistory.ts",
+    "src/swarm/useEventLog.ts",
+    "src/swarm/utils.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/App.tsx",
+      "action": "write",
+      "addedLines": 195,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+import { useState, useEffect } from 'react'\n+import { ConnectKitButton } from 'connectkit'\n+import { motion, AnimatePresence } from 'framer-motion'\n+import { Layers, PlusCircle, FlaskConical, ChevronLeft } from 'lucide-react'\n+import { DealRoom } from './swarm/DealRoom'\n+import { DealList } from './swarm/DealList'\n+import { SupplierView } from './swarm/SupplierView'\n+import { ProofPage } from './swarm/ProofPage'"
+    },
+    {
+      "path": "src/swarm/abis.ts",
+      "action": "edit",
+      "addedLines": 13,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   {\n     type: 'event', name: 'Withdrawn',\n     inputs: [\n-      { name: 'dealId',        type: 'uint256', indexed: true },\n-      { name: 'buyer',         type: 'address', indexed: true },\n+      { name: 'dealId',        type: 'uint256', indexed: true  },\n+      { name: 'buyer',         type: 'address', indexed: true  },\n+      { name: 'units',         type: 'uint32',  indexed: false },\n       { name: 'amountReturned',type: 'uint256', indexed: false },\n-      { name: 'livePrice',     type: 'uint64',  indexed: false },\n-      { name: 'totalUnits',    type: 'uint32',  indexed: false },\n+      { name: 'paidDirectly',  type: 'bool',    indexed: false },"
+    },
+    {
+      "path": "src/swarm/abis.ts",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  { type: 'function', name: 'withdraw', stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }], outputs: [] },\n+  { type: 'function', name: 'withdraw', stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }, { name: 'units', type: 'uint32' }], outputs: [] },"
+    },
+    {
+      "path": "src/swarm/abis.ts",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   { type: 'error', name: 'WouldStrandBuyer',             inputs: [] },\n+  { type: 'error', name: 'WithdrawInvalidUnits',         inputs: [] },\n ] as const"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "write",
+      "addedLines": 917,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * CommitFlow v2.2 — one unified ordering and withdrawal panel.\n+ *\n+ * Layout:\n+ *   1. Order summary (when buyer has units): total units, escrow, avg price, refund.\n+ *   2. Order / add-lot picker: gasless by default; \"Pay gas yourself\" link-button below.\n+ *      After success, dismisses the confirmation toast and returns to the summary.\n+ *   3. Partial-withdraw picker: quantity 1..unitsOf, shows USDC returned, strand check."
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   dealId, clearingPrice, totalUnits, buyerCount, tiers,\n-  maxUnits, maxUnitsPerBuyer, deadline, state, goodsToken,\n+  maxUnits, maxUnitsPerBuyer, deadline, state, goodsToken: _goodsToken,\n   goodsSymbol, tokensPerUnit, onCommitted,"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "write",
+      "addedLines": 289,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * DealList — browse all deals, grouped into Active / Ended tabs.\n+ *\n+ * Reads dealCount then batches getDeal calls for all deal IDs.\n+ * Active deals are sorted by time left (soonest deadline first).\n+ * Clicking a card calls onSelectDeal(dealId).\n+ * With no active deals, shows an empty state with a Post button.\n+ * Logged-out users see the list but not the order actions."
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "write",
+      "addedLines": 213,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * GlobalClaimsBanner — persistent banner under the nav showing any claimable\n+ * funds the connected wallet has across all deals.\n+ *\n+ * Checks:\n+ *   • Settler.claimable(address)                — USDC refunds / withdrawal fallbacks\n+ *   • Settler.goodsClaimable(token, address)    — for every distinct goodsToken\n+ *"
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   useEffect(() => {\n     if (!isSuccess) return\n     void refetchUsdc()\n-    setBusyToken(null)\n   }, [isSuccess, refetchUsdc])"
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "edit",
+      "addedLines": 15,
+      "removedLines": 15,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const claimUsdc = () => {\n     setBusyToken('usdc')\n     writeContract(\n       { address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim', args: [], ...ARC_TX_FEES, chainId: CHAIN_ID },\n-      { onSuccess: h => setLastHash(h), onError: () => setBusyToken(null) }\n+      { onSuccess: h => { setLastHash(h); setBusyToken(null) }, onError: () => setBusyToken(null) }\n     )\n   }"
+    },
+    {
+      "path": "src/swarm/useDealHistory.ts",
+      "action": "write",
+      "addedLines": 338,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * Event-sourced commit/withdraw history for a single v2.2 deal.\n+ *\n+ * v2 Committed: (uint256 dealId, address buyer, uint32 units, uint64 paidPerUnit,\n+ *                uint256 escrow, uint64 livePrice, uint32 totalUnits, uint32 buyerCount)\n+ * v2.2 Withdrawn: (uint256 dealId, address buyer, uint32 units, uint256 amountReturned,\n+ *                  bool paidDirectly, uint64 livePrice, uint32 totalUnits, uint32 buyerCount)\n+ * DealPosted:   (uint256 dealId, address supplier, address goodsToken, uint32 minUnits,"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  Withdrawn:      keccak256(toBytes('Withdrawn(uint256,address,uint256,uint64,uint32,uint32)')),\n+  Withdrawn:      keccak256(toBytes('Withdrawn(uint256,address,uint32,uint256,bool,uint64,uint32,uint32)')),"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-//   Withdrawn(uint256,address,uint256,uint64,uint32,uint32)\n+//   Withdrawn(uint256,address,uint32,uint256,bool,uint64,uint32,uint32)   — v2.2\n //     indexed: dealId, buyer\n-//     non-indexed: amountReturned, livePrice, totalUnits, buyerCount\n+//     non-indexed: units, amountReturned, paidDirectly, livePrice, totalUnits, buyerCount"
+    },
+    {
+      "path": "src/swarm/utils.ts",
+      "action": "write",
+      "addedLines": 196,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/** Shared formatting and math utilities for Swarm v2 UI */\n+\n+import { ARC_NETWORK } from './config'\n+\n+/** Format 6-decimal micro-USDC bigint as \"$X.XX\" */\n+export function formatUsdcPrice(raw: bigint | number): string {\n+  const n = typeof raw === 'bigint' ? Number(raw) : raw\n+  return new Intl.NumberFormat('en-US', {"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

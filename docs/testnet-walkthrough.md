@@ -18,9 +18,9 @@ value. The contracts are the exact bytecode mainnet will get.
    remove `localhost:5173` under ⋮ → All permissions, then refresh.
 5. App: http://localhost:5173 (Claude keeps it and the relayer running).
 
-**Deal #5 is open until 26 October, 19:46 UTC:** fifty Swarm Passes at $0.30 each,
-falling to $0.20 once 10 are ordered and $0.10 at 25, for everyone. Minimum 5,
-at most 20 per buyer.
+**Deal #5 is open until 26 October, 21:07 UTC:** twenty Swarm Passes at $0.30 each,
+falling to $0.20 once 8 are ordered and $0.10 at 15, for everyone. Minimum 3,
+at most 10 per buyer. Pick it from the deal list on the Deals tab.
 
 ## As a buyer
 

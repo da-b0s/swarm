@@ -56,7 +56,7 @@ const s2 = await state(b2);
 rec.check('buyer 2 now holds 4 units, $0.70 escrowed, cheapest lot $0.10', s2.units === 4 && s2.escrow === usd(0.70) && s2.cheapest === usd(0.10), `${s2.units} units, ${fmt(s2.escrow)}, ${fmt(s2.cheapest)}`);
 const buyerCount = Number(await read(POOL, POOL_ABI, 'getBuyerCount', [dealId]));
 rec.check('top-ups did not add buyers: still 3', buyerCount === 3, String(buyerCount));
-await rec.expectRevert('buyer 3 withdrawing is refused (would strand buyer 2\'s $0.10 lot)', b3, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId] }, 'WouldStrandBuyer');
+await rec.expectRevert('buyer 3 withdrawing is refused (would strand buyer 2\'s $0.10 lot)', b3, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId, 3] }, 'WouldStrandBuyer');
 
 // gasless top-up: 1 unit at priceAt(11 + 1) = $0.10
 const before = await usdcOf(b3);
@@ -67,14 +67,25 @@ rec.check('  buyer 3 balance fell by exactly $0.10', before - (await usdcOf(b3))
 const s3 = await state(b3);
 rec.check('buyer 3 now holds 4 units, $0.40 escrowed', s3.units === 4 && s3.escrow === usd(0.40), `${s3.units} units, ${fmt(s3.escrow)}`);
 
+// partial withdrawal: buyer 1 removes 1 of 4 units and gets the average back
+// ($1.00 x 1 / 4 = $0.25) straight to the wallet; 11 units still clear at $0.10.
+const pwBefore = await usdcOf(b1);
+const pw = await rec.send('buyer 1 withdraws 1 of 4 units', b1, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId, 1] });
+const pwe = events(pw, POOL_ABI).find((x) => x.eventName === 'Withdrawn').args;
+const pwGas = (pw.gasUsed * pw.effectiveGasPrice) / 10n ** 12n;
+rec.check('  returns the $0.25 average, paid directly', pwe.amountReturned === usd(0.25) && pwe.paidDirectly === true && Number(pwe.units) === 1, `${fmt(pwe.amountReturned)}, paidDirectly ${pwe.paidDirectly}`);
+rec.check('  buyer 1 wallet rose by $0.25 (net of gas)', (await usdcOf(b1)) - pwBefore + pwGas === usd(0.25));
+s1 = await state(b1);
+rec.check('  buyer 1 keeps 3 units with $0.75 escrowed', s1.units === 3 && s1.escrow === usd(0.75), `${s1.units} units, ${fmt(s1.escrow)}`);
+
 await waitForDeadline(deadline);
 const st = await rec.send('settle', supplier, { address: SETTLER, abi: SETTLER_ABI, functionName: 'settle', args: [dealId] });
 const e = events(st, SETTLER_ABI).find((x) => x.eventName === 'Settled').args;
-rec.check('clears at $0.10 on 12 units from 3 buyers', e.clearingPrice === usd(0.10) && Number(e.totalUnits) === 12 && Number(e.buyerCount) === 3, `${fmt(e.clearingPrice)}, ${e.totalUnits}, ${e.buyerCount}`);
-rec.check('conservation: $2.10 in = $1.20 supplier + $0.90 refunds', e.totalRefunds === usd(0.90) && usd(0.10) * 12n + e.totalRefunds === usd(2.10), `refunds ${fmt(e.totalRefunds)}`);
+rec.check('clears at $0.10 on 11 units from 3 buyers', e.clearingPrice === usd(0.10) && Number(e.totalUnits) === 11 && Number(e.buyerCount) === 3, `${fmt(e.clearingPrice)}, ${e.totalUnits}, ${e.buyerCount}`);
+rec.check('conservation: $1.85 in (net) = $1.10 supplier + $0.75 refunds', e.totalRefunds === usd(0.75) && usd(0.10) * 11n + e.totalRefunds === usd(1.85), `refunds ${fmt(e.totalRefunds)}`);
 console.log('');
-await claimAll(rec, 'supplier', supplier, usd(1.20), 8);
-await claimAll(rec, 'buyer 1', b1, usd(0.60), 4);   // $1.00 - 4 x $0.10
+await claimAll(rec, 'supplier', supplier, usd(1.10), 9);
+await claimAll(rec, 'buyer 1', b1, usd(0.45), 3);   // $0.75 - 3 x $0.10
 await claimAll(rec, 'buyer 2', b2, usd(0.30), 4);   // $0.70 - 4 x $0.10
 await claimAll(rec, 'buyer 3', b3, 0n, 4);          // $0.40 - 4 x $0.10
 await checkEmpty(rec);

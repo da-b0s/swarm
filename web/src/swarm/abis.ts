@@ -16,13 +16,6 @@ export const DEAL_FACTORY_ABI = [
       { name: 'startPrice', type: 'uint64',  indexed: false },
     ],
   },
-  {
-    type: 'event', name: 'DealStateChanged',
-    inputs: [
-      { name: 'dealId', type: 'uint256', indexed: true },
-      { name: 'state',  type: 'uint8',   indexed: false },
-    ],
-  },
   // Read
   {
     type: 'function', name: 'getDeal', stateMutability: 'view',
@@ -100,9 +93,11 @@ export const DEMAND_POOL_ABI = [
   {
     type: 'event', name: 'Withdrawn',
     inputs: [
-      { name: 'dealId',        type: 'uint256', indexed: true },
-      { name: 'buyer',         type: 'address', indexed: true },
+      { name: 'dealId',        type: 'uint256', indexed: true  },
+      { name: 'buyer',         type: 'address', indexed: true  },
+      { name: 'units',         type: 'uint32',  indexed: false },
       { name: 'amountReturned',type: 'uint256', indexed: false },
+      { name: 'paidDirectly',  type: 'bool',    indexed: false },
       { name: 'livePrice',     type: 'uint64',  indexed: false },
       { name: 'totalUnits',    type: 'uint32',  indexed: false },
       { name: 'buyerCount',    type: 'uint32',  indexed: false },
@@ -146,7 +141,7 @@ export const DEMAND_POOL_ABI = [
   },
   // Write
   { type: 'function', name: 'commit',   stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }, { name: 'units', type: 'uint32' }], outputs: [] },
-  { type: 'function', name: 'withdraw', stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }], outputs: [] },
+  { type: 'function', name: 'withdraw', stateMutability: 'nonpayable', inputs: [{ name: 'dealId', type: 'uint256' }, { name: 'units', type: 'uint32' }], outputs: [] },
   {
     type: 'function', name: 'commitWithAuthorization', stateMutability: 'nonpayable',
     inputs: [
@@ -171,6 +166,7 @@ export const DEMAND_POOL_ABI = [
   { type: 'error', name: 'UnitCapReached',               inputs: [] },
   { type: 'error', name: 'UnitsPerBuyerExceeded',        inputs: [] },
   { type: 'error', name: 'WouldStrandBuyer',             inputs: [] },
+  { type: 'error', name: 'WithdrawInvalidUnits',         inputs: [] },
 ] as const
 
 // ── Settler ───────────────────────────────────────────────────────────────────

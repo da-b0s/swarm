@@ -56,13 +56,16 @@ const order = async (b, n, deal, units, wantPerUnit, label = '') => {
 // ── deal A ───────────────────────────────────────────────────────────────────────
 await order(b1, 1, A.dealId, 2, usd(0.30), 'A');
 await order(b2, 2, A.dealId, 3, usd(0.20), 'A');
-const withdrawB1 = { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [A.dealId] };
+const withdrawB1 = { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [A.dealId, 2] }; // all 2 units
 await rec.expectRevert('A: buyer 1 withdrawing is refused (would strand buyer 2)', b1, withdrawB1, 'WouldStrandBuyer');
 await order(b3, 3, A.dealId, 1, usd(0.20), 'A');
 await order(b4, 4, A.dealId, 1, usd(0.20), 'A');
+const b1Before = await usdcOf(b1);
 const w = await rec.send('A: buyer 1 withdraws (now permitted)', b1, withdrawB1);
 const wev = events(w, POOL_ABI).find((e) => e.eventName === 'Withdrawn');
-rec.check('  buyer 1 gets the full $0.60 escrow back to claim', BigInt(wev.args.amountReturned ?? wev.args[2]) === usd(0.60), fmt(wev.args.amountReturned ?? wev.args[2]));
+const wGas = (w.gasUsed * w.effectiveGasPrice) / 10n ** 12n;
+rec.check('  buyer 1 gets the full $0.60 back, paid straight to the wallet', wev.args.amountReturned === usd(0.60) && wev.args.paidDirectly === true, `${fmt(wev.args.amountReturned)}, paidDirectly ${wev.args.paidDirectly}`);
+rec.check('  buyer 1 wallet rose by $0.60 (net of gas)', (await usdcOf(b1)) - b1Before + wGas === usd(0.60));
 await rec.expectRevert('A: ordering 9 is refused (per-buyer limit 8)', b5, { address: POOL, abi: POOL_ABI, functionName: 'commit', args: [A.dealId, 9] }, 'UnitsPerBuyerExceeded');
 await order(b5, 5, A.dealId, 5, usd(0.10), 'A');
 await order(b6, 6, A.dealId, 2, usd(0.10), 'A');
@@ -94,7 +97,7 @@ rec.check('B refunds $0.25 and $0.50 in full', refunds.length === 2 && refunds[0
 // ── claims, with exact expectations ──────────────────────────────────────────────
 console.log('');
 await claimAll(rec, 'supplier', supplier, usd(1.20), 8 + 10);   // A proceeds; A unsold 8 + B stock 10
-await claimAll(rec, 'buyer 1', b1, usd(0.60), 0);                // withdrawn escrow
+await claimAll(rec, 'buyer 1', b1, 0n, 0);                       // withdrawal was paid directly
 await claimAll(rec, 'buyer 2', b2, usd(0.30), 3);                // 3 × ($0.20 − $0.10)
 await claimAll(rec, 'buyer 3', b3, usd(0.10), 1);
 await claimAll(rec, 'buyer 4', b4, usd(0.10), 1);

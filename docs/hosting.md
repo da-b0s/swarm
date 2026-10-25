@@ -27,7 +27,7 @@ Environment, set in the host's dashboard:
 | `RELAYER_KEY` | **secret** — from `.env` | **secret** — from `.env` |
 | `RPC_URL` | `https://rpc.testnet.arc.io` | `https://rpc.mainnet.arc.io` |
 | `CHAIN_ID` | `5042002` | `5042` |
-| `POOL_ADDRESS` | `0x4f064D867FA075CF5dbfe1BF2A3100C8B52CF8f5` | the mainnet DemandPool, once verified |
+| `POOL_ADDRESS` | `0x7cDcB6C4E92EAE829267C025FB9706B50F9736ae` | the mainnet DemandPool, once verified |
 | `ALLOWED_ORIGIN` | the frontend's URL, e.g. `https://swarm.example.app` | same |
 | `PORT` | leave unset if the host injects it; otherwise `8787` | same |
 

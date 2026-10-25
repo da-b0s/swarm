@@ -205,12 +205,12 @@ addresses are explicitly zero and the UI refuses to offer a commit against them.
 
 | Contract | Arc Mainnet (5042) | Arc Testnet (5042002) |
 |---|---|---|
-| `DealFactory` | _pending_ | [`0x9a664F30…54f9e1`](https://explorer.testnet.arc.io/address/0x9a664F301AEB79f43F391B838A898D9bA354f9e1) |
-| `DemandPool` | _pending_ | [`0x4f064D86…2CF8f5`](https://explorer.testnet.arc.io/address/0x4f064D867FA075CF5dbfe1BF2A3100C8B52CF8f5) |
-| `Settler` | _pending_ | [`0x3091FBDc…044F44`](https://explorer.testnet.arc.io/address/0x3091FBDc63c96fA37e9f29df5F10B66F47044F44) |
+| `DealFactory` | _pending_ | [`0xf17ee3d7…AA64d0`](https://explorer.testnet.arc.io/address/0xf17ee3d7920435ddc5ED2cd5e53D112758AA64d0) |
+| `DemandPool` | _pending_ | [`0x7cDcB6C4…9736ae`](https://explorer.testnet.arc.io/address/0x7cDcB6C4E92EAE829267C025FB9706B50F9736ae) |
+| `Settler` | _pending_ | [`0x6D4866A2…23e417`](https://explorer.testnet.arc.io/address/0x6D4866A2bcc8a4F2Aa99eF268d420E1A3123e417) |
 | `CommitRelayer` | _pending_ | _pending_ |
 
-Swarm v2 — quantities and token delivery, see [docs/mechanism-v2.md](docs/mechanism-v2.md) — deployed to testnet at block 69,078,388 on 25 October (v2.1: buyers can add to an order) and wired; all four contracts match a local build of this repo byte for byte, apart from immutables and metadata. The first set (`0x5b646D21…`), which ran the lifecycle in [docs/testnet-lifecycle.md](docs/testnet-lifecycle.md), is retired. Every claim above is checked from
+Swarm v2 — quantities and token delivery, see [docs/mechanism-v2.md](docs/mechanism-v2.md) — deployed to testnet at block 69,088,055 on 25 October (v2.2: buyers can add to an order and withdraw part of one, paid straight back) and wired; all four contracts match a local build of this repo byte for byte, apart from immutables and metadata. The first set (`0x5b646D21…`), which ran the lifecycle in [docs/testnet-lifecycle.md](docs/testnet-lifecycle.md), is retired. Every claim above is checked from
 chain rather than taken from a deploy log — `node tools/verify-deploy.mjs` confirms
 bytecode, all three owner wiring calls, the constructor links in both directions,
 the USDC predeploy address and that the factory is unpaused holding zero escrow.

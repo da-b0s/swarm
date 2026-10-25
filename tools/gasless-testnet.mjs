@@ -76,7 +76,7 @@ rec.check('buyer 4 balance did not move', (await usdcOf(b4)) === before);
 // ── D ────────────────────────────────────────────────────────────────────────────
 console.log('\nD  price rises between signing and landing');
 const sigC = await signOrder(b4, dealId, 1, usd(0.10));   // quoted at 8+1 = 9 units: $0.10
-await rec.send('buyer 2 withdraws', b2, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId] });
+await rec.send('buyer 2 withdraws', b2, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId, 2] });
 const d409 = await relay(sigC);                             // would land at 7 units: $0.20
 rec.check('relayer answers 409 with the new total, $0.20', d409.status === 409 && d409.body.requiredTotal === usd(0.20).toString(), `${d409.status} ${JSON.stringify(d409.body)}`);
 rec.check('the 409 carries no viem text or signature', !/viem|0x[0-9a-f]{64}/i.test(JSON.stringify(d409.body)));
@@ -96,7 +96,7 @@ rec.check('conservation: $1.60 in = $1.40 supplier + $0.20 refunds', sev.args.to
 console.log('');
 await claimAll(rec, 'supplier', supplier, usd(1.40), 13);
 await claimAll(rec, 'buyer 1', b1, usd(0.20), 2);
-await claimAll(rec, 'buyer 2', b2, usd(0.40), 0);
+await claimAll(rec, 'buyer 2', b2, usd(0.20), 0);          // the $0.20 excess; the withdrawn $0.20 was paid directly
 await claimAll(rec, 'buyer 3', b3, 0n, 4);
 await claimAll(rec, 'buyer 4', b4, 0n, 1);
 await checkEmpty(rec);
