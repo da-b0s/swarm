@@ -184,3 +184,39 @@ escrow to claimable. Partial withdrawal is not in scope.
 
 **Gasless:** `commitWithAuthorization` adds a lot the same way; the nonce already
 binds the quantity.
+
+## v2.2 — partial withdrawal, paid out immediately (decided 25 October)
+
+Hands-on testing: a withdrawal credited `claimable` and the app only offered
+claims after settlement, so a buyer withdrew and saw no USDC. And buyers want to
+withdraw part of an order, as they can add to one.
+
+**`withdraw(dealId, units)`** removes `units` (1 ≤ units ≤ unitsOf) from the
+caller's order.
+
+- **All of it** (`units == unitsOf`): as before — the buyer leaves the deal and
+  their whole `escrowed` is returned.
+- **Part of it:** the buyer keeps their place; the amount returned is their
+  average price for the units removed:
+
+      returned   = escrowed × units / unitsOf      (rounded down)
+      escrowed  -= returned
+      unitsOf   -= units
+      totalUnits-= units
+
+  `paidPerUnit` (cheapest lot) and the per-price tally are unchanged. Rounding
+  down leaves any dust in the buyer's escrow, where settlement refunds it.
+
+**Strand rule:** refuse if, after the withdrawal, the live price
+`priceAt(totalUnits − units)` would exceed the `paidPerUnit` of any buyer still in
+the deal — for a partial withdrawal that includes the caller. Settlement stays
+safe: a remaining order's average price is at least its cheapest lot, which is at
+least the live price, so `escrowed ≥ cp × unitsOf` still holds.
+
+**Paid out in the same transaction:** the pool transfers `returned` straight to
+the buyer. Only if that transfer fails (a blocklisted address, for example) is it
+credited to `claimable` instead, so one buyer can never block a withdrawal path.
+Use a low-level call and check both success and the returned bool.
+
+**Event:** `Withdrawn(dealId, buyer, units, amountReturned, paidDirectly,
+livePrice, totalUnits, buyerCount)`.
