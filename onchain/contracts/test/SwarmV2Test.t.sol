@@ -361,14 +361,15 @@ contract SwarmV2Test is Test {
         pool.commit(d, 1);
     }
 
-    function test_Order_AlreadyCommitted() public {
+    // test_Order_AlreadyCommitted removed: v2.1 allows a second commit to add a lot
+    // instead of reverting. Top-up behaviour is covered in SwarmV2TopUpTest.t.sol.
+    function test_Order_TopUpAddsLot() public {
         uint256 d = _postStdDeal(30, 1, 10, 0);
         _fund(B1, 10_000_000);
         _commit(B1, d, 3);
         _fund(B1, 10_000_000);
-        vm.prank(B1);
-        vm.expectRevert(DemandPool.AlreadyCommitted.selector);
-        pool.commit(d, 1);
+        _commit(B1, d, 1); // top-up: adds 1 unit to existing order
+        assertEq(pool.unitsOf(d, B1), 4, "total units = 4");
     }
 
     function test_Order_TierBreakByOwnOrder() public {

@@ -1,0 +1,287 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the spec first, then all relevant contract files. Now read all three existing test files: Now I have a complete picture of everything. Let me set up the todos and start working: Now I'll rewrite `DemandPool.sol` with the top-up logic: Now update Settler — change the refund calculation from `(paid - cp) * units` to `escrowed - cp * units`: The `paid` variable on line 100 is now unused. Remove it: Now update `SwarmV2Test` — the `test_Order_AlreadyCommitted` test asserts the old behaviour (second commit reverts). With v2.1 a second commit is a valid top-up, so that test must change. Replace it with a test that verifies a top-up succeeds: The `test_WorkedExample` asserts single-lot buyers, and the refund formula changed from `(paid - cp) * units` to `escrowed - cp * units`. For a single lot these are identical (since `escrowed = paid * units`), so those assertions are still correct. Now write the new test file: Now run `forge test` over the complete suite: Stack too deep in `_doCommit`. The issue is the `isTopUp` bool, `priceBefore`, `lotPricePerUnit`, `lotEscrow`, `oldPaid` all on the stack together. I need to split the function. I'll extract the top-up path into a separate private function: One test fails: `test_TopUp_SettleRefundExact` — B2 has zero refund so `settler.claim()` reverts `NothingToClaim`. Fix by skipping B2's claim when they have nothing claimable: All 56 tests pass. There's a harmless variable shadowing warning in the withdraw function — fix it now: Clean compile, 56/56 pass, no warnings. **56/56 tests pass. Complete unedited forge output above.**\n\n---\n\nHere is exactly what changed and why:\n\n**`contracts/DemandPool.sol`**\n\n- `AlreadyCommitted` error removed — no longer reachable from ordering (still definable, but since nothing uses it, removed cleanly).\n- `_checkCommitPreconditions` gains an `isTopUp bool` parameter. When `true`, the `maxBuyers` check is skipped (the buyer is already counted); the `maxUnitsPerBuyer` check uses `unitsOf[buyer] + units` (total across lots) instead of just `units`.\n- `_doCommit` now detects whether the buyer is new or a top-up by reading `_buyerIndex`. The stack-depth issue from having both paths inline was resolved by extracting `_recordNewBuyer` and `_recordTopUp` as separate private helpers. `_recordTopUp` accumulates `unitsOf` and `escrowed`, and moves the `tierCount` tally entry from the old `paidPerUnit` to the new one when the lot price is cheaper.\n- `commit` and `_commitWithAuth` both derive `isTopUp` before calling `_checkCommitPreconditions`.\n- `withdraw` now reads `paid = paidPerUnit[dealId][msg.sender]` before the strand check (removing the shadowing warning) and uses that as the tally-exclusion key. Behaviour is unchanged — it still removes the whole order and credits the full accumulated escrow.\n\n**`contracts/Settler.sol`**\n\n- `_creditBuyers`: refund formula changed from `(paid - cp) * units` to `escrow - cp * units`. The `paid` read is removed (unused). For single-lot buyers these are identical since `escrow = paid * units`; for multi-lot buyers the escrow already sums `(lotPrice_i × lotUnits_i)` across every lot, so subtracting `cp × totalUnits` gives the exact total overpayment.\n\n**`contracts/test/SwarmV2Test.t.sol`**\n\n- `test_Order_AlreadyCommitted` replaced with `test_Order_TopUpAddsLot`. The old test expected `AlreadyCommitted` to revert on a second commit, which is no longer the contract behaviour. The new test confirms a second commit by the same buyer adds a lot and updates `unitsOf`.\n\n**`contracts/test/SwarmV2TopUpTest.t.sol` — 11 new tests:**\n\n| Test | What it covers |\n|---|---|\n| `test_TopUp_AfterTierBreak_LotPriceDrops` | Top-up at lower price: `paidPerUnit` drops, `escrowed` and `unitsOf` sum |\n| `test_TopUp_SelfBreaksTier` | Top-up that itself crosses a tier pays the new lower price |\n| `test_TopUp_PerBuyerLimitAcrossLots` | `maxUnitsPerBuyer` counts total units (lot1 + lot2) |\n| `test_TopUp_StockLimitApplies` | Stock cap blocks a top-up that would exceed `maxUnits` |\n| `test_TopUp_MaxBuyersDoesNotBlockExistingBuyer` | `maxBuyers` is not checked on a top-up |\n| `test_Strand_TopUpKeepsStrandRuleValid` | Top-up at the same tier price; B1 can then withdraw without stranding B2 |\n| `test_Strand_WithdrawRefusedThenPermittedAfterTopUp` | Withdrawal refused, B2 tops up to keep tier, B1 can then withdraw |\n| `test_TopUp_WithdrawReturnsFullEscrow` | Withdraw after two lots credits the full combined escrow |\n| `test_TopUp_SettleRefundExact` | Settlement refund = `escrowed - cp × units` computed exactly for a two-lot buyer |\n| `test_TopUp_GaslessTopUp` | Gasless `commitWithAuthorization` adds a lot the same way |\n| `testFuzz_TopUp_Conservation` | Random orders, top-ups, withdrawals through settlement; USDC and goods conservation, no negative refunds, both contracts empty after all claims |",
+  "todos": [
+    {
+      "id": "todo:update demandpool: top-up logic in _docommit, remove alreadycommitted from preconditions:0",
+      "text": "Update DemandPool: top-up logic in _doCommit, remove AlreadyCommitted from preconditions",
+      "status": "done"
+    },
+    {
+      "id": "todo:update settler: refund = escrowed - cp * unitsof:0",
+      "text": "Update Settler: refund = escrowed - cp * unitsOf",
+      "status": "done"
+    },
+    {
+      "id": "todo:update swarmv2test: remove test_order_alreadycommitted (behaviour changed):0",
+      "text": "Update SwarmV2Test: remove test_Order_AlreadyCommitted (behaviour changed)",
+      "status": "done"
+    },
+    {
+      "id": "todo:write swarmv2topuptest.t.sol: all 8 test scenarios + fuzz:0",
+      "text": "Write SwarmV2TopUpTest.t.sol: all 8 test scenarios + fuzz",
+      "status": "done"
+    },
+    {
+      "id": "todo:run forge test, paste complete output:0",
+      "text": "Run forge test, paste complete output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "contracts/DemandPool.sol",
+    "contracts/Settler.sol",
+    "contracts/test/SwarmV2Test.t.sol",
+    "contracts/test/SwarmV2TopUpTest.t.sol"
+  ],
+  "fileDiffs": [
+    {
+      "path": "contracts/DemandPool.sol",
+      "action": "write",
+      "addedLines": 474,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+// SPDX-License-Identifier: MIT\n+pragma solidity 0.8.28;\n+\n+import {IERC20} from \"@openzeppelin/contracts/token/ERC20/IERC20.sol\";\n+import {ReentrancyGuard} from \"@openzeppelin/contracts/utils/ReentrancyGuard.sol\";\n+import {DealFactory} from \"./DealFactory.sol\";\n+import {SwarmTypes} from \"./SwarmTypes.sol\";"
+    },
+    {
+      "path": "contracts/DemandPool.sol",
+      "action": "edit",
+      "addedLines": 80,
+      "removedLines": 68,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     /**\n      * @dev Core state mutation shared by commit() and commitWithAuthorization().\n      *      All preconditions must be checked before calling.\n      *      Handles both new orders (buyer not yet in list) and top-ups (buyer already has an order).\n      *\n-     *      For a top-up:\n-     *        lotPrice = priceAt(totalUnits + units)  — includes the new lot\n-     *        escrowed += lotPrice * units\n+     *      @return lotPricePerUnit  The per-unit price for this lot.\n+     *      @return lotEscrow        lotPricePerUnit * units (USDC to take from buyer for this lot).\n+     */"
+    },
+    {
+      "path": "contracts/DemandPool.sol",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "+        uint256 escrowAmt   = escrowed[dealId][msg.sender];\n+        uint64  paid        = paidPerUnit[dealId][msg.sender];\n+\n         // Strand check: any remaining buyer whose paidPerUnit < newPrice would be undercharged.\n         if (_buyers[dealId].length > 1) {\n             // Use the buyer's current paidPerUnit (cheapest lot) as the tally key to exclude.\n-            uint64 paid   = paidPerUnit[dealId][msg.sender];\n             uint64 lowest = _lowestPaidExcluding(dealId, deal.tiers, paid);\n-            if (lowest > 0 && lowest < newPrice) revert WouldStrandBuyer();\n-        }\n+            if (lowest > 0 && lowest < newPrice) revert WouldStrandBuyer();"
+    },
+    {
+      "path": "contracts/Settler.sol",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-            uint256 refund = (uint256(paid) - uint256(cp)) * uint256(units);\n+            // refund = escrowed - cp * unitsOf\n+            // This handles multi-lot buyers correctly: each lot was paid at lotPrice >= cp,\n+            // and paidPerUnit is the minimum across lots, but the escrow already sums\n+            // (lotPrice_i * units_i) for each lot i. Using escrow - cp*units is exact.\n+            uint256 refund = escrow - uint256(cp) * uint256(units);\n             claimable[buyer] += refund;\n             totalRefunds     += refund;\n             totalEscrowed    += escrow;"
+    },
+    {
+      "path": "contracts/Settler.sol",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "             address buyer  = buyers[i];\n             uint32  units  = pool.unitsOf(dealId, buyer);\n-            uint64  paid   = pool.paidPerUnit(dealId, buyer);\n             uint256 escrow = pool.escrowed(dealId, buyer);"
+    },
+    {
+      "path": "contracts/test/SwarmV2Test.t.sol",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    function test_Order_AlreadyCommitted() public {\n+    // test_Order_AlreadyCommitted removed: v2.1 allows a second commit to add a lot\n+    // instead of reverting. Top-up behaviour is covered in SwarmV2TopUpTest.t.sol.\n+    function test_Order_TopUpAddsLot() public {\n         uint256 d = _postStdDeal(30, 1, 10, 0);\n         _fund(B1, 10_000_000);\n         _commit(B1, d, 3);\n         _fund(B1, 10_000_000);\n-        vm.prank(B1);\n-        vm.expectRevert(DemandPool.AlreadyCommitted.selector);\n-        pool.commit(d, 1);\n+        _commit(B1, d, 1); // top-up: adds 1 unit to existing order"
+    },
+    {
+      "path": "contracts/test/SwarmV2TopUpTest.t.sol",
+      "action": "write",
+      "addedLines": 637,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+// SPDX-License-Identifier: MIT\n+pragma solidity 0.8.28;\n+\n+import {Test} from \"forge-std/Test.sol\";\n+import {DealFactory} from \"../DealFactory.sol\";\n+import {DemandPool} from \"../DemandPool.sol\";\n+import {Settler} from \"../Settler.sol\";\n+import {SwarmPass} from \"../SwarmPass.sol\";"
+    },
+    {
+      "path": "contracts/test/SwarmV2TopUpTest.t.sol",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         vm.prank(B1); settler.claim();\n-        vm.prank(B2); settler.claim();       // no-op: NothingToClaim? No, B2 claimable=0.\n-        // B2 claim would revert NothingToClaim; skip.\n+        // B2 has zero USDC refund; skip claim() to avoid NothingToClaim revert.\n         vm.prank(SUPPLIER); settler.claim();"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

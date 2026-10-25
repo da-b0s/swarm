@@ -97,10 +97,13 @@ contract Settler is ReentrancyGuard, ISettler {
         for (uint256 i = 0; i < buyers.length; i++) {
             address buyer  = buyers[i];
             uint32  units  = pool.unitsOf(dealId, buyer);
-            uint64  paid   = pool.paidPerUnit(dealId, buyer);
             uint256 escrow = pool.escrowed(dealId, buyer);
 
-            uint256 refund = (uint256(paid) - uint256(cp)) * uint256(units);
+            // refund = escrowed - cp * unitsOf
+            // This handles multi-lot buyers correctly: each lot was paid at lotPrice >= cp,
+            // and paidPerUnit is the minimum across lots, but the escrow already sums
+            // (lotPrice_i * units_i) for each lot i. Using escrow - cp*units is exact.
+            uint256 refund = escrow - uint256(cp) * uint256(units);
             claimable[buyer] += refund;
             totalRefunds     += refund;
             totalEscrowed    += escrow;

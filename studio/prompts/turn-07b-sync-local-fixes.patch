@@ -1,0 +1,772 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 031ca18..7cdf2aa 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -6,6 +6,7 @@ import { DealRoom } from './swarm/DealRoom'
+ import { SupplierView } from './swarm/SupplierView'
+ import { ProofPage } from './swarm/ProofPage'
+ import { useDealCount } from './swarm/hooks'
++import { useLateWalletReconnect } from './swarm/useLateWalletReconnect'
+ import { ACTIVE_NETWORK, ARC_NETWORK, DEPLOYMENT_READY } from './swarm/config'
+ 
+ type Tab = 'deal' | 'post' | 'proof'
+@@ -24,6 +25,7 @@ function writeDealId(id: bigint) {
+ }
+ 
+ export default function App() {
++  useLateWalletReconnect()
+   const [tab, setTab] = useState<Tab>('deal')
+   const [dealId, setDealId] = useState<bigint>(() => readDealId() ?? 0n)
+   const [dealInput, setDealInput] = useState('')
+diff --git a/src/config.ts b/src/config.ts
+index 31e30ef..dc9b668 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -26,8 +26,11 @@ export const config = createConfig({
+   chains: [activeChain, otherArc, mainnet], // mainnet needed for ENS resolution
+   connectors: [injected()],
+   transports: {
+-    [arc.id]: http(),
+-    [arcTestnet.id]: http(),
++    // Batch the many small reads a page makes at once into one HTTP request:
++    // the public Arc RPC rate-limits per IP, and unbatched polling from a single
++    // open tab was enough, alongside a second tab and the relayer, to draw 429s.
++    [arc.id]: http(undefined, { batch: { wait: 50 } }),
++    [arcTestnet.id]: http(undefined, { batch: { wait: 50 } }),
+     [mainnet.id]: http(), // ENS resolution uses mainnet
+   },
+ })
+diff --git a/src/main.tsx b/src/main.tsx
+index b86d8cb..52673e2 100644
+--- a/src/main.tsx
++++ b/src/main.tsx
+@@ -10,8 +10,9 @@
+  *  https://studio.arc.io
+  */
+ 
+-import './tracing'
+-import './console-capture'
++import './tracing'   // patches only inside Studio's preview frame; see IN_STUDIO_FRAME
++// Console capture likewise only feeds Studio's preview panel.
++if (window.self !== window.top) void import('./console-capture')
+ 
+ import { StrictMode } from 'react'
+ import { createRoot } from 'react-dom/client'
+@@ -68,7 +69,9 @@ const StudioWatermark = () => (
+ 
+ createRoot(document.getElementById('root')!).render(
+   <StrictMode>
+-    <WagmiProvider config={config}>
++    {/* Saved connections are restored by useLateWalletReconnect, with timeouts;
++        wagmi's own restore can hang forever on a wallet that does not answer. */}
++    <WagmiProvider config={config} reconnectOnMount={false}>
+       <QueryClientProvider client={queryClient}>
+         <ConnectKitProvider>
+           <App />
+diff --git a/src/swarm/CommitFlow.tsx b/src/swarm/CommitFlow.tsx
+index 04b0d27..0bb4669 100644
+--- a/src/swarm/CommitFlow.tsx
++++ b/src/swarm/CommitFlow.tsx
+@@ -10,10 +10,11 @@ import {
+ import {
+   useEscrowed, useUnitsOf, usePaidPerUnit, useTierCounts, useChainNow,
+ } from './hooks'
+-import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL } from './config'
++import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL, ARC_TX_FEES } from './config'
+ import { DEMAND_POOL_ABI, ERC20_ABI } from './abis'
+ import type { DealTier } from './hooks'
+ import { GaslessCommitFlow } from './GaslessCommitFlow'
++import { useUsdcBalance, FundingNotice } from './FundingNotice'
+ 
+ interface Props {
+   dealId:           bigint
+@@ -82,6 +83,12 @@ export function CommitFlow({
+   // Approve amount: tiers[0].pricePerUnit × units (the maximum this order can ever cost)
+   const maxPPU    = tiers.length > 0 ? tiers[0].pricePerUnit : clearingPrice
+   const maxCharge = maxPPU * BigInt(units)
++  // Approve and commit are two transactions, and on Arc their gas is paid in USDC
++  // too, so keep a few cents of headroom on top of the escrow.
++  const GAS_HEADROOM = 20_000n // $0.02
++  const usdcBalance = useUsdcBalance(address)
++  const neededForOrder = quotedTotal + GAS_HEADROOM
++  const cannotAfford = usdcBalance !== undefined && usdcBalance < neededForOrder
+ 
+   const [step,         setStep]         = useState<Step>('idle')
+   const [errMsg,       setErrMsg]       = useState('')
+@@ -102,7 +109,7 @@ export function CommitFlow({
+         abi: DEMAND_POOL_ABI,
+         functionName: 'commit',
+         args: [dealId, units],
+-        chainId: CHAIN_ID,
++        ...ARC_TX_FEES, chainId: CHAIN_ID,
+       },
+       {
+         onSuccess: (hash) => { setCommitTxHash(hash); setStep('commit-confirming') },
+@@ -151,7 +158,7 @@ export function CommitFlow({
+         abi: ERC20_ABI,
+         functionName: 'approve',
+         args: [CONTRACTS_ACTIVE.DemandPool, maxCharge],
+-        chainId: CHAIN_ID,
++        ...ARC_TX_FEES, chainId: CHAIN_ID,
+       },
+       {
+         onSuccess: (hash) => { setApproveTxHash(hash); setStep('approve-confirming') },
+@@ -170,7 +177,7 @@ export function CommitFlow({
+         abi: DEMAND_POOL_ABI,
+         functionName: 'withdraw',
+         args: [dealId],
+-        chainId: CHAIN_ID,
++        ...ARC_TX_FEES, chainId: CHAIN_ID,
+       },
+       {
+         onSuccess: (hash) => { setCommitTxHash(hash); setStep('commit-confirming') },
+@@ -326,7 +333,11 @@ export function CommitFlow({
+         </div>
+       )}
+ 
+-      {!isCommitted && step !== 'done' && maxOrderable > 0 && (
++      {!isCommitted && step !== 'done' && maxOrderable > 0 && cannotAfford && usdcBalance !== undefined && (
++        <FundingNotice needed={neededForOrder} balance={usdcBalance} />
++      )}
++
++      {!isCommitted && step !== 'done' && maxOrderable > 0 && !cannotAfford && (
+         <button
+           onClick={handleCommit}
+           disabled={busyStep}
+diff --git a/src/swarm/DealRoom.tsx b/src/swarm/DealRoom.tsx
+index fcab55e..f06d227 100644
+--- a/src/swarm/DealRoom.tsx
++++ b/src/swarm/DealRoom.tsx
+@@ -12,7 +12,7 @@ import {
+ import { useDealHistory } from './useDealHistory'
+ import { SETTLER_ABI } from './abis'
+ import { formatUsdcPrice, formatCountdown, shortAddr, txUrl } from './utils'
+-import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'
++import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES } from './config'
+ 
+ interface Props { dealId: bigint }
+ 
+@@ -310,13 +310,13 @@ function SettleOrRefundPanel({ dealId, totalUnits, minUnits, goodsToken, goodsSy
+     const onError   = () => setBusy(false)
+     const chainId   = ARC_NETWORK.chainId
+     if (fn === 'settle') {
+-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'settle',    args: [dealId], chainId }, { onSuccess, onError })
++      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'settle',    args: [dealId], ...ARC_TX_FEES, chainId }, { onSuccess, onError })
+     } else if (fn === 'refundAll') {
+-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'refundAll', args: [dealId], chainId }, { onSuccess, onError })
++      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'refundAll', args: [dealId], ...ARC_TX_FEES, chainId }, { onSuccess, onError })
+     } else if (fn === 'claim') {
+-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim',     args: [],       chainId }, { onSuccess, onError })
++      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim',     args: [],       ...ARC_TX_FEES, chainId }, { onSuccess, onError })
+     } else {
+-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], chainId }, { onSuccess, onError })
++      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], ...ARC_TX_FEES, chainId }, { onSuccess, onError })
+     }
+   }
+ 
+@@ -403,9 +403,9 @@ function ClaimPanel({ goodsToken, goodsSymbol, onDone }: ClaimPanelProps) {
+     const onSuccess = (h: `0x${string}`) => { setHash(h); setBusy(false) }
+     const onError   = () => setBusy(false)
+     if (fn === 'claim') {
+-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim', args: [], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
++      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim', args: [], ...ARC_TX_FEES, chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
+     } else {
+-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
++      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], ...ARC_TX_FEES, chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
+     }
+   }
+ 
+diff --git a/src/swarm/GaslessCommitFlow.tsx b/src/swarm/GaslessCommitFlow.tsx
+index 4c8c0f6..4c779be 100644
+--- a/src/swarm/GaslessCommitFlow.tsx
++++ b/src/swarm/GaslessCommitFlow.tsx
+@@ -11,6 +11,7 @@
+ 
+ import { useState, useCallback } from 'react'
+ import { useAccount, useSignTypedData, useSwitchChain, useReadContract } from 'wagmi'
++import { useUsdcBalance, FundingNotice } from './FundingNotice'
+ import { ConnectKitButton } from 'connectkit'
+ import { motion, AnimatePresence } from 'framer-motion'
+ import { Loader2, ExternalLink, CheckCircle, AlertCircle, Zap, Plus, Minus } from 'lucide-react'
+@@ -57,12 +58,66 @@ function randomSalt(): `0x${string}` {
+   return ('0x' + Array.from(arr, b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`
+ }
+ 
++const EIP712_DOMAIN_TYPE = [
++  { name: 'name', type: 'string' },
++  { name: 'version', type: 'string' },
++  { name: 'chainId', type: 'uint256' },
++  { name: 'verifyingContract', type: 'address' },
++] as const
++
++class WalletCannotSignError extends Error {
++  constructor() { super('wallet cannot sign this typed data'); this.name = 'WalletCannotSignError' }
++}
++
++function errText(e: unknown): string {
++  const x = e as { message?: string; shortMessage?: string; details?: string; cause?: unknown }
++  return [x?.shortMessage, x?.details, x?.message, x?.cause ? errText(x.cause) : ''].filter(Boolean).join(' ')
++}
++
++function isWalletParserError(e: unknown): boolean {
++  return /Unable to encode value|ParserError|Invalid number/i.test(errText(e))
++}
++
++function isUserRejection(e: unknown): boolean {
++  const x = e as { code?: number; cause?: { code?: number } }
++  return x?.code === 4001 || x?.cause?.code === 4001 || /user rejected|denied/i.test(errText(e))
++}
++
++/** One readable sentence instead of a wallet's full error dump. */
++function shortWalletError(e: unknown): string {
++  const x = e as { shortMessage?: string; message?: string }
++  const msg = x?.shortMessage ?? x?.message ?? 'Signing failed'
++  return msg.split('\n')[0].slice(0, 160)
++}
++
++/** Relayer error names, as a buyer should read them. */
++const RELAYER_MESSAGES: Record<string, string> = {
++  InvalidAuthorization:    'The signature did not match this order. Please sign again.',
++  AuthorizationAlreadyUsed:'That signature was already used. Please sign again.',
++  DealNotOpen:             'This deal is no longer open.',
++  DeadlinePassed:          'This deal has closed.',
++  AlreadyCommitted:        'You already have an order in this deal.',
++  UnitCapReached:          'Not enough stock left for that quantity — try fewer.',
++  UnitsPerBuyerExceeded:   'That is more than one buyer can order in this deal.',
++  BuyerCapReached:         'This deal has reached its maximum number of buyers.',
++  Blocklisted:             'This address cannot use USDC.',
++}
++function relayerMessage(code: string | undefined): string {
++  if (!code) return 'The order could not be sent. You can still order the normal way below.'
++  return RELAYER_MESSAGES[code] ?? 'The order could not be sent. You can still order the normal way below.'
++}
++
++function safeNumber(v: bigint): number {
++  if (v > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('value too large to send as a number')
++  return Number(v)
++}
++
+ export function GaslessCommitFlow({
+   dealId, clearingPrice: _clearingPrice, totalUnits, tiers, maxUnits, maxUnitsPerBuyer,
+   deadline, state, goodsToken: _goodsToken, goodsSymbol, tokensPerUnit,
+   onCommitted, onFallback,
+ }: Props) {
+-  const { address, isConnected, chainId: walletChain } = useAccount()
++  const { address, isConnected, chainId: walletChain, connector } = useAccount()
+   const { switchChain }   = useSwitchChain()
+   const { signTypedData } = useSignTypedData()
+   const nowSec = useChainNow()
+@@ -87,6 +142,8 @@ export function GaslessCommitFlow({
+   // On 409, show the updated total and ask to sign again
+   const [signTotal, setSignTotal] = useState<bigint | null>(null)
+   const totalToSign = signTotal ?? quotedTotal
++  const usdcBalance = useUsdcBalance(address)
++  const cannotAfford = usdcBalance !== undefined && usdcBalance < totalToSign
+ 
+   const [step,     setStep]     = useState<GaslessStep>('idle')
+   const [errMsg,   setErrMsg]   = useState('')
+@@ -122,29 +179,57 @@ export function GaslessCommitFlow({
+     const authorizedAmount = totalToSign
+ 
+     try {
+-      const sig = await new Promise<`0x${string}`>((resolve, reject) => {
+-        signTypedData(
+-          {
+-            domain: {
+-              name:              'USDC',
+-              version:           '2',
+-              chainId:           CHAIN_ID,
+-              verifyingContract: ARC_NETWORK.usdc.address,
+-            },
+-            types: RECEIVE_WITH_AUTH_TYPES,
+-            primaryType: 'ReceiveWithAuthorization',
+-            message: {
+-              from:        address,
+-              to:          CONTRACTS_ACTIVE.DemandPool,
+-              value:       authorizedAmount,
+-              validAfter,
+-              validBefore,
+-              nonce,
+-            },
++      const typedData = {
++        domain: {
++          name:              'USDC',
++          version:           '2',
++          chainId:           CHAIN_ID,
++          verifyingContract: ARC_NETWORK.usdc.address,
++        },
++        types: RECEIVE_WITH_AUTH_TYPES,
++        primaryType: 'ReceiveWithAuthorization' as const,
++        message: {
++          from:        address,
++          to:          CONTRACTS_ACTIVE.DemandPool,
++          value:       authorizedAmount,
++          validAfter,
++          validBefore,
++          nonce,
++        },
++      }
++
++      let sig: `0x${string}`
++      try {
++        sig = await new Promise<`0x${string}`>((resolve, reject) => {
++          signTypedData(typedData, { onSuccess: resolve, onError: reject })
++        })
++      } catch (first: unknown) {
++        // Some MetaMask builds reject the standard request -- uint fields sent as
++        // decimal strings, which is what viem always sends -- with "ParserError:
++        // Unable to encode value: Invalid number ... received '2000000n'": the
++        // wallet converts the value internally and then fails to read it back.
++        // Retry once, straight to the wallet, with those fields as plain JSON
++        // numbers. Every one of them is far below 2^53 (amounts under $100 in
++        // 6 decimals, unix seconds, the chain id), so nothing is lost.
++        if (!isWalletParserError(first) || !connector) throw first
++        const provider = await connector.getProvider() as { request: (a: { method: string; params: unknown[] }) => Promise<unknown> }
++        const asNumbers = JSON.stringify({
++          ...typedData,
++          types: { EIP712Domain: EIP712_DOMAIN_TYPE, ...RECEIVE_WITH_AUTH_TYPES },
++          message: {
++            ...typedData.message,
++            value:       safeNumber(authorizedAmount),
++            validAfter:  safeNumber(validAfter),
++            validBefore: safeNumber(validBefore),
+           },
+-          { onSuccess: resolve, onError: reject }
+-        )
+-      })
++        })
++        try {
++          sig = await provider.request({ method: 'eth_signTypedData_v4', params: [address, asNumbers] }) as `0x${string}`
++        } catch (second: unknown) {
++          if (isWalletParserError(second)) throw new WalletCannotSignError()
++          throw second
++        }
++      }
+ 
+       setStep('submitting')
+ 
+@@ -186,7 +271,7 @@ export function GaslessCommitFlow({
+       }
+ 
+       if (!res.ok || !data.txHash) {
+-        setErrMsg(data.error ?? 'Relay failed — try the approve path below')
++        setErrMsg(relayerMessage(data.error))
+         setStep('error')
+         return
+       }
+@@ -198,12 +283,18 @@ export function GaslessCommitFlow({
+       setStep('done')
+       onCommitted()
+     } catch (e: unknown) {
+-      setErrMsg((e as Error).message ?? 'Signing failed')
++      if (e instanceof WalletCannotSignError) {
++        setErrMsg('Your wallet could not sign a gasless order. You can still order the normal way — it takes two quick confirmations and a few cents of gas.')
++        setStep('error')
++        return
++      }
++      if (isUserRejection(e)) { setErrMsg(''); setStep('idle'); return }
++      setErrMsg(shortWalletError(e))
+       setStep('error')
+     }
+   }, [
+     address, isConnected, wrongChain, nonce, nowSec,
+-    totalToSign, dealId, units, salt, signTypedData, refetchNonce, onCommitted,
++    totalToSign, dealId, units, salt, signTypedData, refetchNonce, onCommitted, connector,
+   ])
+ 
+   const reset = () => {
+@@ -322,7 +413,11 @@ export function GaslessCommitFlow({
+         </div>
+       )}
+ 
+-      {step !== 'done' && maxOrderable > 0 && (
++      {step !== 'done' && maxOrderable > 0 && cannotAfford && usdcBalance !== undefined && (
++        <FundingNotice needed={totalToSign} balance={usdcBalance} />
++      )}
++
++      {step !== 'done' && maxOrderable > 0 && !cannotAfford && (
+         <button
+           onClick={() => { void handleSign() }}
+           disabled={busy || !nonce}
+diff --git a/src/swarm/SupplierView.tsx b/src/swarm/SupplierView.tsx
+index 35b669c..fb6d2bd 100644
+--- a/src/swarm/SupplierView.tsx
++++ b/src/swarm/SupplierView.tsx
+@@ -11,7 +11,7 @@
+  * "Get 100 test passes" faucet button that calls SwarmPass.faucet().
+  */
+ 
+-import { useState, useCallback, useMemo } from 'react'
++import { useState, useCallback, useMemo, useEffect } from 'react'
+ import {
+   useAccount, useWriteContract, useWaitForTransactionReceipt,
+   useSwitchChain, useReadContract,
+@@ -20,7 +20,7 @@ import { ConnectKitButton } from 'connectkit'
+ import { motion } from 'framer-motion'
+ import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown, Droplets, CheckCircle2 } from 'lucide-react'
+ import { DEAL_FACTORY_ABI, ERC20_ABI, SWARM_PASS_ABI } from './abis'
+-import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ACTIVE_NETWORK } from './config'
++import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ACTIVE_NETWORK, ARC_TX_FEES } from './config'
+ import { useChainNow } from './hooks'
+ import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt } from './utils'
+ 
+@@ -277,8 +277,21 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
+ 
+   const { isLoading: approveConfirming, isSuccess: approveSuccess } =
+     useWaitForTransactionReceipt({ hash: approveTxHash, chainId: CHAIN_ID })
+-  const { isLoading: postConfirming, isSuccess: postSuccess, data: postReceipt } =
++  const { isLoading: postConfirming, isSuccess: postReceiptArrived, data: postReceipt } =
+     useWaitForTransactionReceipt({ hash: postTxHash, chainId: CHAIN_ID })
++  // A receipt is not success: a transaction can be mined and still revert.
++  const postSuccess = postReceiptArrived && postReceipt?.status === 'success'
++  const postReverted = postReceiptArrived && postReceipt?.status === 'reverted'
++
++  // If a sent transaction has no receipt after a minute, say so rather than spin.
++  // On Arc a transaction priced under the 20 gwei floor disappears without a
++  // receipt; fees are now set explicitly, but the page should never wait silently.
++  const [postSlow, setPostSlow] = useState(false)
++  useEffect(() => {
++    if (!postTxHash || postReceiptArrived) return
++    const t = setTimeout(() => setPostSlow(true), 60_000)
++    return () => { clearTimeout(t); setPostSlow(false) }
++  }, [postTxHash, postReceiptArrived])
+ 
+   // Parse DealPosted from receipt to get the new deal id (derived, no effect needed)
+   const parsedDealId = useMemo<bigint | null>(() => {
+@@ -302,7 +315,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
+         address: SWARM_PASS_ADDR,
+         abi: SWARM_PASS_ABI,
+         functionName: 'faucet',
+-        chainId: CHAIN_ID,
++        ...ARC_TX_FEES, chainId: CHAIN_ID,
+       },
+       {
+         onSuccess: () => {
+@@ -345,7 +358,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
+         abi: ERC20_ABI,
+         functionName: 'approve',
+         args: [CONTRACTS_ACTIVE.DealFactory, result.stockAmount],
+-        chainId: CHAIN_ID,
++        ...ARC_TX_FEES, chainId: CHAIN_ID,
+       },
+       {
+         onSuccess: (hash) => { setApproveTxHash(hash) },
+@@ -391,7 +404,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
+         abi: DEAL_FACTORY_ABI,
+         functionName: 'postDeal',
+         args: [postParams, result.tierArgs],
+-        chainId: CHAIN_ID,
++        ...ARC_TX_FEES, chainId: CHAIN_ID,
+       },
+       {
+         onSuccess: (hash) => { setPostTxHash(hash) },
+@@ -405,6 +418,10 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
+ 
+   // ── Render ───────────────────────────────────────────────────────────────
+   const busy = step === 'approving' || approveConfirming || step === 'posting' || postConfirming
++  // Step 2 has its own busy state. It used to share 'busy', which counts the
++  // approval as in progress until step leaves 'approving' -- and nothing ever
++  // moved it on once the approval confirmed, so Post deal stayed disabled.
++  const postBusy = step === 'posting' || postConfirming
+ 
+   const titleBytes = byteLengthOf(title)
+   const descBytes  = byteLengthOf(description)
+@@ -688,6 +705,24 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
+           <p className="text-sm" style={{ color: 'var(--danger)' }}>{validationErr}</p>
+         </div>
+       )}
++      {postReverted && (
++        <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(186,43,76,0.08)' }}>
++          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
++          <p className="text-sm" style={{ color: 'var(--danger)' }}>
++            The post transaction was mined but failed, so no deal was created and your tokens did not move.{' '}
++            {postTxHash && <a href={txUrl(postTxHash)} target="_blank" rel="noreferrer" className="underline">See it on the explorer</a>}
++          </p>
++        </div>
++      )}
++      {postSlow && !postReceiptArrived && (
++        <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(255,160,0,0.08)' }}>
++          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--warn, #b45309)' }} />
++          <p className="text-sm" style={{ color: 'var(--warn, #b45309)' }}>
++            Still not confirmed after a minute. Check the transaction in your wallet's Activity tab — if it shows as
++            dropped or failed, press Post deal again.
++          </p>
++        </div>
++      )}
+       {errMsg && (
+         <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(186,43,76,0.08)' }}>
+           <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
+@@ -749,7 +784,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
+           </div>
+           <button
+             onClick={handlePost}
+-            disabled={busy}
++            disabled={postBusy}
+             className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100"
+             style={{ background: 'var(--accent)' }}>
+             {postConfirming
+diff --git a/src/swarm/config.ts b/src/swarm/config.ts
+index 19ca028..af53fb8 100644
+--- a/src/swarm/config.ts
++++ b/src/swarm/config.ts
+@@ -63,11 +63,14 @@ const CONTRACTS = {
+     // Deployed and wired from a deployer wallet we control, then verified from
+     // chain: bytecode at all three, all three owner wiring calls landed,
+     // constructor links agree in both directions, USDC predeploy correct.
+-    DealFactory: '0x5b646D21e0b4a21364b226edFCDc5E5F4e6E110f' as `0x${string}`,
+-    DemandPool:  '0x2Eab29C0d1F9FF0B0ba9385324611BbC2670CfEB' as `0x${string}`,
+-    Settler:     '0xB4dFC8b4Baa856eB9B6bB7087Ed72615452874C5' as `0x${string}`,
+-    SwarmPass:   ZERO as `0x${string}`,  // updated when v2 deploys
+-    deployBlock: 68162131n,
++    // Swarm v2 (quantities, token delivery), deployed 24 Oct 2026 and verified:
++    // wiring from chain, and all four contracts byte-identical to the local build.
++    // Swarm Pass has its faucet on. Earlier v1 sets are retired.
++    DealFactory: '0xdF7ab518C23aff70ecd2Dd61e639fbEd62F2D5aD' as `0x${string}`,
++    DemandPool:  '0x0C04e8Bf223F4C9ab45678273b8D692Ef9550B36' as `0x${string}`,
++    Settler:     '0xfD29dd3c3003713f529912315F5e47C9c88F8DD3' as `0x${string}`,
++    SwarmPass:   '0x28ac46d52C34a53565c481849361b8DB2cb3E4ca' as `0x${string}`,
++    deployBlock: 68895718n,
+     deployed: true,
+   },
+ } as const
+@@ -103,3 +106,14 @@ export const DEPLOYMENT_READY: boolean = CONTRACTS_ACTIVE.deployed
+  */
+ export const RELAYER_URL: string | undefined =
+   (import.meta.env.VITE_RELAYER_URL as string | undefined) || undefined
++
++/**
++ * Explicit EIP-1559 fees for every transaction the app sends. Arc drops a
++ * transaction priced below its 20 gwei floor silently -- no error, no receipt --
++ * so the fee is not left to the wallet's estimate. maxFeePerGas is a cap, not
++ * what is paid: the transaction pays the base fee plus the tip.
++ */
++export const ARC_TX_FEES = {
++  maxFeePerGas: 50_000_000_000n,        // 50 gwei cap, well above the 20 gwei floor
++  maxPriorityFeePerGas: 1_000_000_000n, // 1 gwei
++} as const
+diff --git a/src/tracing.ts b/src/tracing.ts
+index 10c073c..c1751d6 100644
+--- a/src/tracing.ts
++++ b/src/tracing.ts
+@@ -67,6 +67,12 @@ type TraceEvent = RpcTraceEvent | HttpTraceEvent | GroupStartTraceEvent | GroupE
+ 
+ const LOG = '[studio-trace]';
+ 
++// The tracing shims feed Arc Studio's preview panel, which hosts the app in an
++// iframe. In a normal browser tab there is no panel to feed, and patching
++// window.fetch and the wallet's own request() puts this code between the app
++// and a real wallet on every call. Only patch inside a parent frame.
++const IN_STUDIO_FRAME = (() => { try { return window.self !== window.top; } catch { return true; } })();
++
+ function log(...args: unknown[]): void {
+   console.log(LOG, ...args);
+ }
+@@ -343,7 +349,7 @@ function findResp(resps: JRPCRes[], reqId: unknown): JRPCRes | undefined {
+ // Patch globalThis.fetch — captures viem http() transport + regular HTTP
+ // ---------------------------------------------------------------------------
+ 
+-try {
++if (IN_STUDIO_FRAME) try {
+   const _fetch = globalThis.fetch;
+   log('patching fetch');
+ 
+@@ -473,7 +479,7 @@ function patchProvider(provider: EIP1193Provider | undefined): void {
+   } catch { /* not all providers support .on() */ }
+ }
+ 
+-try {
++if (IN_STUDIO_FRAME) try {
+   // Case 1: provider already exists
+   const existingProvider = getEthereum();
+   if (existingProvider) {
+diff --git a/src/swarm/FundingNotice.tsx b/src/swarm/FundingNotice.tsx
+new file mode 100644
+index 0000000..3ecac53
+--- /dev/null
++++ b/src/swarm/FundingNotice.tsx
+@@ -0,0 +1,45 @@
++import { useReadContract } from 'wagmi'
++import { Wallet, ExternalLink } from 'lucide-react'
++import { ARC_NETWORK, ACTIVE_NETWORK } from './config'
++import { ERC20_ABI } from './abis'
++import { formatUsdcPrice } from './utils'
++
++/** The connected wallet's USDC balance (6 decimals), refreshed every few seconds. */
++export function useUsdcBalance(address: `0x${string}` | undefined) {
++  const { data } = useReadContract({
++    address: ARC_NETWORK.usdc.address,
++    abi: ERC20_ABI,
++    functionName: 'balanceOf',
++    args: [address ?? '0x0000000000000000000000000000000000000000'],
++    chainId: ARC_NETWORK.chainId,
++    query: { enabled: !!address, refetchInterval: 5000 },
++  })
++  return data
++}
++
++/**
++ * Shown in place of an order button when the wallet cannot cover the order.
++ * Asking for a signature or a transaction the wallet cannot pay for only ends in
++ * a long error from the wallet; say what is needed instead.
++ */
++export function FundingNotice({ needed, balance }: { needed: bigint; balance: bigint }) {
++  const short = needed - balance
++  return (
++    <div className="rounded-2xl p-4 space-y-2"
++      style={{ background: 'rgba(255,160,0,0.08)', border: '1px solid rgba(255,160,0,0.25)' }}>
++      <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--ink)' }}>
++        <Wallet className="size-4" /> Add USDC to your wallet to order
++      </div>
++      <p className="text-sm" style={{ color: 'var(--muted)' }}>
++        This order needs {formatUsdcPrice(needed)}. Your wallet has {formatUsdcPrice(balance)} —{' '}
++        {formatUsdcPrice(short)} short. On Arc, USDC also pays for gas, so this one balance covers everything.
++      </p>
++      {ACTIVE_NETWORK === 'testnet' && (
++        <a href="https://faucet.circle.com" target="_blank" rel="noreferrer"
++          className="inline-flex items-center gap-1 text-sm font-medium underline" style={{ color: 'var(--accent)' }}>
++          Get free test USDC (choose Arc Testnet) <ExternalLink className="size-3.5" />
++        </a>
++      )}
++    </div>
++  )
++}
+diff --git a/src/swarm/useLateWalletReconnect.ts b/src/swarm/useLateWalletReconnect.ts
+new file mode 100644
+index 0000000..2ba198f
+--- /dev/null
++++ b/src/swarm/useLateWalletReconnect.ts
+@@ -0,0 +1,84 @@
++import { useEffect, useRef } from 'react'
++import { useConfig, useReconnect } from 'wagmi'
++
++const ANSWER_TIMEOUT_MS = 4000
++const CONNECT_TIMEOUT_MS = 8000
++const ATTEMPTS = 3
++
++function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
++  return Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))])
++}
++
++/**
++ * Restores the saved wallet connection after a page reload. Replaces wagmi's
++ * reconnectOnMount, which main.tsx turns off.
++ *
++ * wagmi's built-in restore asks the wallet about the saved connection with no
++ * timeout. When an extension wallet never answers one of those early requests,
++ * the restore hangs: the page shows a remembered address but is not connected,
++ * and connecting again is refused because wagmi considers that wallet already
++ * connected. Reproduced with a stand-in wallet that ignores its first request.
++ * Extension wallets can also announce themselves (EIP-6963) only after the app
++ * has started, which the built-in restore misses.
++ *
++ * Here every wallet request has a timeout and is retried with a fresh request,
++ * the restore runs again whenever a wallet announces itself, and if the wallet
++ * never answers the page is simply left disconnected with a working Connect
++ * button. A deliberate disconnect is respected: wagmi's isAuthorized() returns
++ * false once the user has disconnected.
++ */
++export function useLateWalletReconnect() {
++  const config = useConfig()
++  const { reconnectAsync } = useReconnect()
++  const running = useRef(false)
++
++  useEffect(() => {
++    // Read wagmi's live status at the moment it matters, not a render snapshot.
++    const busy = () => config.state.status === 'connected' || config.state.status === 'connecting'
++    const restore = async () => {
++      if (running.current || busy()) return
++      running.current = true
++      try {
++        const recentId = await config.storage?.getItem('recentConnectorId')
++        if (!recentId) return
++        const connector = config.connectors.find((c) => c.id === recentId)
++        if (!connector) return // not announced yet; the announcement listener retries
++
++        for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
++          let authorized: boolean
++          try {
++            authorized = await withTimeout(connector.isAuthorized(), ANSWER_TIMEOUT_MS)
++          } catch {
++            continue // no answer: ask again with a fresh request
++          }
++          if (!authorized) return // not authorised, or the user disconnected
++          if (busy()) return
++          try {
++            // wagmi's reconnect path, limited to this connector. An ordinary
++            // connect sends wallet_requestPermissions, which opens a MetaMask
++            // popup on every reload; reconnecting does not.
++            const restored = await withTimeout(reconnectAsync({ connectors: [connector] }), CONNECT_TIMEOUT_MS)
++            if (restored.length > 0) return
++          } catch {
++            // timed out
++          }
++          const st = config.state.status
++          if (st === 'reconnecting' || st === 'connecting') {
++            config.setState((x) => ({ ...x, connections: new Map(), current: null, status: 'disconnected' }))
++          }
++        }
++      } finally {
++        running.current = false
++      }
++    }
++
++    void restore()
++    const onAnnounce = () => { setTimeout(() => { void restore() }, 50) }
++    window.addEventListener('eip6963:announceProvider', onAnnounce)
++    window.addEventListener('ethereum#initialized', onAnnounce)
++    return () => {
++      window.removeEventListener('eip6963:announceProvider', onAnnounce)
++      window.removeEventListener('ethereum#initialized', onAnnounce)
++    }
++  }, [config, reconnectAsync])
++}
+diff --git a/relayer/server.ts b/relayer/server.ts
+index 90ac65e..b32474d 100644
+--- a/relayer/server.ts
++++ b/relayer/server.ts
+@@ -26,6 +26,8 @@ import {
+   type Chain,
+   type Account,
+   ContractFunctionRevertedError,
++  keccak256,
++  toBytes,
+ } from 'viem'
+ import { privateKeyToAccount } from 'viem/accounts'
+ 
+@@ -269,8 +271,12 @@ async function relay(body: CommitBody): Promise<RelayResult> {
+ 
+     if (revertErr?.data) {
+       const { errorName, args: errorArgs } = revertErr.data
+-      throw Object.assign(new Error(`Contract revert: ${errorName}`), {
+-        code: errorName,
++      // USDC rejects a signature that does not match with a plain-text revert,
++      // which viem decodes as the generic 'Error'. Name it for the client: it
++      // means the signed values (amount, quantity, deal) were changed.
++      const code = errorName === 'Error' ? 'InvalidAuthorization' : errorName
++      throw Object.assign(new Error(`Contract revert: ${code}`), {
++        code,
+         args: errorArgs,
+       })
+     }
+@@ -391,16 +397,11 @@ async function relay(body: CommitBody): Promise<RelayResult> {
+   // ExcessCredited(uint256 indexed dealId, address indexed buyer, uint256 amount)
+   //   [0]  amount (uint256)
+   //
+-  // Topic hashes computed from the v2 canonical signatures:
+-  //   keccak256("Committed(uint256,address,uint32,uint64,uint256,uint64,uint32,uint32)")
+-  //   keccak256("ExcessCredited(uint256,address,uint256)")
+-  const COMMITTED_TOPIC = '0x0b2d9476b1d6bb6879fcd01e8d5b67d1e4e9c13a59b74e5d3e6b3d5d8e3ac4a3'
+-  const EXCESS_TOPIC    = '0x3cfc150e50c4024ef3086c288297f0b4d66863e163f546bcc0871098df534b41'
+-
+-  // Compute the v2 Committed topic at runtime to be certain it matches.
+-  // We use the keccak256 from viem which is already imported transitively via
+-  // parseAbi; instead, inline the hex we computed offline and verified in tests.
+-  // (The constant above is a placeholder — see the correction below.)
++  // Topic hashes, computed from the v2 event signatures rather than typed in:
++  // a hand-written hash here once never matched, so every relayed order was
++  // reported back as 0 units and $0 paid.
++  const COMMITTED_TOPIC = keccak256(toBytes('Committed(uint256,address,uint32,uint64,uint256,uint64,uint32,uint32)')).toLowerCase()
++  const EXCESS_TOPIC    = keccak256(toBytes('ExcessCredited(uint256,address,uint256)')).toLowerCase()
+ 
+   let committedUnits: number  = 0
+   let paidPerUnit:  bigint    = 0n

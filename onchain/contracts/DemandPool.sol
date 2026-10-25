@@ -36,12 +36,13 @@ contract DemandPool is ReentrancyGuard {
     // - No block.prevrandao (Arc always returns 0); no block.chainid checks
     // - ReentrancyGuard on commit, commitWithAuthorization, withdraw, pullForSettler
     // - Buyers order a quantity (units >= 1). Price tiers count total units ordered.
-    // - paidPerUnit[buyer] = priceAt(totalUnits + units) — the price including the buyer's order.
-    // - escrowed[dealId][buyer] = paidPerUnit * units
+    // - A buyer who already has an order adds a lot rather than reverting AlreadyCommitted.
+    // - paidPerUnit[buyer] = min across lots (lowest lot price so far)
+    // - escrowed[dealId][buyer] = sum of (lotPrice * lotUnits) across all lots
     // - tierCount[dealId][price] tracks buyers at each per-unit price for O(tiers) strand check
+    //   (a buyer moves from old paidPerUnit to new one when a top-up lowers it)
     // - WouldStrandBuyer: withdraw refused if any remaining buyer's paidPerUnit < newPrice
     //   where newPrice = priceAt(totalUnits - unitsOf[caller])
-    // - One order per buyer; no adding to an existing order in v2
     // - Owner pause() (in factory) halts commit and commitWithAuthorization;
     //   withdraw/settle/refundAll/claim are never halted
     // - Pull payments: withdraw credits Settler.claimable, never transfers USDC directly
@@ -61,9 +62,9 @@ contract DemandPool is ReentrancyGuard {
     mapping(uint256 => address[]) private _buyers;
     mapping(uint256 => mapping(address => uint256)) private _buyerIndex; // 1-based
     mapping(uint256 => uint32) public totalUnits;                        // running sum of units ordered
-    mapping(uint256 => mapping(address => uint32)) public unitsOf;       // units ordered by buyer
-    mapping(uint256 => mapping(address => uint64)) public paidPerUnit;   // per-unit price at commit
-    mapping(uint256 => mapping(address => uint256)) public escrowed;     // paidPerUnit * units
+    mapping(uint256 => mapping(address => uint32)) public unitsOf;       // units ordered by buyer (sum of lots)
+    mapping(uint256 => mapping(address => uint64)) public paidPerUnit;   // lowest per-unit price across lots
+    mapping(uint256 => mapping(address => uint256)) public escrowed;     // sum of (lotPrice * lotUnits)
     mapping(uint256 => mapping(uint64 => uint32)) public tierCount;      // buyers at each per-unit price
 
     address public owner;
@@ -101,12 +102,11 @@ contract DemandPool is ReentrancyGuard {
 
     error DealNotOpen();
     error DeadlinePassed();
-    error AlreadyCommitted();
     error NotCommitted();
     error BuyerCapReached();
     error UnitCapReached();            // totalUnits + units > maxUnits
     error ZeroUnits();                 // units == 0
-    error UnitsPerBuyerExceeded();     // units > maxUnitsPerBuyer when set
+    error UnitsPerBuyerExceeded();     // buyer's total units > maxUnitsPerBuyer when set
     error WouldStrandBuyer();
     error SettlerNotConfigured();
     error Unauthorized();
@@ -156,73 +156,117 @@ contract DemandPool is ReentrancyGuard {
 
     // ── Shared commit logic ───────────────────────────────────────────────────
 
+    /// @dev Checks preconditions common to both new orders and top-ups.
+    ///      isTopUp=true skips the maxBuyers check (buyer is already counted).
     function _checkCommitPreconditions(
         uint256 dealId,
         address buyer,
-        uint32  units
+        uint32  units,
+        bool    isTopUp
     ) private view {
         if (!settlerSet) revert SettlerNotConfigured();
         if (factory.paused()) revert Paused();
         SwarmTypes.Deal memory deal = factory.getDeal(dealId);
         if (deal.state != 0) revert DealNotOpen();
         if (block.timestamp >= deal.deadline) revert DeadlinePassed();
-        if (_buyerIndex[dealId][buyer] != 0) revert AlreadyCommitted();
-        if (_buyers[dealId].length >= deal.maxBuyers) revert BuyerCapReached();
+        if (!isTopUp && _buyers[dealId].length >= deal.maxBuyers) revert BuyerCapReached();
         if (units == 0) revert ZeroUnits();
-        if (deal.maxUnitsPerBuyer != 0 && units > deal.maxUnitsPerBuyer) revert UnitsPerBuyerExceeded();
+        // Per-buyer limit applies to the buyer's TOTAL units (existing + new lot)
+        uint32 totalBuyerUnits = unitsOf[dealId][buyer] + units;
+        if (deal.maxUnitsPerBuyer != 0 && totalBuyerUnits > deal.maxUnitsPerBuyer) revert UnitsPerBuyerExceeded();
         if (uint256(totalUnits[dealId]) + uint256(units) > uint256(deal.maxUnits)) revert UnitCapReached();
     }
 
     /**
      * @dev Core state mutation shared by commit() and commitWithAuthorization().
      *      All preconditions must be checked before calling.
-     *      @return priceAfterPerUnit  The per-unit price actually escrowed.
-     *      @return escrowAmount       priceAfterPerUnit * units (total USDC to be taken from buyer).
+     *      Handles both new orders (buyer not yet in list) and top-ups (buyer already has an order).
+     *
+     *      @return lotPricePerUnit  The per-unit price for this lot.
+     *      @return lotEscrow        lotPricePerUnit * units (USDC to take from buyer for this lot).
      */
     function _doCommit(
         uint256 dealId,
         address buyer,
         uint32  units
-    ) private returns (uint64 priceAfterPerUnit, uint256 escrowAmount) {
+    ) private returns (uint64 lotPricePerUnit, uint256 lotEscrow) {
         uint64 priceBefore = _priceAt(dealId, totalUnits[dealId]);
 
         // Add units first so that priceAt reflects the buyer's own contribution.
         totalUnits[dealId] += units;
 
-        priceAfterPerUnit = _priceAt(dealId, totalUnits[dealId]);
-        escrowAmount      = uint256(priceAfterPerUnit) * uint256(units);
+        lotPricePerUnit = _priceAt(dealId, totalUnits[dealId]);
+        lotEscrow       = uint256(lotPricePerUnit) * uint256(units);
 
-        _buyers[dealId].push(buyer);
-        _buyerIndex[dealId][buyer]  = _buyers[dealId].length;
-        unitsOf[dealId][buyer]      = units;
-        paidPerUnit[dealId][buyer]  = priceAfterPerUnit;
-        escrowed[dealId][buyer]     = escrowAmount;
-        tierCount[dealId][priceAfterPerUnit] += 1;
+        if (_buyerIndex[dealId][buyer] == 0) {
+            _recordNewBuyer(dealId, buyer, units, lotPricePerUnit, lotEscrow);
+        } else {
+            _recordTopUp(dealId, buyer, units, lotPricePerUnit, lotEscrow);
+        }
 
-        if (priceAfterPerUnit != priceBefore) {
-            emit TierBroken(dealId, totalUnits[dealId], priceAfterPerUnit);
+        if (lotPricePerUnit != priceBefore) {
+            emit TierBroken(dealId, totalUnits[dealId], lotPricePerUnit);
         }
 
         emit Committed(
             dealId,
             buyer,
             units,
-            priceAfterPerUnit,
-            escrowAmount,
-            priceAfterPerUnit,
+            lotPricePerUnit,
+            lotEscrow,
+            lotPricePerUnit,
             totalUnits[dealId],
             uint32(_buyers[dealId].length)
         );
     }
 
+    /// @dev Record a brand-new buyer in all mappings.
+    function _recordNewBuyer(
+        uint256 dealId,
+        address buyer,
+        uint32  units,
+        uint64  lotPrice,
+        uint256 lotEscrow
+    ) private {
+        _buyers[dealId].push(buyer);
+        _buyerIndex[dealId][buyer] = _buyers[dealId].length;
+        unitsOf[dealId][buyer]     = units;
+        paidPerUnit[dealId][buyer] = lotPrice;
+        escrowed[dealId][buyer]    = lotEscrow;
+        tierCount[dealId][lotPrice] += 1;
+    }
+
+    /// @dev Record a top-up lot for an existing buyer.
+    ///      Accumulates units and escrow; lowers paidPerUnit if this lot is cheaper.
+    function _recordTopUp(
+        uint256 dealId,
+        address buyer,
+        uint32  units,
+        uint64  lotPrice,
+        uint256 lotEscrow
+    ) private {
+        uint64 oldPaid = paidPerUnit[dealId][buyer];
+        unitsOf[dealId][buyer]  += units;
+        escrowed[dealId][buyer] += lotEscrow;
+
+        if (lotPrice < oldPaid) {
+            // Move tally entry to the new (lower) price
+            tierCount[dealId][oldPaid]  -= 1;
+            tierCount[dealId][lotPrice] += 1;
+            paidPerUnit[dealId][buyer]   = lotPrice;
+        }
+        // If lotPrice >= oldPaid the tally entry stays at oldPaid; paidPerUnit unchanged.
+    }
+
     // ── commit (standard approve + transferFrom) ──────────────────────────────
 
     function commit(uint256 dealId, uint32 units) external nonReentrant {
-        _checkCommitPreconditions(dealId, msg.sender, units);
+        bool isTopUp = _buyerIndex[dealId][msg.sender] != 0;
+        _checkCommitPreconditions(dealId, msg.sender, units, isTopUp);
 
-        (, uint256 escrowAmount) = _doCommit(dealId, msg.sender, units);
+        (, uint256 lotEscrow) = _doCommit(dealId, msg.sender, units);
 
-        bool ok = USDC.transferFrom(msg.sender, address(this), escrowAmount);
+        bool ok = USDC.transferFrom(msg.sender, address(this), lotEscrow);
         if (!ok) revert TransferFailed();
     }
 
@@ -250,6 +294,8 @@ contract DemandPool is ReentrancyGuard {
      *
      *      If authorized > priceAfter * units: escrow the live cost, credit excess.
      *      If authorized < priceAfter * units: revert PriceRoseBeyondAuthorization(newTotal).
+     *
+     *      Top-ups are handled the same way as standard commits.
      */
     struct AuthParams {
         uint256 dealId;
@@ -298,7 +344,8 @@ contract DemandPool is ReentrancyGuard {
         bytes32 nonce = authorizationNonce(a.dealId, a.buyer, a.units, a.salt);
         if (USDC.authorizationState(a.buyer, nonce)) revert AuthorizationAlreadyUsed();
 
-        _checkCommitPreconditions(a.dealId, a.buyer, a.units);
+        bool isTopUp = _buyerIndex[a.dealId][a.buyer] != 0;
+        _checkCommitPreconditions(a.dealId, a.buyer, a.units, isTopUp);
 
         // Peek at cost with buyer's units included.
         uint256 requiredTotal = uint256(_priceAt(a.dealId, uint256(totalUnits[a.dealId]) + uint256(a.units))) * uint256(a.units);
@@ -317,11 +364,11 @@ contract DemandPool is ReentrancyGuard {
             a.v, a.r, a.s
         );
 
-        // Record the commit.
-        (, uint256 escrowAmount) = _doCommit(a.dealId, a.buyer, a.units);
+        // Record the commit (lot).
+        (, uint256 lotEscrow) = _doCommit(a.dealId, a.buyer, a.units);
 
         // Credit any excess back to the buyer.
-        uint256 excess = a.authorizedAmount - escrowAmount;
+        uint256 excess = a.authorizedAmount - lotEscrow;
         if (excess > 0) {
             ISettler(settler).creditWithdrawal(a.buyer, excess);
             emit ExcessCredited(a.dealId, a.buyer, excess);
@@ -368,18 +415,19 @@ contract DemandPool is ReentrancyGuard {
         uint256 buyerPos = _buyerIndex[dealId][msg.sender];
         if (buyerPos == 0) revert NotCommitted();
 
-        uint32 units   = unitsOf[dealId][msg.sender];
+        uint32 units    = unitsOf[dealId][msg.sender];
         uint32 newTotal = totalUnits[dealId] - units;
         uint64 newPrice = _priceAt(dealId, newTotal);
 
-        // Strand check: any remaining buyer whose paidPerUnit < newPrice would be undercharged.
-        if (_buyers[dealId].length > 1) {
-            uint64 lowest = _lowestPaidExcluding(dealId, deal.tiers, paidPerUnit[dealId][msg.sender]);
-            if (lowest > 0 && lowest < newPrice) revert WouldStrandBuyer();
-        }
-
         uint256 escrowAmt   = escrowed[dealId][msg.sender];
         uint64  paid        = paidPerUnit[dealId][msg.sender];
+
+        // Strand check: any remaining buyer whose paidPerUnit < newPrice would be undercharged.
+        if (_buyers[dealId].length > 1) {
+            // Use the buyer's current paidPerUnit (cheapest lot) as the tally key to exclude.
+            uint64 lowest = _lowestPaidExcluding(dealId, deal.tiers, paid);
+            if (lowest > 0 && lowest < newPrice) revert WouldStrandBuyer();
+        }
         uint64  priceBefore = _priceAt(dealId, totalUnits[dealId]);
 
         totalUnits[dealId] = newTotal;
