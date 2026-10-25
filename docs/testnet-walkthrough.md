@@ -18,7 +18,7 @@ value. The contracts are the exact bytecode mainnet will get.
    remove `localhost:5173` under ⋮ → All permissions, then refresh.
 5. App: http://localhost:5173 (Claude keeps it and the relayer running).
 
-**Deal #4 is open until 26 October, 07:39 UTC:** fifty Swarm Passes at $0.30 each,
+**Deal #5 is open until 26 October, 19:46 UTC:** fifty Swarm Passes at $0.30 each,
 falling to $0.20 once 10 are ordered and $0.10 at 25, for everyone. Minimum 5,
 at most 20 per buyer.
 
@@ -35,6 +35,9 @@ at most 20 per buyer.
       account sees a refund waiting.
 - [ ] Try ordering more than 20, or more than is left: the picker stops you with a
       reason.
+- [ ] Order again after your first order: it **adds to** your order. The summary
+      shows your total units, average price and the refund waiting; the picker
+      stops at your remaining allowance.
 - [ ] Withdraw: allowed normally; when it would push the price above what someone
       else paid, the button is disabled with an explanation.
 
