@@ -271,8 +271,12 @@ async function relay(body: CommitBody): Promise<RelayResult> {
 
     if (revertErr?.data) {
       const { errorName, args: errorArgs } = revertErr.data
-      throw Object.assign(new Error(`Contract revert: ${errorName}`), {
-        code: errorName,
+      // USDC rejects a signature that does not match with a plain-text revert,
+      // which viem decodes as the generic 'Error'. Name it for the client: it
+      // means the signed values (amount, quantity, deal) were changed.
+      const code = errorName === 'Error' ? 'InvalidAuthorization' : errorName
+      throw Object.assign(new Error(`Contract revert: ${code}`), {
+        code,
         args: errorArgs,
       })
     }
