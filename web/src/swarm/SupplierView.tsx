@@ -11,7 +11,7 @@
  * "Get 100 test passes" faucet button that calls SwarmPass.faucet().
  */
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import {
   useAccount, useWriteContract, useWaitForTransactionReceipt,
   useSwitchChain, useReadContract,
@@ -20,7 +20,7 @@ import { ConnectKitButton } from 'connectkit'
 import { motion } from 'framer-motion'
 import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown, Droplets, CheckCircle2 } from 'lucide-react'
 import { DEAL_FACTORY_ABI, ERC20_ABI, SWARM_PASS_ABI } from './abis'
-import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ACTIVE_NETWORK } from './config'
+import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ACTIVE_NETWORK, ARC_TX_FEES } from './config'
 import { useChainNow } from './hooks'
 import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt } from './utils'
 
@@ -277,8 +277,21 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
 
   const { isLoading: approveConfirming, isSuccess: approveSuccess } =
     useWaitForTransactionReceipt({ hash: approveTxHash, chainId: CHAIN_ID })
-  const { isLoading: postConfirming, isSuccess: postSuccess, data: postReceipt } =
+  const { isLoading: postConfirming, isSuccess: postReceiptArrived, data: postReceipt } =
     useWaitForTransactionReceipt({ hash: postTxHash, chainId: CHAIN_ID })
+  // A receipt is not success: a transaction can be mined and still revert.
+  const postSuccess = postReceiptArrived && postReceipt?.status === 'success'
+  const postReverted = postReceiptArrived && postReceipt?.status === 'reverted'
+
+  // If a sent transaction has no receipt after a minute, say so rather than spin.
+  // On Arc a transaction priced under the 20 gwei floor disappears without a
+  // receipt; fees are now set explicitly, but the page should never wait silently.
+  const [postSlow, setPostSlow] = useState(false)
+  useEffect(() => {
+    if (!postTxHash || postReceiptArrived) return
+    const t = setTimeout(() => setPostSlow(true), 60_000)
+    return () => { clearTimeout(t); setPostSlow(false) }
+  }, [postTxHash, postReceiptArrived])
 
   // Parse DealPosted from receipt to get the new deal id (derived, no effect needed)
   const parsedDealId = useMemo<bigint | null>(() => {
@@ -302,7 +315,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         address: SWARM_PASS_ADDR,
         abi: SWARM_PASS_ABI,
         functionName: 'faucet',
-        chainId: CHAIN_ID,
+        ...ARC_TX_FEES, chainId: CHAIN_ID,
       },
       {
         onSuccess: () => {
@@ -345,7 +358,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         abi: ERC20_ABI,
         functionName: 'approve',
         args: [CONTRACTS_ACTIVE.DealFactory, result.stockAmount],
-        chainId: CHAIN_ID,
+        ...ARC_TX_FEES, chainId: CHAIN_ID,
       },
       {
         onSuccess: (hash) => { setApproveTxHash(hash) },
@@ -391,7 +404,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         abi: DEAL_FACTORY_ABI,
         functionName: 'postDeal',
         args: [postParams, result.tierArgs],
-        chainId: CHAIN_ID,
+        ...ARC_TX_FEES, chainId: CHAIN_ID,
       },
       {
         onSuccess: (hash) => { setPostTxHash(hash) },
@@ -690,6 +703,24 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(186,43,76,0.08)' }}>
           <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
           <p className="text-sm" style={{ color: 'var(--danger)' }}>{validationErr}</p>
+        </div>
+      )}
+      {postReverted && (
+        <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(186,43,76,0.08)' }}>
+          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
+          <p className="text-sm" style={{ color: 'var(--danger)' }}>
+            The post transaction was mined but failed, so no deal was created and your tokens did not move.{' '}
+            {postTxHash && <a href={txUrl(postTxHash)} target="_blank" rel="noreferrer" className="underline">See it on the explorer</a>}
+          </p>
+        </div>
+      )}
+      {postSlow && !postReceiptArrived && (
+        <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(255,160,0,0.08)' }}>
+          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--warn, #b45309)' }} />
+          <p className="text-sm" style={{ color: 'var(--warn, #b45309)' }}>
+            Still not confirmed after a minute. Check the transaction in your wallet's Activity tab — if it shows as
+            dropped or failed, press Post deal again.
+          </p>
         </div>
       )}
       {errMsg && (

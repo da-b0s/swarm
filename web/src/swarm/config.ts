@@ -106,3 +106,14 @@ export const DEPLOYMENT_READY: boolean = CONTRACTS_ACTIVE.deployed
  */
 export const RELAYER_URL: string | undefined =
   (import.meta.env.VITE_RELAYER_URL as string | undefined) || undefined
+
+/**
+ * Explicit EIP-1559 fees for every transaction the app sends. Arc drops a
+ * transaction priced below its 20 gwei floor silently -- no error, no receipt --
+ * so the fee is not left to the wallet's estimate. maxFeePerGas is a cap, not
+ * what is paid: the transaction pays the base fee plus the tip.
+ */
+export const ARC_TX_FEES = {
+  maxFeePerGas: 50_000_000_000n,        // 50 gwei cap, well above the 20 gwei floor
+  maxPriorityFeePerGas: 1_000_000_000n, // 1 gwei
+} as const

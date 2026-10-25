@@ -10,7 +10,7 @@ import {
 import {
   useEscrowed, useUnitsOf, usePaidPerUnit, useTierCounts, useChainNow,
 } from './hooks'
-import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL } from './config'
+import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL, ARC_TX_FEES } from './config'
 import { DEMAND_POOL_ABI, ERC20_ABI } from './abis'
 import type { DealTier } from './hooks'
 import { GaslessCommitFlow } from './GaslessCommitFlow'
@@ -109,7 +109,7 @@ export function CommitFlow({
         abi: DEMAND_POOL_ABI,
         functionName: 'commit',
         args: [dealId, units],
-        chainId: CHAIN_ID,
+        ...ARC_TX_FEES, chainId: CHAIN_ID,
       },
       {
         onSuccess: (hash) => { setCommitTxHash(hash); setStep('commit-confirming') },
@@ -158,7 +158,7 @@ export function CommitFlow({
         abi: ERC20_ABI,
         functionName: 'approve',
         args: [CONTRACTS_ACTIVE.DemandPool, maxCharge],
-        chainId: CHAIN_ID,
+        ...ARC_TX_FEES, chainId: CHAIN_ID,
       },
       {
         onSuccess: (hash) => { setApproveTxHash(hash); setStep('approve-confirming') },
@@ -177,7 +177,7 @@ export function CommitFlow({
         abi: DEMAND_POOL_ABI,
         functionName: 'withdraw',
         args: [dealId],
-        chainId: CHAIN_ID,
+        ...ARC_TX_FEES, chainId: CHAIN_ID,
       },
       {
         onSuccess: (hash) => { setCommitTxHash(hash); setStep('commit-confirming') },

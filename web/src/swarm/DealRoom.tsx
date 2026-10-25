@@ -12,7 +12,7 @@ import {
 import { useDealHistory } from './useDealHistory'
 import { SETTLER_ABI } from './abis'
 import { formatUsdcPrice, formatCountdown, shortAddr, txUrl } from './utils'
-import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'
+import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES } from './config'
 
 interface Props { dealId: bigint }
 
@@ -310,13 +310,13 @@ function SettleOrRefundPanel({ dealId, totalUnits, minUnits, goodsToken, goodsSy
     const onError   = () => setBusy(false)
     const chainId   = ARC_NETWORK.chainId
     if (fn === 'settle') {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'settle',    args: [dealId], chainId }, { onSuccess, onError })
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'settle',    args: [dealId], ...ARC_TX_FEES, chainId }, { onSuccess, onError })
     } else if (fn === 'refundAll') {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'refundAll', args: [dealId], chainId }, { onSuccess, onError })
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'refundAll', args: [dealId], ...ARC_TX_FEES, chainId }, { onSuccess, onError })
     } else if (fn === 'claim') {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim',     args: [],       chainId }, { onSuccess, onError })
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim',     args: [],       ...ARC_TX_FEES, chainId }, { onSuccess, onError })
     } else {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], chainId }, { onSuccess, onError })
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], ...ARC_TX_FEES, chainId }, { onSuccess, onError })
     }
   }
 
@@ -403,9 +403,9 @@ function ClaimPanel({ goodsToken, goodsSymbol, onDone }: ClaimPanelProps) {
     const onSuccess = (h: `0x${string}`) => { setHash(h); setBusy(false) }
     const onError   = () => setBusy(false)
     if (fn === 'claim') {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim', args: [], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claim', args: [], ...ARC_TX_FEES, chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
     } else {
-      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
+      writeContract({ address: CONTRACTS_ACTIVE.Settler, abi: SETTLER_ABI, functionName: 'claimGoods', args: [goodsToken], ...ARC_TX_FEES, chainId: ARC_NETWORK.chainId }, { onSuccess, onError })
     }
   }
 
