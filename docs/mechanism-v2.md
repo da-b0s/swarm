@@ -142,3 +142,45 @@ passes are minted by the owner. No `block.chainid` checks.
 `maxBuyers` ≤ 100 keeps settlement's loop inside a block, as in v1; the goods credit
 adds one storage write per buyer, so `settle` at 100 buyers must be measured again
 and stay well below the block gas limit.
+
+## v2.1 — adding to an order (decided 25 October)
+
+Hands-on testing showed one order per buyer is wrong in practice: a buyer who
+bought 1 and wants 2 more should not have to withdraw and start again.
+
+**`commit(dealId, units)` by a buyer who already has an order adds a lot to it.**
+Same preconditions as a new order (deal open, before deadline, not paused,
+units ≥ 1, stock limit), except `maxBuyers` — the buyer is already counted — and
+the per-buyer limit applies to the buyer's **total** units. The lot is priced
+exactly like a new order, including its own units:
+
+    lotPrice   = priceAt(totalUnits + units)
+    escrowed  += lotPrice × units
+    unitsOf   += units
+    paidPerUnit[buyer] = min(paidPerUnit[buyer], lotPrice)   // the buyer's cheapest lot
+
+`paidPerUnit` keeps its name but now means **the lowest per-unit price across the
+buyer's lots**; with one lot it is unchanged. When a top-up lowers it, the buyer's
+entry in the per-price tally moves from the old price to the new one.
+
+**Settlement refunds by escrow, not by a single price:**
+
+    refund = escrowed − cp × unitsOf
+
+This cannot underflow: every lot was paid at or above the live price when it was
+bought, and the strand rule keeps the live price from ending above any remaining
+buyer's cheapest lot, so `cp ≤ paidPerUnit ≤ every lot price`.
+
+**The strand rule is unchanged in form:** a withdrawal is refused if, after it,
+the live price would exceed any remaining buyer's `paidPerUnit` (cheapest lot).
+The tally scan stays bounded by the number of tiers.
+
+**Withdrawing still removes the whole order** — every lot — and returns the full
+escrow to claimable. Partial withdrawal is not in scope.
+
+**Events:** each lot emits `Committed` with that lot's units, price and escrow;
+`buyerCount` does not change on a top-up. Consumers must **sum** a buyer's
+`Committed` lots rather than treat the latest as the whole order.
+
+**Gasless:** `commitWithAuthorization` adds a lot the same way; the nonce already
+binds the quantity.
