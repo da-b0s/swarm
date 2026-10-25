@@ -1,102 +1,73 @@
-# Trying Swarm on testnet yourself
+# Trying Swarm v2 on testnet yourself
 
-Everything here is Arc **testnet**: free test USDC, nothing of value. The
-contracts are the exact bytecode mainnet will get.
+Everything here is Arc **testnet**: free test USDC and test passes, nothing of
+value. The contracts are the exact bytecode mainnet will get.
 
 ## Setup (about 10 minutes, once)
 
-1. **A wallet with a fresh account.** MetaMask or Rabby, in a browser profile you
-   use for testing. Make a new account for this — do not use one that holds real
-   funds. For the full test you want **two** accounts, so you can be two buyers.
-2. **Add Arc Testnet.** The app has an add-network button; or add it by hand:
-   chain id `5042002`, RPC `https://rpc.testnet.arc.io`, currency `USDC` with 18
-   decimals, explorer `https://explorer.testnet.arc.io`.
-3. **Get test USDC** at https://faucet.circle.com — choose Arc Testnet and paste
-   your account address. Do this for both accounts. On Arc, USDC is also the gas,
-   so this one balance covers everything.
-4. **Run it** (Claude can start these for you):
-   - relayer, from `relayer/`, with the testnet settings in [hosting.md](hosting.md)
-   - frontend: `cd web && npm run dev`, then open http://localhost:5173
+1. **A wallet with fresh accounts.** MetaMask or Rabby, in a browser profile you
+   use for testing. Make new accounts for this — not ones holding real funds. Two
+   accounts lets you be two buyers; a third lets you be a supplier too.
+2. **Arc Testnet** in the wallet: chain id `5042002`, RPC
+   `https://rpc.testnet.arc.io`, currency `USDC` (18 decimals), explorer
+   `https://explorer.testnet.arc.io`. Connecting no longer tries to switch you to
+   mainnet.
+3. **Test USDC** at https://faucet.circle.com — choose Arc Testnet. USDC is also
+   the gas on Arc, so this one balance covers everything.
+4. **If you tried the earlier version:** in MetaMask switch to Arc Testnet and
+   remove `localhost:5173` under ⋮ → All permissions, then refresh.
+5. App: http://localhost:5173 (Claude keeps it and the relayer running).
 
-**Deal #4** is open on testnet for you to join until 25 October, 15:50 UTC:
-$0.30 at 1 buyer, $0.20 at 2, $0.10 at 3, minimum 2. Its tiers are close together
-so two accounts are enough to see the price drop. You can also post your own from
-**Post**.
+**Deal #4 is open until 26 October, 07:39 UTC:** fifty Swarm Passes at $0.30 each,
+falling to $0.20 once 10 are ordered and $0.10 at 25, for everyone. Minimum 5,
+at most 20 per buyer.
 
-## What to check
+## As a buyer
 
-Tick each one. Anything that looks wrong, note it — that is the point of this.
+- [ ] Logged out, you see the title, description, "1 unit = 1 PASS", the price,
+      units sold out of 50, buyers, and a countdown.
+- [ ] Pick a quantity. The total shown is the price **including your own order** —
+      order 10 and it shows $0.20 each, because your order unlocks that tier.
+- [ ] Join gaslessly: the wallet asks for a **signature**, no gas. Your USDC falls
+      by exactly the total shown.
+- [ ] From a second account, order the normal way (approve, then commit).
+- [ ] Watch the price drop for both accounts when a tier is reached; the first
+      account sees a refund waiting.
+- [ ] Try ordering more than 20, or more than is left: the picker stops you with a
+      reason.
+- [ ] Withdraw: allowed normally; when it would push the price above what someone
+      else paid, the button is disabled with an explanation.
 
-**Logged out**
-- [ ] With no wallet connected you see the live price, the buyer count, and a
-      countdown. Nothing asks you to connect until you try to commit.
+## As a supplier (Post)
 
-**Joining without gas** (account 1)
-- [ ] The commit panel offers joining gaslessly, showing the exact price.
-- [ ] Your wallet asks for a **signature**, not a transaction — no gas fee shown.
-- [ ] Afterwards your USDC balance fell by **exactly the price**, nothing more.
-- [ ] You appear at the top of **Activity**, at the price you paid.
+- [ ] Swarm Pass is pre-filled. Press **Get 100 test passes** (once a day per
+      account).
+- [ ] Fill in a title, description, stock, minimum, and a price curve in units;
+      bad curves are rejected before you can sign.
+- [ ] Post with a short duration (0.1 hours = 6 minutes): approve the passes, then
+      post. Your passes leave your wallet into the deal.
+- [ ] Order from another account, wait out the deadline, **Settle**, then on each
+      account **Claim USDC** and **Claim PASS**. The supplier gets the USDC and
+      any unsold passes back; buyers get their passes and refunds.
+- [ ] Post one that misses its minimum: after the deadline, **Refund** returns
+      every buyer's USDC and all the supplier's passes.
 
-**Joining the normal way** (account 2, using the fallback link)
-- [ ] It asks you to approve, then to commit — two wallet steps, with progress shown.
-- [ ] If your commit takes the deal past a tier, the big price **drops** with an
-      animation, for everyone, including account 1.
-- [ ] Account 1's panel now shows a refund waiting at the new price.
+## Proof
 
-**Withdrawing**
-- [ ] When the buyer count sits exactly on a tier threshold, the withdraw button
-      is **disabled with a plain explanation** rather than letting you sign a
-      transaction that would fail.
-- [ ] Off a threshold, withdrawing works and returns your full escrow to claim.
-
-**Posting a deal** (Post)
-- [ ] The tier builder rejects bad curves before you can post: prices not
-      falling, a price above $5, a cap above 100.
-- [ ] The curve chart updates as you type.
-- [ ] Post one with a short duration (0.1 hours = 6 minutes), join it, wait it
-      out, then **Settle** and **Claim** from the deal room.
-
-**Proof**
-- [ ] **Scan events** finishes in well under a minute and shows each settled deal
-      with "Conservation verified": commits in = supplier + refunds.
-
-**Phone**
-- [ ] Open it at phone width (or on your phone, on the same network): nothing is
-      cut off, the wallet button fits.
+- [ ] **Scan events** shows each finished deal with conservation verified in both
+      USDC and passes.
 
 ## Already verified by script
 
-So you can focus on how it feels rather than whether the sums are right:
-[`tools/lifecycle-testnet.mjs`](../tools/lifecycle-testnet.mjs) and
-[`tools/gasless-testnet.mjs`](../tools/gasless-testnet.mjs) drive every path
-above against this deployment and check each balance, refund, event and the
-pool's final $0 from chain.
+[`tools/lifecycle-testnet.mjs`](../tools/lifecycle-testnet.mjs),
+[`tools/gasless-testnet.mjs`](../tools/gasless-testnet.mjs) and
+[`tools/finish-v2-runs.mjs`](../tools/finish-v2-runs.mjs) drove three deals
+through this deployment: tier breaks including one by a single order, both limits,
+the strand rule, a failed deal, every gasless case, and every claim — each balance
+matched to the cent and the pass, and the contracts ended holding nothing.
 
-## Known issues
+## Not yet done
 
-Found while setting this up; to be fixed in one Studio turn together with
-anything found in the walkthrough.
-
-1. **The next-tier hint is wrong before the first tier is reached.** On a deal with
-   no buyers yet, the progress line reads "1 more buyer and everyone pays $0.30"
-   and the share line "your price drops to $0.30" — but the price is already
-   $0.30. It picks the first tier rather than the next *cheaper* one. It should
-   read "2 more buyers and everyone pays $0.20". Correct once past the first
-   threshold.
-
-2. **Connecting switched the wallet to Arc mainnet** on the testnet build — *fixed
-   locally, 24 Oct, to be synced to Studio.* The wallet library treats the first
-   chain in its list as the default, and mainnet was listed first. Where MetaMask
-   had no Arc mainnet this failed as "Connection Failed"; otherwise the commit
-   panel landed on the wrong chain. The active network is now listed first; checked
-   by connecting a stand-in wallet, which is no longer asked to switch at all.
-
-3. **First gasless signature failed in MetaMask** with "Expected a valid number
-   value, but received "300000n"" — *under investigation.* The request the app
-   builds was captured and is valid (`"value":"300000"`, chain 5042002), so the
-   app does not send that text. Retesting after the fix for issue 2, with MetaMask
-   reset (network set to Arc Testnet, site permission removed).
-
-4. **Wallets can only connect from inside a wallet's in-app browser** on phones:
-   only an injected connector is configured, no WalletConnect. Fine for testing;
-   Safari/Chrome users on a phone could not connect.
+- Phones can connect only from inside a wallet app's browser; WalletConnect needs a
+  free project ID from cloud.reown.com.
+- Not hosted publicly yet — that waits on your choice of hosts.
