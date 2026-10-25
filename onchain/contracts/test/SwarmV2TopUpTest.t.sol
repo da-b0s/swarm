@@ -267,7 +267,11 @@ contract SwarmV2TopUpTest is Test {
 
         // B1 tries to withdraw: newTotal=15-5=10, priceAt(10)=$0.75.
         // B2's paidPerUnit=$0.75 >= $0.75 → no strand.
-        vm.prank(B1); pool.withdraw(d);
+        // v2.2: full withdrawal paid directly to buyer wallet.
+        // Read unitsOf before prank to avoid prank being consumed by the view call.
+        uint32 b1Units_s4 = pool.unitsOf(d, B1);
+        vm.prank(B1);
+        pool.withdraw(d, b1Units_s4);
         assertEq(pool.totalUnits(d), 10, "totalUnits after B1 withdrawal=10");
     }
 
@@ -289,16 +293,20 @@ contract SwarmV2TopUpTest is Test {
         _fund(B2, 20_000_000); _commit(B2, d, 6);  // total=11, B2 paid $0.75, tier broken
 
         // B1 would strand B2 ($0.75 < priceAt(6)=$1.00)
+        uint32 b1U_strand = pool.unitsOf(d, B1);
         vm.prank(B1);
         vm.expectRevert(DemandPool.WouldStrandBuyer.selector);
-        pool.withdraw(d);
+        pool.withdraw(d, b1U_strand);
 
         // B2 tops up 4 more: totalUnits=15, priceAt(15)=$0.75. B2 paidPerUnit still $0.75.
         _commit(B2, d, 4);
         assertEq(pool.paidPerUnit(d, B2), 750_000, "B2 paidPerUnit still $0.75 after top-up");
 
         // Now B1 can withdraw: newTotal=10, priceAt(10)=$0.75. B2 paid $0.75 >= $0.75.
-        vm.prank(B1); pool.withdraw(d);
+        // v2.2: full withdrawal paid directly to buyer wallet.
+        uint32 b1U_after = pool.unitsOf(d, B1);
+        vm.prank(B1);
+        pool.withdraw(d, b1U_after);
         assertEq(pool.totalUnits(d), 10, "totalUnits=10 after B1 withdrawal");
     }
 
@@ -313,11 +321,15 @@ contract SwarmV2TopUpTest is Test {
 
         assertEq(pool.escrowed(d, B1), 11_000_000, "escrowed $11 before withdraw");
 
-        uint256 claimBefore = settler.claimable(B1);
-        vm.prank(B1); pool.withdraw(d);
-        uint256 credited = settler.claimable(B1) - claimBefore;
+        // v2.2: full withdrawal is paid straight to the buyer's wallet.
+        // Read unitsOf before prank to avoid consuming the prank on the view call.
+        uint32 b1AllUnits = pool.unitsOf(d, B1);
+        uint256 walletBefore = usdc.balanceOf(B1);
+        vm.prank(B1);
+        pool.withdraw(d, b1AllUnits);
+        uint256 received = usdc.balanceOf(B1) - walletBefore;
 
-        assertEq(credited, 11_000_000, "full $11 credited on withdraw");
+        assertEq(received, 11_000_000, "full $11 paid directly to B1 wallet");
         assertEq(pool.escrowed(d, B1),   0, "escrowed cleared");
         assertEq(pool.unitsOf(d, B1),    0, "units cleared");
         assertEq(pool.totalUnits(d),     0, "totalUnits back to 0");
@@ -542,7 +554,11 @@ contract SwarmV2TopUpTest is Test {
             if (wouldStrand) continue;
 
             uint256 escrow = pool.escrowed(d, buyer);
-            vm.prank(buyer); pool.withdraw(d);
+            uint32  wUnits = pool.unitsOf(d, buyer);
+            // v2.2: full withdrawal paid directly to buyer wallet.
+            // Read wUnits before prank (view call would consume prank).
+            vm.prank(buyer);
+            pool.withdraw(d, wUnits);
             totalUsdcIn -= escrow;
         }
 

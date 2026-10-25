@@ -491,15 +491,18 @@ contract SwarmV2Test is Test {
         _fund(B2, 10_000_000); _commit(B2, d, 8); // breaks tier to $0.75
 
         // B1 tries to withdraw — B2 would be stranded ($0.75 < new price $1.00)
+        uint32 b1U = pool.unitsOf(d, B1);
         vm.prank(B1);
         vm.expectRevert(DemandPool.WouldStrandBuyer.selector);
-        pool.withdraw(d);
+        pool.withdraw(d, b1U);
 
         // B2 adds more units... wait, one order per buyer. B3 commits enough to keep tier.
         _fund(B3, 10_000_000); _commit(B3, d, 5); // total=18, still $0.75
 
         // Now B1 withdraws: totalUnits−5=13, newPrice=$0.75. B2 paid $0.75, B3 paid $0.75. OK.
-        vm.prank(B1); pool.withdraw(d);
+        // v2.2: withdrawal paid directly to buyer's wallet (not claimable).
+        uint32 b1UAfter = pool.unitsOf(d, B1);
+        vm.prank(B1); pool.withdraw(d, b1UAfter);
         assertEq(pool.totalUnits(d), 13, "13 units remain");
     }
 
@@ -508,7 +511,11 @@ contract SwarmV2Test is Test {
         // 15 units: priceAt(15) = $0.75; cost = 15 * 750_000 = 11_250_000
         _fund(B1, 15_000_000); _commit(B1, d, 15);
         // Only buyer — strand check skipped (buyers.length == 1)
-        vm.prank(B1); pool.withdraw(d);
+        // v2.2: withdrawal paid directly to buyer's wallet.
+        // Read unitsOf BEFORE the prank to avoid consuming the prank on the view call.
+        uint32 b1Units = pool.unitsOf(d, B1);
+        vm.prank(B1);
+        pool.withdraw(d, b1Units);
         assertEq(pool.totalUnits(d), 0);
     }
 
@@ -726,8 +733,11 @@ contract SwarmV2Test is Test {
                 }
             }
             if (!wouldStrand) {
-                uint256 escrow = pool.escrowed(d, buyer);
-                vm.prank(buyer); pool.withdraw(d);
+                uint256 escrow  = pool.escrowed(d, buyer);
+                uint32  bUnits  = pool.unitsOf(d, buyer);
+                // v2.2: read units before prank; prank is consumed by the first call.
+                vm.prank(buyer);
+                pool.withdraw(d, bUnits);
                 totalCommitted -= escrow;
             }
         }

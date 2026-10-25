@@ -36,16 +36,18 @@ contract DemandPool is ReentrancyGuard {
     // - No block.prevrandao (Arc always returns 0); no block.chainid checks
     // - ReentrancyGuard on commit, commitWithAuthorization, withdraw, pullForSettler
     // - Buyers order a quantity (units >= 1). Price tiers count total units ordered.
-    // - A buyer who already has an order adds a lot rather than reverting AlreadyCommitted.
+    // - A buyer who already has an order adds a lot rather than reverting.
     // - paidPerUnit[buyer] = min across lots (lowest lot price so far)
     // - escrowed[dealId][buyer] = sum of (lotPrice * lotUnits) across all lots
     // - tierCount[dealId][price] tracks buyers at each per-unit price for O(tiers) strand check
     //   (a buyer moves from old paidPerUnit to new one when a top-up lowers it)
     // - WouldStrandBuyer: withdraw refused if any remaining buyer's paidPerUnit < newPrice
-    //   where newPrice = priceAt(totalUnits - unitsOf[caller])
+    //   where newPrice = priceAt(totalUnits - units)
+    //   For a partial withdrawal the caller is "remaining" and also checked.
     // - Owner pause() (in factory) halts commit and commitWithAuthorization;
     //   withdraw/settle/refundAll/claim are never halted
-    // - Pull payments: withdraw credits Settler.claimable, never transfers USDC directly
+    // - Withdraw pays out immediately via low-level call; falls back to creditWithdrawal if
+    //   the direct transfer fails (e.g. blocklisted address).
     //
     // gasless commit (EIP-3009):
     // - Uses receiveWithAuthorization: the payee check (to == msg.sender) means only
@@ -83,10 +85,15 @@ contract DemandPool is ReentrancyGuard {
         uint32  totalUnits,
         uint32  buyerCount
     );
+    /// @dev Emitted on every withdrawal (partial or full).
+    ///      paidDirectly=true: USDC sent straight to buyer.
+    ///      paidDirectly=false: credited via settler.claimable (e.g. blocklisted address).
     event Withdrawn(
         uint256 indexed dealId,
         address indexed buyer,
+        uint32  units,
         uint256 amountReturned,
+        bool    paidDirectly,
         uint64  livePrice,
         uint32  totalUnits,
         uint32  buyerCount
@@ -107,6 +114,7 @@ contract DemandPool is ReentrancyGuard {
     error UnitCapReached();            // totalUnits + units > maxUnits
     error ZeroUnits();                 // units == 0
     error UnitsPerBuyerExceeded();     // buyer's total units > maxUnitsPerBuyer when set
+    error WithdrawInvalidUnits();      // units == 0 or units > unitsOf[buyer]
     error WouldStrandBuyer();
     error SettlerNotConfigured();
     error Unauthorized();
@@ -377,17 +385,33 @@ contract DemandPool is ReentrancyGuard {
 
     // ── withdraw ──────────────────────────────────────────────────────────────
 
-    /// @dev Returns the lowest paidPerUnit among remaining buyers, excluding the caller's tier.
+    /// @dev Returns the lowest paidPerUnit among remaining buyers, excluding the
+    ///      caller's tier if they are doing a full withdrawal.
+    ///      For a partial withdrawal the caller stays in the deal, so we do NOT
+    ///      exclude them here — _lowestPaidIncludingAll is used instead.
     function _lowestPaidExcluding(
         uint256 dealId,
         SwarmTypes.Tier[] memory tiers,
         uint64  excludePrice
-    ) private view returns (uint64 lowest) {
+    ) private view returns (uint64) {
         for (uint256 i = tiers.length; i > 0; i--) {
             uint64 tp  = tiers[i - 1].pricePerUnit;
             uint32 cnt = tierCount[dealId][tp];
             if (tp == excludePrice && cnt > 0) cnt -= 1;
             if (cnt > 0) return tp;
+        }
+        return 0;
+    }
+
+    /// @dev Returns the lowest paidPerUnit among ALL remaining buyers (partial
+    ///      withdrawal: the caller stays, so their paidPerUnit is included).
+    function _lowestPaidAll(
+        uint256 dealId,
+        SwarmTypes.Tier[] memory tiers
+    ) private view returns (uint64) {
+        for (uint256 i = tiers.length; i > 0; i--) {
+            uint64 tp  = tiers[i - 1].pricePerUnit;
+            if (tierCount[dealId][tp] > 0) return tp;
         }
         return 0;
     }
@@ -405,7 +429,29 @@ contract DemandPool is ReentrancyGuard {
         return _buyers[dealId].length;
     }
 
-    function withdraw(uint256 dealId) external nonReentrant {
+    /**
+     * @dev Withdraw `units` from the caller's order in deal `dealId`.
+     *
+     *      units must be 1..unitsOf[caller].
+     *
+     *      Full withdrawal (units == unitsOf):
+     *        - Removes buyer from the list and clears all their mappings.
+     *        - Returns the full escrowed amount.
+     *
+     *      Partial withdrawal (units < unitsOf):
+     *        - returned = escrowed * units / unitsOf  (rounded down)
+     *        - Reduces escrowed, unitsOf, totalUnits.
+     *        - Leaves paidPerUnit and tierCount unchanged.
+     *        - Buyer stays in the deal.
+     *
+     *      Strand rule: refuses if priceAt(totalUnits - units) would exceed any
+     *      remaining buyer's paidPerUnit. For a partial withdrawal "remaining"
+     *      includes the caller.
+     *
+     *      Payment: attempts a direct low-level USDC transfer to the caller.
+     *      If that fails (e.g. blocklisted), credits via settler.claimable instead.
+     */
+    function withdraw(uint256 dealId, uint32 units) external nonReentrant {
         if (!settlerSet) revert SettlerNotConfigured();
 
         SwarmTypes.Deal memory deal = factory.getDeal(dealId);
@@ -415,36 +461,80 @@ contract DemandPool is ReentrancyGuard {
         uint256 buyerPos = _buyerIndex[dealId][msg.sender];
         if (buyerPos == 0) revert NotCommitted();
 
-        uint32 units    = unitsOf[dealId][msg.sender];
+        uint32 myUnits = unitsOf[dealId][msg.sender];
+        if (units == 0 || units > myUnits) revert WithdrawInvalidUnits();
+
+        bool isFull    = (units == myUnits);
         uint32 newTotal = totalUnits[dealId] - units;
         uint64 newPrice = _priceAt(dealId, newTotal);
 
-        uint256 escrowAmt   = escrowed[dealId][msg.sender];
-        uint64  paid        = paidPerUnit[dealId][msg.sender];
+        uint256 escrowAmt = escrowed[dealId][msg.sender];
 
-        // Strand check: any remaining buyer whose paidPerUnit < newPrice would be undercharged.
-        if (_buyers[dealId].length > 1) {
-            // Use the buyer's current paidPerUnit (cheapest lot) as the tally key to exclude.
-            uint64 lowest = _lowestPaidExcluding(dealId, deal.tiers, paid);
+        // ── Strand check ──────────────────────────────────────────────────────
+        if (_buyers[dealId].length > 1 || !isFull) {
+            // For a full withdrawal: check remaining buyers (excluding caller's tally).
+            // For a partial withdrawal: check ALL remaining buyers including caller
+            //   (caller stays; their paidPerUnit must still be >= newPrice).
+            uint64 lowest;
+            if (isFull) {
+                uint64 paid = paidPerUnit[dealId][msg.sender];
+                lowest = _lowestPaidExcluding(dealId, deal.tiers, paid);
+            } else {
+                lowest = _lowestPaidAll(dealId, deal.tiers);
+            }
             if (lowest > 0 && lowest < newPrice) revert WouldStrandBuyer();
         }
-        uint64  priceBefore = _priceAt(dealId, totalUnits[dealId]);
 
+        uint64 priceBefore = _priceAt(dealId, totalUnits[dealId]);
+
+        // ── Amount to return ──────────────────────────────────────────────────
+        // Full: return entire escrow. Partial: proportional average, rounded down.
+        uint256 returned = isFull ? escrowAmt : (escrowAmt * uint256(units)) / uint256(myUnits);
+
+        // ── State update (before transfer, nonReentrant held) ─────────────────
         totalUnits[dealId] = newTotal;
-        _removeBuyer(dealId, msg.sender, buyerPos);
-        tierCount[dealId][paid] -= 1;
-        delete escrowed[dealId][msg.sender];
-        delete unitsOf[dealId][msg.sender];
-        delete paidPerUnit[dealId][msg.sender];
 
-        uint64 priceAfter  = _priceAt(dealId, newTotal);
-        uint32 buyerCount  = uint32(_buyers[dealId].length);
+        if (isFull) {
+            _removeBuyer(dealId, msg.sender, buyerPos);
+            tierCount[dealId][paidPerUnit[dealId][msg.sender]] -= 1;
+            delete escrowed[dealId][msg.sender];
+            delete unitsOf[dealId][msg.sender];
+            delete paidPerUnit[dealId][msg.sender];
+        } else {
+            escrowed[dealId][msg.sender] -= returned;
+            unitsOf[dealId][msg.sender]  -= units;
+            // paidPerUnit and tierCount unchanged for partial withdrawal
+        }
+
+        uint64 priceAfter = _priceAt(dealId, newTotal);
+        uint32 buyerCount = uint32(_buyers[dealId].length);
+
         if (priceAfter != priceBefore) {
             emit TierBroken(dealId, newTotal, priceAfter);
         }
 
-        ISettler(settler).creditWithdrawal(msg.sender, escrowAmt);
-        emit Withdrawn(dealId, msg.sender, escrowAmt, priceAfter, newTotal, buyerCount);
+        // ── Pay out immediately ───────────────────────────────────────────────
+        // Try a direct low-level call. The USDC ABI uses transfer(address,uint256) → bool.
+        // Check both call success and returned bool; fall back to creditWithdrawal if either fails.
+        bool paidDirectly = _tryDirectTransfer(msg.sender, returned);
+        if (!paidDirectly) {
+            ISettler(settler).creditWithdrawal(msg.sender, returned);
+        }
+
+        emit Withdrawn(dealId, msg.sender, units, returned, paidDirectly, priceAfter, newTotal, buyerCount);
+    }
+
+    /// @dev Attempt to transfer `amount` USDC directly to `to` with a low-level call.
+    ///      Returns true only when call succeeds AND the returned bool is true.
+    ///      Never reverts.
+    function _tryDirectTransfer(address to, uint256 amount) private returns (bool) {
+        if (amount == 0) return true; // nothing to send; trivially "paid"
+        bytes memory data = abi.encodeWithSelector(IERC20.transfer.selector, to, amount);
+        (bool callOk, bytes memory ret) = address(USDC).call(data);
+        if (!callOk) return false;
+        // transfer() returns a bool; decode it if present, otherwise treat as true (ERC-20 standard)
+        if (ret.length == 0) return true;
+        return abi.decode(ret, (bool));
     }
 
     // ── settler helpers ───────────────────────────────────────────────────────

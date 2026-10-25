@@ -17,4 +17,12 @@ contract MockBlocklistedEIP3009USDC is MockEIP3009USDC {
     function isBlacklisted(address account) external view override returns (bool) {
         return _blocked[account];
     }
+
+    /// @dev Blocked addresses cannot receive tokens via transfer().
+    ///      Returns false instead of transferring, matching real USDC behaviour.
+    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+        if (_blocked[to]) return false;
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
 }

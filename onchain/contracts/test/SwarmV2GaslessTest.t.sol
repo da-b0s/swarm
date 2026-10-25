@@ -258,7 +258,10 @@ contract SwarmV2GaslessTest is Test {
         _fundPk(pk, a.signedAmount);
 
         // Tierer withdraws — total drops to 0, price rises back to $1.00.
-        vm.prank(tierer); pool.withdraw(d);
+        // v2.2: read unitsOf before prank (prank would be consumed by the view call).
+        uint32 tiererUnits = pool.unitsOf(d, tierer);
+        vm.prank(tierer);
+        pool.withdraw(d, tiererUnits);
 
         // Now priceAt(0 + 5) = $1.00; required = $5.00 > authorized $3.75.
         // PriceRoseBeyondAuthorization(5_000_000) expected.
