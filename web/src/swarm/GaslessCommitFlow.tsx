@@ -11,6 +11,7 @@
 
 import { useState, useCallback } from 'react'
 import { useAccount, useSignTypedData, useSwitchChain, useReadContract } from 'wagmi'
+import { useUsdcBalance, FundingNotice } from './FundingNotice'
 import { ConnectKitButton } from 'connectkit'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Loader2, ExternalLink, CheckCircle, AlertCircle, Zap, Plus, Minus } from 'lucide-react'
@@ -57,12 +58,66 @@ function randomSalt(): `0x${string}` {
   return ('0x' + Array.from(arr, b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`
 }
 
+const EIP712_DOMAIN_TYPE = [
+  { name: 'name', type: 'string' },
+  { name: 'version', type: 'string' },
+  { name: 'chainId', type: 'uint256' },
+  { name: 'verifyingContract', type: 'address' },
+] as const
+
+class WalletCannotSignError extends Error {
+  constructor() { super('wallet cannot sign this typed data'); this.name = 'WalletCannotSignError' }
+}
+
+function errText(e: unknown): string {
+  const x = e as { message?: string; shortMessage?: string; details?: string; cause?: unknown }
+  return [x?.shortMessage, x?.details, x?.message, x?.cause ? errText(x.cause) : ''].filter(Boolean).join(' ')
+}
+
+function isWalletParserError(e: unknown): boolean {
+  return /Unable to encode value|ParserError|Invalid number/i.test(errText(e))
+}
+
+function isUserRejection(e: unknown): boolean {
+  const x = e as { code?: number; cause?: { code?: number } }
+  return x?.code === 4001 || x?.cause?.code === 4001 || /user rejected|denied/i.test(errText(e))
+}
+
+/** One readable sentence instead of a wallet's full error dump. */
+function shortWalletError(e: unknown): string {
+  const x = e as { shortMessage?: string; message?: string }
+  const msg = x?.shortMessage ?? x?.message ?? 'Signing failed'
+  return msg.split('\n')[0].slice(0, 160)
+}
+
+/** Relayer error names, as a buyer should read them. */
+const RELAYER_MESSAGES: Record<string, string> = {
+  InvalidAuthorization:    'The signature did not match this order. Please sign again.',
+  AuthorizationAlreadyUsed:'That signature was already used. Please sign again.',
+  DealNotOpen:             'This deal is no longer open.',
+  DeadlinePassed:          'This deal has closed.',
+  AlreadyCommitted:        'You already have an order in this deal.',
+  UnitCapReached:          'Not enough stock left for that quantity — try fewer.',
+  UnitsPerBuyerExceeded:   'That is more than one buyer can order in this deal.',
+  BuyerCapReached:         'This deal has reached its maximum number of buyers.',
+  Blocklisted:             'This address cannot use USDC.',
+}
+function relayerMessage(code: string | undefined): string {
+  if (!code) return 'The order could not be sent. You can still order the normal way below.'
+  return RELAYER_MESSAGES[code] ?? 'The order could not be sent. You can still order the normal way below.'
+}
+
+function safeNumber(v: bigint): number {
+  if (v > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('value too large to send as a number')
+  return Number(v)
+}
+
 export function GaslessCommitFlow({
   dealId, clearingPrice: _clearingPrice, totalUnits, tiers, maxUnits, maxUnitsPerBuyer,
   deadline, state, goodsToken: _goodsToken, goodsSymbol, tokensPerUnit,
   onCommitted, onFallback,
 }: Props) {
-  const { address, isConnected, chainId: walletChain } = useAccount()
+  const { address, isConnected, chainId: walletChain, connector } = useAccount()
   const { switchChain }   = useSwitchChain()
   const { signTypedData } = useSignTypedData()
   const nowSec = useChainNow()
@@ -87,6 +142,8 @@ export function GaslessCommitFlow({
   // On 409, show the updated total and ask to sign again
   const [signTotal, setSignTotal] = useState<bigint | null>(null)
   const totalToSign = signTotal ?? quotedTotal
+  const usdcBalance = useUsdcBalance(address)
+  const cannotAfford = usdcBalance !== undefined && usdcBalance < totalToSign
 
   const [step,     setStep]     = useState<GaslessStep>('idle')
   const [errMsg,   setErrMsg]   = useState('')
@@ -122,29 +179,57 @@ export function GaslessCommitFlow({
     const authorizedAmount = totalToSign
 
     try {
-      const sig = await new Promise<`0x${string}`>((resolve, reject) => {
-        signTypedData(
-          {
-            domain: {
-              name:              'USDC',
-              version:           '2',
-              chainId:           CHAIN_ID,
-              verifyingContract: ARC_NETWORK.usdc.address,
-            },
-            types: RECEIVE_WITH_AUTH_TYPES,
-            primaryType: 'ReceiveWithAuthorization',
-            message: {
-              from:        address,
-              to:          CONTRACTS_ACTIVE.DemandPool,
-              value:       authorizedAmount,
-              validAfter,
-              validBefore,
-              nonce,
-            },
+      const typedData = {
+        domain: {
+          name:              'USDC',
+          version:           '2',
+          chainId:           CHAIN_ID,
+          verifyingContract: ARC_NETWORK.usdc.address,
+        },
+        types: RECEIVE_WITH_AUTH_TYPES,
+        primaryType: 'ReceiveWithAuthorization' as const,
+        message: {
+          from:        address,
+          to:          CONTRACTS_ACTIVE.DemandPool,
+          value:       authorizedAmount,
+          validAfter,
+          validBefore,
+          nonce,
+        },
+      }
+
+      let sig: `0x${string}`
+      try {
+        sig = await new Promise<`0x${string}`>((resolve, reject) => {
+          signTypedData(typedData, { onSuccess: resolve, onError: reject })
+        })
+      } catch (first: unknown) {
+        // Some MetaMask builds reject the standard request -- uint fields sent as
+        // decimal strings, which is what viem always sends -- with "ParserError:
+        // Unable to encode value: Invalid number ... received '2000000n'": the
+        // wallet converts the value internally and then fails to read it back.
+        // Retry once, straight to the wallet, with those fields as plain JSON
+        // numbers. Every one of them is far below 2^53 (amounts under $100 in
+        // 6 decimals, unix seconds, the chain id), so nothing is lost.
+        if (!isWalletParserError(first) || !connector) throw first
+        const provider = await connector.getProvider() as { request: (a: { method: string; params: unknown[] }) => Promise<unknown> }
+        const asNumbers = JSON.stringify({
+          ...typedData,
+          types: { EIP712Domain: EIP712_DOMAIN_TYPE, ...RECEIVE_WITH_AUTH_TYPES },
+          message: {
+            ...typedData.message,
+            value:       safeNumber(authorizedAmount),
+            validAfter:  safeNumber(validAfter),
+            validBefore: safeNumber(validBefore),
           },
-          { onSuccess: resolve, onError: reject }
-        )
-      })
+        })
+        try {
+          sig = await provider.request({ method: 'eth_signTypedData_v4', params: [address, asNumbers] }) as `0x${string}`
+        } catch (second: unknown) {
+          if (isWalletParserError(second)) throw new WalletCannotSignError()
+          throw second
+        }
+      }
 
       setStep('submitting')
 
@@ -186,7 +271,7 @@ export function GaslessCommitFlow({
       }
 
       if (!res.ok || !data.txHash) {
-        setErrMsg(data.error ?? 'Relay failed — try the approve path below')
+        setErrMsg(relayerMessage(data.error))
         setStep('error')
         return
       }
@@ -198,12 +283,18 @@ export function GaslessCommitFlow({
       setStep('done')
       onCommitted()
     } catch (e: unknown) {
-      setErrMsg((e as Error).message ?? 'Signing failed')
+      if (e instanceof WalletCannotSignError) {
+        setErrMsg('Your wallet could not sign a gasless order. You can still order the normal way — it takes two quick confirmations and a few cents of gas.')
+        setStep('error')
+        return
+      }
+      if (isUserRejection(e)) { setErrMsg(''); setStep('idle'); return }
+      setErrMsg(shortWalletError(e))
       setStep('error')
     }
   }, [
     address, isConnected, wrongChain, nonce, nowSec,
-    totalToSign, dealId, units, salt, signTypedData, refetchNonce, onCommitted,
+    totalToSign, dealId, units, salt, signTypedData, refetchNonce, onCommitted, connector,
   ])
 
   const reset = () => {
@@ -322,7 +413,11 @@ export function GaslessCommitFlow({
         </div>
       )}
 
-      {step !== 'done' && maxOrderable > 0 && (
+      {step !== 'done' && maxOrderable > 0 && cannotAfford && usdcBalance !== undefined && (
+        <FundingNotice needed={totalToSign} balance={usdcBalance} />
+      )}
+
+      {step !== 'done' && maxOrderable > 0 && !cannotAfford && (
         <button
           onClick={() => { void handleSign() }}
           disabled={busy || !nonce}

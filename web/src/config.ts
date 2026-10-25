@@ -26,8 +26,11 @@ export const config = createConfig({
   chains: [activeChain, otherArc, mainnet], // mainnet needed for ENS resolution
   connectors: [injected()],
   transports: {
-    [arc.id]: http(),
-    [arcTestnet.id]: http(),
+    // Batch the many small reads a page makes at once into one HTTP request:
+    // the public Arc RPC rate-limits per IP, and unbatched polling from a single
+    // open tab was enough, alongside a second tab and the relayer, to draw 429s.
+    [arc.id]: http(undefined, { batch: { wait: 50 } }),
+    [arcTestnet.id]: http(undefined, { batch: { wait: 50 } }),
     [mainnet.id]: http(), // ENS resolution uses mainnet
   },
 })

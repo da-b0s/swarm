@@ -405,6 +405,10 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
 
   // ── Render ───────────────────────────────────────────────────────────────
   const busy = step === 'approving' || approveConfirming || step === 'posting' || postConfirming
+  // Step 2 has its own busy state. It used to share 'busy', which counts the
+  // approval as in progress until step leaves 'approving' -- and nothing ever
+  // moved it on once the approval confirmed, so Post deal stayed disabled.
+  const postBusy = step === 'posting' || postConfirming
 
   const titleBytes = byteLengthOf(title)
   const descBytes  = byteLengthOf(description)
@@ -749,7 +753,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
           </div>
           <button
             onClick={handlePost}
-            disabled={busy}
+            disabled={postBusy}
             className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100"
             style={{ background: 'var(--accent)' }}>
             {postConfirming

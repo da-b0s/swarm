@@ -14,6 +14,7 @@ import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL } from './config'
 import { DEMAND_POOL_ABI, ERC20_ABI } from './abis'
 import type { DealTier } from './hooks'
 import { GaslessCommitFlow } from './GaslessCommitFlow'
+import { useUsdcBalance, FundingNotice } from './FundingNotice'
 
 interface Props {
   dealId:           bigint
@@ -82,6 +83,12 @@ export function CommitFlow({
   // Approve amount: tiers[0].pricePerUnit × units (the maximum this order can ever cost)
   const maxPPU    = tiers.length > 0 ? tiers[0].pricePerUnit : clearingPrice
   const maxCharge = maxPPU * BigInt(units)
+  // Approve and commit are two transactions, and on Arc their gas is paid in USDC
+  // too, so keep a few cents of headroom on top of the escrow.
+  const GAS_HEADROOM = 20_000n // $0.02
+  const usdcBalance = useUsdcBalance(address)
+  const neededForOrder = quotedTotal + GAS_HEADROOM
+  const cannotAfford = usdcBalance !== undefined && usdcBalance < neededForOrder
 
   const [step,         setStep]         = useState<Step>('idle')
   const [errMsg,       setErrMsg]       = useState('')
@@ -326,7 +333,11 @@ export function CommitFlow({
         </div>
       )}
 
-      {!isCommitted && step !== 'done' && maxOrderable > 0 && (
+      {!isCommitted && step !== 'done' && maxOrderable > 0 && cannotAfford && usdcBalance !== undefined && (
+        <FundingNotice needed={neededForOrder} balance={usdcBalance} />
+      )}
+
+      {!isCommitted && step !== 'done' && maxOrderable > 0 && !cannotAfford && (
         <button
           onClick={handleCommit}
           disabled={busyStep}

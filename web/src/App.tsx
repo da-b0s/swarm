@@ -6,6 +6,7 @@ import { DealRoom } from './swarm/DealRoom'
 import { SupplierView } from './swarm/SupplierView'
 import { ProofPage } from './swarm/ProofPage'
 import { useDealCount } from './swarm/hooks'
+import { useLateWalletReconnect } from './swarm/useLateWalletReconnect'
 import { ACTIVE_NETWORK, ARC_NETWORK, DEPLOYMENT_READY } from './swarm/config'
 
 type Tab = 'deal' | 'post' | 'proof'
@@ -24,6 +25,7 @@ function writeDealId(id: bigint) {
 }
 
 export default function App() {
+  useLateWalletReconnect()
   const [tab, setTab] = useState<Tab>('deal')
   const [dealId, setDealId] = useState<bigint>(() => readDealId() ?? 0n)
   const [dealInput, setDealInput] = useState('')
