@@ -67,6 +67,12 @@ type TraceEvent = RpcTraceEvent | HttpTraceEvent | GroupStartTraceEvent | GroupE
 
 const LOG = '[studio-trace]';
 
+// The tracing shims feed Arc Studio's preview panel, which hosts the app in an
+// iframe. In a normal browser tab there is no panel to feed, and patching
+// window.fetch and the wallet's own request() puts this code between the app
+// and a real wallet on every call. Only patch inside a parent frame.
+const IN_STUDIO_FRAME = (() => { try { return window.self !== window.top; } catch { return true; } })();
+
 function log(...args: unknown[]): void {
   console.log(LOG, ...args);
 }
@@ -343,7 +349,7 @@ function findResp(resps: JRPCRes[], reqId: unknown): JRPCRes | undefined {
 // Patch globalThis.fetch — captures viem http() transport + regular HTTP
 // ---------------------------------------------------------------------------
 
-try {
+if (IN_STUDIO_FRAME) try {
   const _fetch = globalThis.fetch;
   log('patching fetch');
 
@@ -473,7 +479,7 @@ function patchProvider(provider: EIP1193Provider | undefined): void {
   } catch { /* not all providers support .on() */ }
 }
 
-try {
+if (IN_STUDIO_FRAME) try {
   // Case 1: provider already exists
   const existingProvider = getEthereum();
   if (existingProvider) {

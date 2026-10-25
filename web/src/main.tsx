@@ -10,8 +10,9 @@
  *  https://studio.arc.io
  */
 
-import './tracing'
-import './console-capture'
+import './tracing'   // patches only inside Studio's preview frame; see IN_STUDIO_FRAME
+// Console capture likewise only feeds Studio's preview panel.
+if (window.self !== window.top) void import('./console-capture')
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -68,7 +69,9 @@ const StudioWatermark = () => (
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <WagmiProvider config={config}>
+    {/* Saved connections are restored by useLateWalletReconnect, with timeouts;
+        wagmi's own restore can hang forever on a wallet that does not answer. */}
+    <WagmiProvider config={config} reconnectOnMount={false}>
       <QueryClientProvider client={queryClient}>
         <ConnectKitProvider>
           <App />
