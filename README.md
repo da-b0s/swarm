@@ -205,12 +205,12 @@ addresses are explicitly zero and the UI refuses to offer a commit against them.
 
 | Contract | Arc Mainnet (5042) | Arc Testnet (5042002) |
 |---|---|---|
-| `DealFactory` | _pending_ | [`0xdF7ab518…F2D5aD`](https://explorer.testnet.arc.io/address/0xdF7ab518C23aff70ecd2Dd61e639fbEd62F2D5aD) |
-| `DemandPool` | _pending_ | [`0x0C04e8Bf…550B36`](https://explorer.testnet.arc.io/address/0x0C04e8Bf223F4C9ab45678273b8D692Ef9550B36) |
-| `Settler` | _pending_ | [`0xfD29dd3c…C7DD3`](https://explorer.testnet.arc.io/address/0xfD29dd3c3003713f529912315F5e47C9c88F8DD3) |
+| `DealFactory` | _pending_ | [`0x9a664F30…54f9e1`](https://explorer.testnet.arc.io/address/0x9a664F301AEB79f43F391B838A898D9bA354f9e1) |
+| `DemandPool` | _pending_ | [`0x4f064D86…2CF8f5`](https://explorer.testnet.arc.io/address/0x4f064D867FA075CF5dbfe1BF2A3100C8B52CF8f5) |
+| `Settler` | _pending_ | [`0x3091FBDc…044F44`](https://explorer.testnet.arc.io/address/0x3091FBDc63c96fA37e9f29df5F10B66F47044F44) |
 | `CommitRelayer` | _pending_ | _pending_ |
 
-Swarm v2 — quantities and token delivery, see [docs/mechanism-v2.md](docs/mechanism-v2.md) — deployed to testnet at block 68,895,718 on 24 October and wired; all four contracts match a local build of this repo byte for byte, apart from immutables and metadata. The first set (`0x5b646D21…`), which ran the lifecycle in [docs/testnet-lifecycle.md](docs/testnet-lifecycle.md), is retired. Every claim above is checked from
+Swarm v2 — quantities and token delivery, see [docs/mechanism-v2.md](docs/mechanism-v2.md) — deployed to testnet at block 69,078,388 on 25 October (v2.1: buyers can add to an order) and wired; all four contracts match a local build of this repo byte for byte, apart from immutables and metadata. The first set (`0x5b646D21…`), which ran the lifecycle in [docs/testnet-lifecycle.md](docs/testnet-lifecycle.md), is retired. Every claim above is checked from
 chain rather than taken from a deploy log — `node tools/verify-deploy.mjs` confirms
 bytecode, all three owner wiring calls, the constructor links in both directions,
 the USDC predeploy address and that the factory is unpaused holding zero escrow.

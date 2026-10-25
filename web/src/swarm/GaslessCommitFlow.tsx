@@ -1,5 +1,9 @@
 /**
- * GaslessCommitFlow v2 — buyer signs once for N units, relayer submits and pays gas.
+ * GaslessCommitFlow v2.1 — buyer signs once for N units, relayer submits and pays gas.
+ *
+ * Supports both new orders and top-ups: if currentUnits > 0, the buyer already
+ * has an order and is adding a lot. The picker is bounded by the remaining
+ * per-buyer headroom and remaining stock.
  *
  * Signs ReceiveWithAuthorization for `priceAt(totalUnits + units) × units` USDC.
  * The nonce binds pool, dealId, buyer, units and salt — a relayer cannot change
@@ -14,7 +18,7 @@ import { useAccount, useSignTypedData, useSwitchChain, useReadContract } from 'w
 import { useUsdcBalance, FundingNotice } from './FundingNotice'
 import { ConnectKitButton } from 'connectkit'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Loader2, ExternalLink, CheckCircle, AlertCircle, Zap, Plus, Minus } from 'lucide-react'
+import { Loader2, ExternalLink, CheckCircle, AlertCircle, Zap, Plus, Minus, PackagePlus } from 'lucide-react'
 import { formatUsdcPrice, txUrl, computeOrderTotal } from './utils'
 import { ARC_NETWORK, CONTRACTS_ACTIVE, RELAYER_URL } from './config'
 import { DEMAND_POOL_ABI } from './abis'
@@ -28,6 +32,8 @@ interface Props {
   tiers:            DealTier[]
   maxUnits:         number
   maxUnitsPerBuyer: number
+  /** Units the connected buyer already has in this deal (0 = no order yet). */
+  currentUnits:     number
   deadline:         bigint
   state:            number
   goodsToken:       `0x${string}`
@@ -90,15 +96,17 @@ function shortWalletError(e: unknown): string {
   return msg.split('\n')[0].slice(0, 160)
 }
 
-/** Relayer error names, as a buyer should read them. */
+/**
+ * Relayer error names, as a buyer should read them.
+ * AlreadyCommitted is intentionally absent: ordering again is now a valid top-up.
+ */
 const RELAYER_MESSAGES: Record<string, string> = {
   InvalidAuthorization:    'The signature did not match this order. Please sign again.',
   AuthorizationAlreadyUsed:'That signature was already used. Please sign again.',
   DealNotOpen:             'This deal is no longer open.',
   DeadlinePassed:          'This deal has closed.',
-  AlreadyCommitted:        'You already have an order in this deal.',
   UnitCapReached:          'Not enough stock left for that quantity — try fewer.',
-  UnitsPerBuyerExceeded:   'That is more than one buyer can order in this deal.',
+  UnitsPerBuyerExceeded:   'That would exceed the per-buyer limit for this deal.',
   BuyerCapReached:         'This deal has reached its maximum number of buyers.',
   Blocklisted:             'This address cannot use USDC.',
 }
@@ -114,7 +122,7 @@ function safeNumber(v: bigint): number {
 
 export function GaslessCommitFlow({
   dealId, clearingPrice: _clearingPrice, totalUnits, tiers, maxUnits, maxUnitsPerBuyer,
-  deadline, state, goodsToken: _goodsToken, goodsSymbol, tokensPerUnit,
+  currentUnits, deadline, state, goodsToken: _goodsToken, goodsSymbol, tokensPerUnit,
   onCommitted, onFallback,
 }: Props) {
   const { address, isConnected, chainId: walletChain, connector } = useAccount()
@@ -125,17 +133,21 @@ export function GaslessCommitFlow({
   const isPastDeadline = nowSec > 0 && Number(deadline) <= nowSec
   const isOpen         = state === 0
   const wrongChain     = isConnected && walletChain !== CHAIN_ID
+  const isTopUp        = currentUnits > 0
 
-  // Quantity picker — clamp during render, never in an effect
-  const remainingStock = maxUnits - totalUnits
-  const perBuyerLimit  = maxUnitsPerBuyer > 0 ? maxUnitsPerBuyer : remainingStock
-  const maxOrderable   = Math.min(remainingStock, perBuyerLimit)
+  // Quantity picker: bound by remaining stock and per-buyer headroom
+  const remainingStock   = maxUnits - totalUnits
+  const perBuyerHeadroom = maxUnitsPerBuyer > 0
+    ? Math.max(0, maxUnitsPerBuyer - currentUnits)
+    : remainingStock
+  const maxOrderable     = Math.min(remainingStock, perBuyerHeadroom)
+
   const [rawUnits, setUnits] = useState(1)
   const units = maxOrderable > 0 ? Math.min(rawUnits, maxOrderable) : 1
 
   const [salt, setSalt] = useState<`0x${string}`>(() => randomSalt())
 
-  // What the buyer will pay (includes their own units)
+  // What the buyer will pay for this lot (includes all totalUnits + this lot)
   const { paidPerUnit: quotedPPU, total: quotedTotal, breaksTier } = computeOrderTotal(tiers, totalUnits, units)
   const tokensReceived = BigInt(units) * tokensPerUnit
 
@@ -145,9 +157,9 @@ export function GaslessCommitFlow({
   const usdcBalance = useUsdcBalance(address)
   const cannotAfford = usdcBalance !== undefined && usdcBalance < totalToSign
 
-  const [step,     setStep]     = useState<GaslessStep>('idle')
-  const [errMsg,   setErrMsg]   = useState('')
-  const [txHash,   setTxHash]   = useState<`0x${string}` | null>(null)
+  const [step,      setStep]     = useState<GaslessStep>('idle')
+  const [errMsg,    setErrMsg]   = useState('')
+  const [txHash,    setTxHash]   = useState<`0x${string}` | null>(null)
   const [pricePaid, setPricePaid] = useState<bigint | null>(null)
   const [excess,    setExcess]    = useState<bigint | null>(null)
 
@@ -263,7 +275,7 @@ export function GaslessCommitFlow({
         setSalt(randomSalt())
         void refetchNonce()
         setErrMsg(
-          `Price rose — order now costs ${formatUsdcPrice(newTotal)}. ` +
+          `Price rose — ${isTopUp ? 'this lot' : 'order'} now costs ${formatUsdcPrice(newTotal)}. ` +
           `Sign again at the new total to continue.`
         )
         setStep('idle')
@@ -277,9 +289,9 @@ export function GaslessCommitFlow({
       }
 
       setTxHash(data.txHash as `0x${string}`)
-      // v2: paidPerUnit = per-unit price; use it as the "price paid" display
-      setPricePaid(data.paidPerUnit     ? BigInt(data.paidPerUnit)     : null)
-      setExcess(   data.excessCredited  ? BigInt(data.excessCredited)  : null)
+      // v2: paidPerUnit = per-unit price for this lot
+      setPricePaid(data.paidPerUnit    ? BigInt(data.paidPerUnit)    : null)
+      setExcess(   data.excessCredited ? BigInt(data.excessCredited) : null)
       setStep('done')
       onCommitted()
     } catch (e: unknown) {
@@ -294,7 +306,7 @@ export function GaslessCommitFlow({
     }
   }, [
     address, isConnected, wrongChain, nonce, nowSec,
-    totalToSign, dealId, units, salt, signTypedData, refetchNonce, onCommitted, connector,
+    totalToSign, dealId, units, salt, signTypedData, refetchNonce, onCommitted, connector, isTopUp,
   ])
 
   const reset = () => {
@@ -308,20 +320,23 @@ export function GaslessCommitFlow({
   if (!RELAYER_URL) return null
   if (!isOpen || isPastDeadline) return null
 
+  // At the per-buyer limit: show a notice instead of the picker
+  const atLimit = isTopUp && maxOrderable === 0
+
   if (!isConnected) {
     return (
       <div className="space-y-3">
         <GaslessPriceCard
           units={units} quotedPPU={quotedPPU} totalToSign={totalToSign}
           breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensReceived={tokensReceived}
-          maxOrderable={maxOrderable} onUnits={setUnits}
+          maxOrderable={maxOrderable} isTopUp={isTopUp} onUnits={setUnits}
         />
         <ConnectKitButton.Custom>
           {({ show }) => (
             <button onClick={show}
               className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99]"
               style={{ background: 'var(--accent)' }}>
-              Connect wallet to order gaslessly
+              {isTopUp ? 'Connect wallet to add to your order' : 'Connect wallet to order gaslessly'}
             </button>
           )}
         </ConnectKitButton.Custom>
@@ -353,7 +368,8 @@ export function GaslessCommitFlow({
             <div className="flex items-center gap-2">
               <CheckCircle className="size-4 shrink-0" style={{ color: 'var(--success)' }} />
               <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
-                Ordered gaslessly{pricePaid !== null && ` for ${formatUsdcPrice(pricePaid)}`}
+                {isTopUp ? 'Lot added gaslessly' : 'Ordered gaslessly'}
+                {pricePaid !== null && ` for ${formatUsdcPrice(pricePaid)}/unit`}
               </span>
             </div>
             {excess !== null && excess > 0n && (
@@ -372,6 +388,17 @@ export function GaslessCommitFlow({
               </a>
             )}
           </motion.div>
+        ) : atLimit ? (
+          <motion.div key="at-limit"
+            initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.22 }}>
+            <div className="rounded-2xl p-3 text-center text-sm"
+              style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
+              {maxUnitsPerBuyer > 0
+                ? `You've reached the per-buyer limit of ${maxUnitsPerBuyer} unit${maxUnitsPerBuyer !== 1 ? 's' : ''}.`
+                : 'No stock remaining.'}
+            </div>
+          </motion.div>
         ) : (
           <motion.div key="price"
             initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
@@ -379,7 +406,7 @@ export function GaslessCommitFlow({
             <GaslessPriceCard
               units={units} quotedPPU={quotedPPU} totalToSign={totalToSign}
               breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensReceived={tokensReceived}
-              maxOrderable={maxOrderable} onUnits={setUnits}
+              maxOrderable={maxOrderable} isTopUp={isTopUp} onUnits={setUnits}
             />
           </motion.div>
         )}
@@ -413,11 +440,11 @@ export function GaslessCommitFlow({
         </div>
       )}
 
-      {step !== 'done' && maxOrderable > 0 && cannotAfford && usdcBalance !== undefined && (
+      {!atLimit && step !== 'done' && maxOrderable > 0 && cannotAfford && usdcBalance !== undefined && (
         <FundingNotice needed={totalToSign} balance={usdcBalance} />
       )}
 
-      {step !== 'done' && maxOrderable > 0 && !cannotAfford && (
+      {!atLimit && step !== 'done' && maxOrderable > 0 && !cannotAfford && (
         <button
           onClick={() => { void handleSign() }}
           disabled={busy || !nonce}
@@ -427,10 +454,15 @@ export function GaslessCommitFlow({
             ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Working…</span>
             : errMsg
               ? `Sign again for ${formatUsdcPrice(totalToSign)}`
-              : <span className="flex items-center justify-center gap-2">
-                  <Zap className="size-4" />
-                  {`Order ${units} unit${units !== 1 ? 's' : ''} gaslessly for ${formatUsdcPrice(totalToSign)}`}
-                </span>}
+              : isTopUp
+                ? <span className="flex items-center justify-center gap-2">
+                    <PackagePlus className="size-4" />
+                    {`Add ${units} unit${units !== 1 ? 's' : ''} gaslessly for ${formatUsdcPrice(totalToSign)}`}
+                  </span>
+                : <span className="flex items-center justify-center gap-2">
+                    <Zap className="size-4" />
+                    {`Order ${units} unit${units !== 1 ? 's' : ''} gaslessly for ${formatUsdcPrice(totalToSign)}`}
+                  </span>}
         </button>
       )}
 
@@ -453,24 +485,30 @@ interface GaslessPriceCardProps {
   goodsSymbol:    string
   tokensReceived: bigint
   maxOrderable:   number
+  isTopUp:        boolean
   onUnits:        (n: number) => void
 }
 
 function GaslessPriceCard({
   units, quotedPPU, totalToSign, breaksTier,
-  goodsSymbol, tokensReceived, maxOrderable, onUnits,
+  goodsSymbol, tokensReceived, maxOrderable, isTopUp, onUnits,
 }: GaslessPriceCardProps) {
   return (
     <div className="rounded-2xl p-4 space-y-3"
       style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
       <div className="flex items-center gap-2">
-        <Zap className="size-3.5" style={{ color: 'var(--accent)' }} />
-        <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Gasless order</span>
+        {isTopUp
+          ? <><PackagePlus className="size-3.5" style={{ color: 'var(--accent)' }} />
+              <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Add to your order · gasless</span></>
+          : <><Zap className="size-3.5" style={{ color: 'var(--accent)' }} />
+              <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Gasless order</span></>}
       </div>
 
       {/* Quantity picker */}
       <div className="flex items-center justify-between">
-        <span className="text-xs" style={{ color: 'var(--muted)' }}>Quantity</span>
+        <span className="text-xs" style={{ color: 'var(--muted)' }}>
+          {isTopUp ? 'Units to add' : 'Quantity'}
+        </span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => onUnits(Math.max(1, units - 1))}
@@ -490,6 +528,14 @@ function GaslessPriceCard({
           </button>
         </div>
       </div>
+
+      {maxOrderable > 0 && (
+        <p className="text-xs" style={{ color: 'var(--subtle)' }}>
+          {isTopUp
+            ? `Up to ${maxOrderable} more unit${maxOrderable !== 1 ? 's' : ''} available`
+            : `Up to ${maxOrderable} unit${maxOrderable !== 1 ? 's' : ''} available`}
+        </p>
+      )}
 
       <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-baseline justify-between">

@@ -63,14 +63,14 @@ const CONTRACTS = {
     // Deployed and wired from a deployer wallet we control, then verified from
     // chain: bytecode at all three, all three owner wiring calls landed,
     // constructor links agree in both directions, USDC predeploy correct.
-    // Swarm v2 (quantities, token delivery), deployed 24 Oct 2026 and verified:
+    // Swarm v2.1 (quantities, top-ups, token delivery), deployed 25 Oct 2026 and verified:
     // wiring from chain, and all four contracts byte-identical to the local build.
     // Swarm Pass has its faucet on. Earlier v1 sets are retired.
-    DealFactory: '0xdF7ab518C23aff70ecd2Dd61e639fbEd62F2D5aD' as `0x${string}`,
-    DemandPool:  '0x0C04e8Bf223F4C9ab45678273b8D692Ef9550B36' as `0x${string}`,
-    Settler:     '0xfD29dd3c3003713f529912315F5e47C9c88F8DD3' as `0x${string}`,
+    DealFactory: '0x9a664F301AEB79f43F391B838A898D9bA354f9e1' as `0x${string}`,
+    DemandPool:  '0x4f064D867FA075CF5dbfe1BF2A3100C8B52CF8f5' as `0x${string}`,
+    Settler:     '0x3091FBDc63c96fA37e9f29df5F10B66F47044F44' as `0x${string}`,
     SwarmPass:   '0x28ac46d52C34a53565c481849361b8DB2cb3E4ca' as `0x${string}`,
-    deployBlock: 68895718n,
+    deployBlock: 69078388n,
     deployed: true,
   },
 } as const

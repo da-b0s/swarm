@@ -1,5 +1,5 @@
 /**
- * Event-sourced commit/withdraw history for a single v2 deal.
+ * Event-sourced commit/withdraw history for a single v2.1 deal.
  *
  * v2 Committed: (uint256 dealId, address buyer, uint32 units, uint64 paidPerUnit,
  *                uint256 escrow, uint64 livePrice, uint32 totalUnits, uint32 buyerCount)
@@ -7,6 +7,11 @@
  *                uint32 totalUnits, uint32 buyerCount)
  * DealPosted:   (uint256 dealId, address supplier, address goodsToken, uint32 minUnits,
  *                uint32 maxUnits, uint64 deadline, uint64 startPrice)
+ *
+ * v2.1 top-up rule: a buyer's Committed events are lots of one order.
+ * We SUM units and escrow across lots rather than replacing the entry.
+ * Average price = totalEscrow ÷ totalUnits, displayed as paidPerUnit.
+ * A Withdrawn clears the buyer's accumulated state entirely.
  *
  * Cross-window ordering fix: accumulate all logs, rebuild from scratch (empty
  * map, chronological order) after every window so a Withdrawn in a newer window
@@ -31,10 +36,11 @@ import {
 
 export interface DealHistoryEntry {
   buyer:        `0x${string}`
-  units:        number   // units ordered (0 if withdrawn)
-  paidPerUnit:  bigint   // per-unit price in micro-USDC; 0 if withdrawn
+  units:        number    // total units across all lots (0 if withdrawn)
+  paidPerUnit:  bigint    // average price: totalEscrow ÷ units; 0 if withdrawn
+  totalEscrow:  bigint    // sum of escrow across all lots; 0 if withdrawn
   withdrawn:    boolean
-  txHash:       string   // most recent tx (withdraw > commit)
+  txHash:       string    // most recent tx (withdraw > commit)
   blockNumber:  bigint
   logIndex:     number
 }
@@ -71,12 +77,13 @@ interface ParsedEntry {
   buyer?:      `0x${string}`
   units?:      number
   paidPerUnit?: bigint
+  escrow?:     bigint   // this lot's escrow (units × lotPrice)
   txHash:      string
   blockNumber: bigint
   logIndex:    number
 }
 
-interface CommittedArgs { buyer: `0x${string}`; units: number; paidPerUnit: bigint }
+interface CommittedArgs { buyer: `0x${string}`; units: number; paidPerUnit: bigint; escrow: bigint }
 interface WithdrawnArgs { buyer: `0x${string}` }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -115,6 +122,7 @@ function parseLog(raw: RawLog): ParsedEntry | null {
         buyer:       a.buyer,
         units:       Number(a.units),
         paidPerUnit: BigInt(a.paidPerUnit),
+        escrow:      BigInt(a.escrow),
         ...pos,
       }
     }
@@ -130,7 +138,12 @@ function parseLog(raw: RawLog): ParsedEntry | null {
 
 /**
  * Rebuild the display list from ALL collected entries in chronological order.
- * Returns entries sorted newest-first.
+ *
+ * v2.1 rule: multiple Committed events from the same buyer are lots of one
+ * order — sum their units and escrow.  Average price = totalEscrow ÷ units.
+ * A Withdrawn wipes all accumulated state for that buyer.
+ *
+ * Returns entries sorted newest-first (by most recent Committed or Withdrawn).
  */
 function buildEntries(allLogs: ParsedEntry[]): DealHistoryEntry[] {
   const sorted = [...allLogs].sort((a, b) =>
@@ -139,36 +152,60 @@ function buildEntries(allLogs: ParsedEntry[]): DealHistoryEntry[] {
     : a.logIndex - b.logIndex
   )
 
-  const map = new Map<string, DealHistoryEntry>()
+  // Running totals per buyer key
+  const accUnits   = new Map<string, number>()
+  const accEscrow  = new Map<string, bigint>()
+  const meta       = new Map<string, { buyer: `0x${string}`; txHash: string; blockNumber: bigint; logIndex: number; withdrawn: boolean }>()
 
   for (const l of sorted) {
     if (l.type === 'DealPosted' || !l.buyer) continue
     const key = l.buyer.toLowerCase()
+
     if (l.type === 'Committed') {
-      map.set(key, {
+      const prevUnits  = accUnits.get(key)  ?? 0
+      const prevEscrow = accEscrow.get(key) ?? 0n
+      accUnits.set(key,  prevUnits  + (l.units  ?? 0))
+      accEscrow.set(key, prevEscrow + (l.escrow ?? 0n))
+      meta.set(key, {
         buyer:       l.buyer,
-        units:       l.units ?? 0,
-        paidPerUnit: l.paidPerUnit ?? 0n,
-        withdrawn:   false,
         txHash:      l.txHash,
         blockNumber: l.blockNumber,
         logIndex:    l.logIndex,
+        withdrawn:   false,
       })
     } else if (l.type === 'Withdrawn') {
-      const existing = map.get(key)
-      if (existing) {
-        map.set(key, {
-          ...existing,
-          withdrawn:   true,
-          txHash:      l.txHash,
-          blockNumber: l.blockNumber,
-          logIndex:    l.logIndex,
-        })
-      }
+      // Withdrawal removes the entire order
+      accUnits.delete(key)
+      accEscrow.delete(key)
+      meta.set(key, {
+        buyer:       l.buyer,
+        txHash:      l.txHash,
+        blockNumber: l.blockNumber,
+        logIndex:    l.logIndex,
+        withdrawn:   true,
+      })
     }
   }
 
-  return Array.from(map.values()).sort((a, b) =>
+  const result: DealHistoryEntry[] = []
+  for (const [key, m] of meta.entries()) {
+    const units       = m.withdrawn ? 0 : (accUnits.get(key) ?? 0)
+    const totalEscrow = m.withdrawn ? 0n : (accEscrow.get(key) ?? 0n)
+    const paidPerUnit = units > 0 ? totalEscrow / BigInt(units) : 0n
+    result.push({
+      buyer:       m.buyer,
+      units,
+      paidPerUnit,
+      totalEscrow,
+      withdrawn:   m.withdrawn,
+      txHash:      m.txHash,
+      blockNumber: m.blockNumber,
+      logIndex:    m.logIndex,
+    })
+  }
+
+  // Sort newest-first
+  return result.sort((a, b) =>
     a.blockNumber !== b.blockNumber
       ? a.blockNumber > b.blockNumber ? -1 : 1
       : b.logIndex - a.logIndex

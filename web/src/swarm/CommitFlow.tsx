@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Loader2, ExternalLink, CheckCircle, AlertCircle, Lock, Plus, Minus } from 'lucide-react'
+import { Loader2, ExternalLink, CheckCircle, AlertCircle, Lock, Plus, Minus, PackagePlus } from 'lucide-react'
 import {
   formatUsdcPrice, txUrl, parseRevertReason,
   checkWouldStrandBuyer, computeOrderTotal,
@@ -56,42 +56,58 @@ export function CommitFlow({
   const isPastDeadline = nowSec > 0 && Number(deadline) <= nowSec
   const isOpen         = state === 0
 
-  // Quantity picker — clamp during render, never in an effect
-  const remainingStock = maxUnits - totalUnits
-  const perBuyerLimit  = maxUnitsPerBuyer > 0 ? maxUnitsPerBuyer : remainingStock
-  const maxOrderable   = Math.min(remainingStock, perBuyerLimit)
-  const [rawUnits, setUnits] = useState(1)
-  const units = maxOrderable > 0 ? Math.min(rawUnits, maxOrderable) : 1
-
-  // What will this order cost (price includes buyer's own units)
-  const { paidPerUnit: quotedPPU, total: quotedTotal, breaksTier } = computeOrderTotal(tiers, totalUnits, units)
-
-  // Committed state
+  // Committed state — read from chain
   const isCommitted   = myUnits !== undefined && Number(myUnits) > 0
   const myUnitsN      = myUnits    !== undefined ? Number(myUnits)     : 0
   const myPPU         = myPaidPerUnit !== undefined ? BigInt(myPaidPerUnit) : 0n
   const myEscrow      = escrowed  !== undefined ? BigInt(escrowed)     : 0n
-  const currentPPU    = clearingPrice  // live per-unit clearing price
+
+  // Average price paid across all lots: escrowed ÷ units (display only)
+  const avgPricePaid  = isCommitted && myUnitsN > 0
+    ? myEscrow / BigInt(myUnitsN)
+    : 0n
+
+  // Pending refund from escrow: escrowed − cp × units  (v2.1: per spec, not paidPerUnit)
+  const currentPPU    = clearingPrice
   const pendingRefund = isCommitted && myEscrow > 0n
     ? myEscrow - (currentPPU * BigInt(myUnitsN))
     : 0n
 
+  // Strand check — withdraw pre-check; uses paidPerUnit (cheapest lot) as specified
   const withdrawCheck = isCommitted
     ? checkWouldStrandBuyer(myPPU, myUnitsN, totalUnits, tierCountMap, tiers, buyerCount)
     : { blocked: false as const }
 
-  // Approve amount: tiers[0].pricePerUnit × units (the maximum this order can ever cost)
+  // Quantity picker for a new lot:
+  //   remainingStock: how many units are still available overall
+  //   perBuyerHeadroom: how many MORE units this buyer can add (per-buyer limit minus already owned)
+  //   maxAddable: min of both — 0 means at the limit
+  const remainingStock   = maxUnits - totalUnits
+  const perBuyerHeadroom = maxUnitsPerBuyer > 0
+    ? Math.max(0, maxUnitsPerBuyer - myUnitsN)
+    : remainingStock
+  const maxAddable       = Math.min(remainingStock, perBuyerHeadroom)
+  // For a non-committed buyer, maxOrderable is exactly maxAddable
+  const maxOrderable     = maxAddable
+
+  const [rawUnits, setUnits] = useState(1)
+  const units = maxOrderable > 0 ? Math.min(rawUnits, maxOrderable) : 1
+
+  // What this lot will cost (price includes all totalUnits + this lot)
+  const { paidPerUnit: quotedPPU, total: quotedTotal, breaksTier } = computeOrderTotal(tiers, totalUnits, units)
+
+  // Approve: tiers[0].pricePerUnit × units (worst-case ceiling for this lot)
   const maxPPU    = tiers.length > 0 ? tiers[0].pricePerUnit : clearingPrice
   const maxCharge = maxPPU * BigInt(units)
-  // Approve and commit are two transactions, and on Arc their gas is paid in USDC
-  // too, so keep a few cents of headroom on top of the escrow.
-  const GAS_HEADROOM = 20_000n // $0.02
-  const usdcBalance = useUsdcBalance(address)
-  const neededForOrder = quotedTotal + GAS_HEADROOM
-  const cannotAfford = usdcBalance !== undefined && usdcBalance < neededForOrder
 
-  const [step,         setStep]         = useState<Step>('idle')
-  const [errMsg,       setErrMsg]       = useState('')
+  // Funding check — include a small gas headroom
+  const GAS_HEADROOM   = 20_000n // $0.02
+  const usdcBalance    = useUsdcBalance(address)
+  const neededForOrder = quotedTotal + GAS_HEADROOM
+  const cannotAfford   = usdcBalance !== undefined && usdcBalance < neededForOrder
+
+  const [step,          setStep]         = useState<Step>('idle')
+  const [errMsg,        setErrMsg]       = useState('')
   const [approveTxHash, setApproveTxHash] = useState<`0x${string}` | undefined>()
   const [commitTxHash,  setCommitTxHash]  = useState<`0x${string}` | undefined>()
 
@@ -137,6 +153,7 @@ export function CommitFlow({
         tiers={tiers}
         maxUnits={maxUnits}
         maxUnitsPerBuyer={maxUnitsPerBuyer}
+        currentUnits={myUnitsN}
         deadline={deadline}
         state={state}
         goodsToken={goodsToken}
@@ -216,7 +233,7 @@ export function CommitFlow({
         <OrderPreviewCard
           units={units} quotedPPU={quotedPPU} quotedTotal={quotedTotal}
           breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensPerUnit={tokensPerUnit}
-          maxOrderable={maxOrderable}
+          maxOrderable={maxOrderable} isTopUp={false}
           onUnits={setUnits} connected={false}
         />
         <ConnectKitButton.Custom>
@@ -243,11 +260,14 @@ export function CommitFlow({
   }
 
   const busyStep = step === 'approving' || step === 'approve-confirming' || step === 'committing' || step === 'commit-confirming'
+  // "At the limit" means the buyer has an order but cannot add more units
+  const atLimit = isCommitted && maxAddable === 0
 
   return (
     <div className="space-y-3">
       <AnimatePresence mode="wait">
-        {isCommitted ? (
+        {/* Order summary — shown when buyer has an existing order */}
+        {isCommitted && (
           <motion.div key="committed"
             className="rounded-2xl p-4 space-y-2"
             style={{ background: 'rgba(26,128,71,0.08)', border: '1px solid rgba(26,128,71,0.2)' }}
@@ -256,7 +276,7 @@ export function CommitFlow({
             <div className="flex items-center gap-2">
               <CheckCircle className="size-4 shrink-0" style={{ color: 'var(--success)' }} />
               <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
-                You ordered {myUnitsN} unit{myUnitsN !== 1 ? 's' : ''}
+                Your order: {myUnitsN} unit{myUnitsN !== 1 ? 's' : ''}
               </span>
             </div>
             <div className="text-sm space-y-0.5" style={{ color: 'var(--ink-2)' }}>
@@ -265,15 +285,24 @@ export function CommitFlow({
                 <span className="font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
                   {formatUsdcPrice(myEscrow)}
                 </span>
-                {' '}({formatUsdcPrice(myPPU)}/unit)
+                {myUnitsN > 0 && avgPricePaid !== myPPU && (
+                  <span style={{ color: 'var(--muted)' }}>
+                    {' '}(avg {formatUsdcPrice(avgPricePaid)}/unit)
+                  </span>
+                )}
+                {myUnitsN > 0 && avgPricePaid === myPPU && (
+                  <span style={{ color: 'var(--muted)' }}>
+                    {' '}({formatUsdcPrice(avgPricePaid)}/unit)
+                  </span>
+                )}
               </p>
               {pendingRefund > 0n && (
                 <p>
-                  Current refund:{' '}
+                  Refund at settlement:{' '}
                   <span className="font-bold tabular-nums" style={{ color: 'var(--success)' }}>
                     {formatUsdcPrice(pendingRefund)}
                   </span>{' '}
-                  at {formatUsdcPrice(clearingPrice)}/unit
+                  <span style={{ color: 'var(--muted)' }}>at {formatUsdcPrice(clearingPrice)}/unit</span>
                 </p>
               )}
               <p style={{ color: 'var(--muted)' }}>
@@ -285,14 +314,31 @@ export function CommitFlow({
               </p>
             </div>
           </motion.div>
-        ) : (
+        )}
+
+        {/* Add-lot picker — shown when buyer has an order and can still add */}
+        {isCommitted && !atLimit && step !== 'done' && (
+          <motion.div key="topup-picker"
+            initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.22 }}>
+            <OrderPreviewCard
+              units={units} quotedPPU={quotedPPU} quotedTotal={quotedTotal}
+              breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensPerUnit={tokensPerUnit}
+              maxOrderable={maxOrderable} isTopUp={true}
+              onUnits={setUnits} connected={true}
+            />
+          </motion.div>
+        )}
+
+        {/* New-order picker — shown when buyer has no order yet */}
+        {!isCommitted && step !== 'done' && (
           <motion.div key="not-committed"
             initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.22 }}>
             <OrderPreviewCard
               units={units} quotedPPU={quotedPPU} quotedTotal={quotedTotal}
               breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensPerUnit={tokensPerUnit}
-              maxOrderable={maxOrderable}
+              maxOrderable={maxOrderable} isTopUp={false}
               onUnits={setUnits} connected={true}
             />
           </motion.div>
@@ -316,7 +362,7 @@ export function CommitFlow({
           <CheckCircle className="size-4 shrink-0" style={{ color: 'var(--success)' }} />
           <a href={txUrl(commitTxHash)} target="_blank" rel="noreferrer"
             className="text-sm flex items-center gap-1" style={{ color: 'var(--success)' }}>
-            Order placed — view on explorer <ExternalLink className="size-3" />
+            {isCommitted ? 'Lot added' : 'Order placed'} — view on explorer <ExternalLink className="size-3" />
           </a>
         </div>
       )}
@@ -333,11 +379,23 @@ export function CommitFlow({
         </div>
       )}
 
-      {!isCommitted && step !== 'done' && maxOrderable > 0 && cannotAfford && usdcBalance !== undefined && (
+      {/* At-limit notice (buyer has an order but cannot add more) */}
+      {atLimit && (
+        <div className="rounded-2xl p-3 text-center text-sm"
+          style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
+          {maxUnitsPerBuyer > 0
+            ? `You've reached the per-buyer limit of ${maxUnitsPerBuyer} unit${maxUnitsPerBuyer !== 1 ? 's' : ''}.`
+            : 'No stock remaining.'}
+        </div>
+      )}
+
+      {/* Funding notice — shown when buyer cannot afford the lot */}
+      {!atLimit && step !== 'done' && maxOrderable > 0 && cannotAfford && usdcBalance !== undefined && (
         <FundingNotice needed={neededForOrder} balance={usdcBalance} />
       )}
 
-      {!isCommitted && step !== 'done' && maxOrderable > 0 && !cannotAfford && (
+      {/* Order / add-lot button */}
+      {!atLimit && step !== 'done' && maxOrderable > 0 && !cannotAfford && (
         <button
           onClick={handleCommit}
           disabled={busyStep}
@@ -345,7 +403,12 @@ export function CommitFlow({
           style={{ background: 'var(--accent)' }}>
           {busyStep
             ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Working…</span>
-            : `Order ${units} unit${units !== 1 ? 's' : ''} for ${formatUsdcPrice(quotedTotal)}`}
+            : isCommitted
+              ? <span className="flex items-center justify-center gap-2">
+                  <PackagePlus className="size-4" />
+                  {`Add ${units} unit${units !== 1 ? 's' : ''} for ${formatUsdcPrice(quotedTotal)}`}
+                </span>
+              : `Order ${units} unit${units !== 1 ? 's' : ''} for ${formatUsdcPrice(quotedTotal)}`}
         </button>
       )}
 
@@ -369,7 +432,7 @@ export function CommitFlow({
               disabled={busyStep}
               className="w-full rounded-2xl py-2.5 text-sm font-medium transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ background: 'var(--surface-muted)', color: 'var(--muted)', border: '1px solid var(--border)' }}>
-              Withdraw order
+              Withdraw entire order
             </button>
           )}
         </div>
@@ -402,13 +465,14 @@ interface OrderPreviewProps {
   goodsSymbol:  string
   tokensPerUnit:bigint
   maxOrderable: number
+  isTopUp:      boolean
   onUnits:      (n: number) => void
   connected:    boolean
 }
 
 function OrderPreviewCard({
   units, quotedPPU, quotedTotal, breaksTier,
-  goodsSymbol, tokensPerUnit, maxOrderable, onUnits,
+  goodsSymbol, tokensPerUnit, maxOrderable, isTopUp, onUnits,
 }: OrderPreviewProps) {
   const tokensReceived = BigInt(units) * tokensPerUnit
 
@@ -416,9 +480,18 @@ function OrderPreviewCard({
     <div className="rounded-2xl p-4 space-y-3"
       style={{ background: 'var(--surface)', border: '1px solid var(--border)', backdropFilter: 'blur(20px)' }}>
 
+      {isTopUp && (
+        <div className="flex items-center gap-1.5">
+          <PackagePlus className="size-3.5" style={{ color: 'var(--accent)' }} />
+          <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Add to your order</span>
+        </div>
+      )}
+
       {/* Quantity picker */}
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs" style={{ color: 'var(--muted)' }}>Quantity</span>
+        <span className="text-xs" style={{ color: 'var(--muted)' }}>
+          {isTopUp ? 'Units to add' : 'Quantity'}
+        </span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => onUnits(Math.max(1, units - 1))}
@@ -444,7 +517,9 @@ function OrderPreviewCard({
       {/* Max hint */}
       {maxOrderable > 0 && (
         <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-          Up to {maxOrderable} unit{maxOrderable !== 1 ? 's' : ''} available
+          {isTopUp
+            ? `Up to ${maxOrderable} more unit${maxOrderable !== 1 ? 's' : ''} available`
+            : `Up to ${maxOrderable} unit${maxOrderable !== 1 ? 's' : ''} available`}
         </p>
       )}
 
@@ -459,7 +534,7 @@ function OrderPreviewCard({
           </span>
         </div>
         <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
-          You'll receive {tokensReceived.toString()} {goodsSymbol}
+          {"You'll receive"} {tokensReceived.toString()} {goodsSymbol}
         </p>
         {breaksTier && (
           <p className="text-xs mt-1 font-medium" style={{ color: 'var(--accent)' }}>
