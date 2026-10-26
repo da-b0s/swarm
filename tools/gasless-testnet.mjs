@@ -11,7 +11,7 @@
 //      409 with the new total, balance unchanged; b4 re-signs at $0.20 and lands
 //   Settle at $0.20 on 7 units, everyone claims, the contracts end empty.
 
-import {
+import { chain,
   POOL, SETTLER, USDC, POOL_ABI, SETTLER_ABI, ERC20_ABI,
   usd, fmt, supplier, buyers, usdcOf, makeRecorder, events, ensurePasses,
   postPassDeal, waitForDeadline, signOrder, claimAll, checkEmpty, pub,
@@ -23,9 +23,9 @@ const [b1, b2, b3, b4] = buyers;
 const relay = async (body) => { const r = await fetch(`${RELAYER_URL}/commit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
 
 const health = await (await fetch(`${RELAYER_URL}/health`)).json();
-rec.check('relayer is on testnet and pointed at the current pool', health.chainId === 5042002 && health.poolAddress.toLowerCase() === POOL.toLowerCase(), `${health.chainId} ${health.poolAddress}`);
+rec.check('relayer is on testnet and pointed at the current pool', health.chainId === chain.id && health.poolAddress.toLowerCase() === POOL.toLowerCase(), `${health.chainId} ${health.poolAddress}`);
 rec.check('/health does not expose a key', !JSON.stringify(health).match(/[0-9a-f]{64}/i));
-if ((await pub.getChainId()) !== 5042002) throw new Error('not testnet');
+if ((await pub.getChainId()) !== chain.id) throw new Error('wrong chain');
 
 for (const [i, b] of [b1, b2, b3, b4].entries()) {
   const have = await usdcOf(b);

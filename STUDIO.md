@@ -671,11 +671,20 @@ verify as the other.
 `via_ir`; mainnet will be compiled from this source. Behaviour is the same, and
 the suite proves it, but the bytecode is not identical.
 
-## Turns 5+
+## Turns 6–9
 
-| Turn | Intent | What changed |
-|---|---|---|
-| _pending_ | | |
+| Turn | Intent | Prompt · result | Outcome |
+|---|---|---|---|
+| 6a | Swarm v2 contracts: buyers choose quantities, unit-based tiers, goods delivered as tokens, Swarm Pass | [turn-06a-v2-contracts.md](studio/prompts/turn-06a-v2-contracts.md) · [turn-06a](studio/runs/turn-06a.json) | Five contracts rewritten from docs/mechanism-v2.md; its own smoke test found that settlement needed the factory to release goods to the settler, and it added that. |
+| 6b | SafeERC20 for goods, and the v2 core suite | [turn-06b-v2-core-tests.md](studio/prompts/turn-06b-v2-core-tests.md) · [turn-06b](studio/runs/turn-06b.json) | 36/36 locally. |
+| 6c | v2 gasless suite (EIP-3009 with quantity bound into the nonce) | [turn-06c-v2-gasless-tests.md](studio/prompts/turn-06c-v2-gasless-tests.md) · [turn-06c](studio/runs/turn-06c.json) | 45/45 locally. |
+| 6d1 | v2 buyer frontend | [turn-06d1-v2-buyer-frontend.md](studio/prompts/turn-06d1-v2-buyer-frontend.md) · [turn-06d1](studio/runs/turn-06d1.json) | Quantity picker, unit-based tier progress, token delivery shown to buyers. |
+| 6d2 | Supplier view, proof page and relayer for v2 | [turn-06d2-v2-supplier-proof-relayer.md](studio/prompts/turn-06d2-v2-supplier-proof-relayer.md) · [turn-06d2](studio/runs/turn-06d2.json) | Deployed to testnet from our deployer and verified end to end; deal #4 opened for hands-on testing. |
+| 7a | v2.1: buyers can add to an order | [turn-07a-topup-contract.md](studio/prompts/turn-07a-topup-contract.md) · [turn-07a](studio/runs/turn-07a.json) | Each lot priced at its own tier; refunds use the buyer's cheapest lot. 56/56 locally. |
+| 7b | Top-up frontend, plus a patch of fixes made outside Studio after testing with MetaMask | [turn-07b-topup-frontend.md](studio/prompts/turn-07b-topup-frontend.md) · [turn-07b](studio/runs/turn-07b.json) | Patch applied as given; testnet redeployed as v2.1. |
+| 8a | v2.2: partial withdrawals, paid straight to the wallet | [turn-08a-partial-withdraw.md](studio/prompts/turn-08a-partial-withdraw.md) · [turn-08a](studio/runs/turn-08a.json) | Falls back to a claimable credit for a blocklisted address. 67/67 locally. |
+| 8b | One order panel, partial-withdraw UI, always-visible claims, deal list | [turn-08b-frontend-ux.md](studio/prompts/turn-08b-frontend-ux.md) · [turn-08b](studio/runs/turn-08b.json) | Testnet redeployed as v2.2 and verified end to end. |
+| 9 | Sync only: homepage with live stats, light/dark theme, auto-settlement copy, newest-first proof page | [turn-09-sync-local-work.md](studio/prompts/turn-09-sync-local-work.md) · [turn-09](studio/runs/turn-09.json) | Patch of local work applied exactly; Studio's src/ pulled back and diffed: identical to the repo. Contracts already identical. Studio returned no prose for this turn, so the diff is the evidence. |
 
 ## What Studio did well / badly
 

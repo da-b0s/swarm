@@ -20,7 +20,7 @@
 //
 //   node lifecycle-testnet.mjs        (~15 minutes; waits out the deadline)
 
-import {
+import { chain,
   POOL, SETTLER, FACTORY, USDC, POOL_ABI, SETTLER_ABI, FACTORY_ABI, ERC20_ABI,
   usd, fmt, supplier, buyers, read, usdcOf, makeRecorder, events, ensurePasses,
   postPassDeal, waitForDeadline, claimAll, checkEmpty, pub,
@@ -28,7 +28,7 @@ import {
 
 const rec = makeRecorder('lifecycle-v2-run');
 const [b1, b2, b3, b4, b5, b6] = buyers;
-if ((await pub.getChainId()) !== 5042002) throw new Error('not testnet');
+if ((await pub.getChainId()) !== chain.id) throw new Error('wrong chain');
 console.log(`\nSwarm v2 lifecycle on Arc testnet — supplier ${supplier.address}\n`);
 
 // ── setup ────────────────────────────────────────────────────────────────────────
@@ -60,12 +60,12 @@ const withdrawB1 = { address: POOL, abi: POOL_ABI, functionName: 'withdraw', arg
 await rec.expectRevert('A: buyer 1 withdrawing is refused (would strand buyer 2)', b1, withdrawB1, 'WouldStrandBuyer');
 await order(b3, 3, A.dealId, 1, usd(0.20), 'A');
 await order(b4, 4, A.dealId, 1, usd(0.20), 'A');
-const b1Before = await usdcOf(b1);
+const b1Before = await pub.getBalance({ address: b1.address });   // native, 18 decimals: exact
 const w = await rec.send('A: buyer 1 withdraws (now permitted)', b1, withdrawB1);
 const wev = events(w, POOL_ABI).find((e) => e.eventName === 'Withdrawn');
-const wGas = (w.gasUsed * w.effectiveGasPrice) / 10n ** 12n;
+const wGas = w.gasUsed * w.effectiveGasPrice;
 rec.check('  buyer 1 gets the full $0.60 back, paid straight to the wallet', wev.args.amountReturned === usd(0.60) && wev.args.paidDirectly === true, `${fmt(wev.args.amountReturned)}, paidDirectly ${wev.args.paidDirectly}`);
-rec.check('  buyer 1 wallet rose by $0.60 (net of gas)', (await usdcOf(b1)) - b1Before + wGas === usd(0.60));
+rec.check('  buyer 1 wallet rose by $0.60 (net of gas)', (await pub.getBalance({ address: b1.address })) - b1Before + wGas === usd(0.60) * 10n ** 12n);
 await rec.expectRevert('A: ordering 9 is refused (per-buyer limit 8)', b5, { address: POOL, abi: POOL_ABI, functionName: 'commit', args: [A.dealId, 9] }, 'UnitsPerBuyerExceeded');
 await order(b5, 5, A.dealId, 5, usd(0.10), 'A');
 await order(b6, 6, A.dealId, 2, usd(0.10), 'A');

@@ -14,7 +14,7 @@
 //   settle at $0.10 on 12: in $2.10 = supplier $1.20 + refunds $0.90
 //   refunds b1 $0.60, b2 $0.30, b3 $0; passes 4, 4, 4; supplier 8 unsold back
 
-import {
+import { chain,
   POOL, SETTLER, USDC, POOL_ABI, SETTLER_ABI, ERC20_ABI, usd, fmt, supplier, buyers,
   usdcOf, read, makeRecorder, events, ensurePasses, postPassDeal, waitForDeadline,
   signOrder, claimAll, checkEmpty, pub,
@@ -23,7 +23,7 @@ import {
 const RELAYER_URL = process.env.RELAYER_URL ?? 'http://localhost:8787';
 const rec = makeRecorder('topup-run');
 const [b1, b2, b3] = buyers;
-if ((await pub.getChainId()) !== 5042002) throw new Error('not testnet');
+if ((await pub.getChainId()) !== chain.id) throw new Error('wrong chain');
 const health = await (await fetch(`${RELAYER_URL}/health`)).json();
 rec.check('relayer points at the current pool', health.poolAddress.toLowerCase() === POOL.toLowerCase(), health.poolAddress);
 
@@ -69,12 +69,12 @@ rec.check('buyer 3 now holds 4 units, $0.40 escrowed', s3.units === 4 && s3.escr
 
 // partial withdrawal: buyer 1 removes 1 of 4 units and gets the average back
 // ($1.00 x 1 / 4 = $0.25) straight to the wallet; 11 units still clear at $0.10.
-const pwBefore = await usdcOf(b1);
+const pwBefore = await pub.getBalance({ address: b1.address });   // native, 18 decimals: exact
 const pw = await rec.send('buyer 1 withdraws 1 of 4 units', b1, { address: POOL, abi: POOL_ABI, functionName: 'withdraw', args: [dealId, 1] });
 const pwe = events(pw, POOL_ABI).find((x) => x.eventName === 'Withdrawn').args;
-const pwGas = (pw.gasUsed * pw.effectiveGasPrice) / 10n ** 12n;
+const pwGas = pw.gasUsed * pw.effectiveGasPrice;
 rec.check('  returns the $0.25 average, paid directly', pwe.amountReturned === usd(0.25) && pwe.paidDirectly === true && Number(pwe.units) === 1, `${fmt(pwe.amountReturned)}, paidDirectly ${pwe.paidDirectly}`);
-rec.check('  buyer 1 wallet rose by $0.25 (net of gas)', (await usdcOf(b1)) - pwBefore + pwGas === usd(0.25));
+rec.check('  buyer 1 wallet rose by $0.25 (net of gas)', (await pub.getBalance({ address: b1.address })) - pwBefore + pwGas === usd(0.25) * 10n ** 12n);
 s1 = await state(b1);
 rec.check('  buyer 1 keeps 3 units with $0.75 escrowed', s1.units === 3 && s1.escrow === usd(0.75), `${s1.units} units, ${fmt(s1.escrow)}`);
 

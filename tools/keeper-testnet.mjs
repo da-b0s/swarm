@@ -2,11 +2,11 @@
 // Checks the relayer's settlement keeper on TESTNET: two short deals, one that
 // meets its minimum and one that does not. Nobody calls settle or refundAll;
 // the running relayer must close both by itself after the deadline.
-import { POOL, USDC, POOL_ABI, ERC20_ABI, FACTORY, FACTORY_ABI, usd, buyers, read, makeRecorder, ensurePasses, postPassDeal, waitForDeadline, pub } from './lib-v2.mjs';
+import { chain, POOL, USDC, POOL_ABI, ERC20_ABI, FACTORY, FACTORY_ABI, usd, buyers, read, makeRecorder, ensurePasses, postPassDeal, waitForDeadline, pub } from './lib-v2.mjs';
 
 
 const rec = makeRecorder('keeper-run');
-if ((await pub.getChainId()) !== 5042002) throw new Error('not testnet');
+if ((await pub.getChainId()) !== chain.id) throw new Error('wrong chain');
 await ensurePasses(rec, 6);
 const A = await postPassDeal(rec, 'deal A', { tiers: [[1, 0.10]], minUnits: 1, maxUnits: 3, minutes: 2, title: 'Keeper test A' });
 const B = await postPassDeal(rec, 'deal B', { tiers: [[1, 0.10]], minUnits: 2, maxUnits: 3, minutes: 2, title: 'Keeper test B' });

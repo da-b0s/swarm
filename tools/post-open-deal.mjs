@@ -2,10 +2,10 @@
 // Post an open Swarm Pass deal on TESTNET for hands-on testing, then check the
 // relayer names a mismatched signature (simulation only — nothing is sent).
 
-import { makeRecorder, ensurePasses, postPassDeal, signOrder, buyers, usd, pub } from './lib-v2.mjs';
+import { chain, makeRecorder, ensurePasses, postPassDeal, signOrder, buyers, usd, pub } from './lib-v2.mjs';
 
 const rec = makeRecorder('open-deal');
-if ((await pub.getChainId()) !== 5042002) throw new Error('not testnet');
+if ((await pub.getChainId()) !== chain.id) throw new Error('wrong chain');
 await ensurePasses(rec, 50);
 const { dealId, deadline } = await postPassDeal(rec, 'open deal', {
   tiers: [[1, 0.30], [10, 0.20], [25, 0.10]],

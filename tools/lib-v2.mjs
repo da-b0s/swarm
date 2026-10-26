@@ -9,18 +9,22 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
-export const chain = defineChain({
-  id: 5042002, name: 'Arc Testnet',
-  nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
-  rpcUrls: { default: { http: ['https://rpc.testnet.arc.io'] } },
-});
-export const EXPLORER = 'https://explorer.testnet.arc.io';
+// FORK_RPC runs everything against a LOCAL fork of Arc mainnet (arc-anvil), using
+// the addresses in FORK_ADDRESSES. It must be a localhost URL, so these scripts can
+// never send to real mainnet.
+export const FORK_RPC = process.env.FORK_RPC;
+if (FORK_RPC && !['127.0.0.1', 'localhost'].includes(new URL(FORK_RPC).hostname)) throw new Error('FORK_RPC must be a localhost fork');
+export const chain = FORK_RPC
+  ? defineChain({ id: 5042, name: 'Arc mainnet (local fork)', nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 }, rpcUrls: { default: { http: [FORK_RPC] } } })
+  : defineChain({ id: 5042002, name: 'Arc Testnet', nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.testnet.arc.io'] } } });
+export const EXPLORER = FORK_RPC ? 'fork' : 'https://explorer.testnet.arc.io';
 export const USDC = '0x3600000000000000000000000000000000000000';
 
 export const ENV = Object.fromEntries(readFileSync(new URL('../.env', import.meta.url), 'utf8')
   .split(/\r?\n/).filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]));
-if (ENV.ARC_NETWORK !== 'testnet') throw new Error(`refusing: .env ARC_NETWORK is ${ENV.ARC_NETWORK}, not testnet`);
-export const FACTORY = ENV.DEAL_FACTORY, POOL = ENV.DEMAND_POOL, SETTLER = ENV.SETTLER, PASS = ENV.SWARM_PASS;
+if (!FORK_RPC && ENV.ARC_NETWORK !== 'testnet') throw new Error(`refusing: .env ARC_NETWORK is ${ENV.ARC_NETWORK}, not testnet`);
+const FORK = FORK_RPC ? JSON.parse(readFileSync(process.env.FORK_ADDRESSES, 'utf8')) : null;
+export const FACTORY = FORK?.factory ?? ENV.DEAL_FACTORY, POOL = FORK?.pool ?? ENV.DEMAND_POOL, SETTLER = FORK?.settler ?? ENV.SETTLER, PASS = FORK?.pass ?? ENV.SWARM_PASS;
 for (const [k, v] of Object.entries({ FACTORY, POOL, SETTLER, PASS })) if (!/^0x[0-9a-fA-F]{40}$/.test(v ?? '')) throw new Error(`${k} missing from .env`);
 
 const abi = (n) => JSON.parse(readFileSync(new URL(`../onchain/contracts/out/${n}.sol/${n}.json`, import.meta.url), 'utf8')).abi;
@@ -87,7 +91,9 @@ export const events = (receipt, a) => receipt.logs.flatMap((l) => { try { return
 export async function ensurePasses(rec, need) {
   let have = await passOf(supplier);
   if (have < BigInt(need)) {
-    await rec.send('supplier takes 100 passes from the faucet', supplier, { address: PASS, abi: PASS_ABI, functionName: 'faucet' });
+    const faucetOn = await pub.readContract({ address: PASS, abi: PASS_ABI, functionName: 'faucetEnabled' });
+    if (faucetOn) await rec.send('supplier takes 100 passes from the faucet', supplier, { address: PASS, abi: PASS_ABI, functionName: 'faucet' });
+    else await rec.send(`owner mints ${need} passes (faucet is off)`, supplier, { address: PASS, abi: PASS_ABI, functionName: 'mint', args: [supplier.address, BigInt(need)] });
     have = await passOf(supplier);
   }
   rec.check(`supplier holds at least ${need} passes`, have >= BigInt(need), `${have} PASS`);
@@ -110,6 +116,10 @@ export async function postPassDeal(rec, label, { tiers, minUnits, maxUnits, maxU
 
 export async function waitForDeadline(deadline) {
   process.stdout.write('\nwaiting for the deadline (chain time)');
+  if (FORK_RPC) {   // local fork only: jump the fork's clock instead of waiting
+    await pub.request({ method: 'evm_setNextBlockTimestamp', params: [Number(deadline) + 1] });
+    await pub.request({ method: 'evm_mine', params: [] });
+  }
   while ((await chainNow()) < Number(deadline)) { process.stdout.write('.'); await new Promise((r) => setTimeout(r, 15_000)); }
   console.log(' reached\n');
 }
@@ -120,7 +130,7 @@ export async function signOrder(buyer, dealId, units, amount) {
   const nonce = await read(POOL, POOL_ABI, 'authorizationNonce', [dealId, buyer.address, units, salt]);
   const validBefore = BigInt((await chainNow()) + 600);
   const signature = await buyer.signTypedData({
-    domain: { name: 'USDC', version: '2', chainId: 5042002, verifyingContract: USDC },
+    domain: { name: 'USDC', version: '2', chainId: chain.id, verifyingContract: USDC },
     types: { ReceiveWithAuthorization: [
       { name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' },
       { name: 'validAfter', type: 'uint256' }, { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' },

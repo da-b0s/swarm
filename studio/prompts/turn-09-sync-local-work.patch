@@ -1,0 +1,988 @@
+diff -ruN a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx	2026-10-26 11:45:51.869956800 +0100
++++ b/src/App.tsx	2026-10-26 11:45:52.258671500 +0100
+@@ -1,16 +1,19 @@
+ import { useState, useEffect } from 'react'
+ import { ConnectKitButton } from 'connectkit'
+ import { motion, AnimatePresence } from 'framer-motion'
+-import { Layers, PlusCircle, FlaskConical, ChevronLeft } from 'lucide-react'
++import { Layers, PlusCircle, FlaskConical, ChevronLeft, Moon, Sun } from 'lucide-react'
++import { useTheme, toggleTheme } from './swarm/theme'
+ import { DealRoom } from './swarm/DealRoom'
+ import { DealList } from './swarm/DealList'
++import { HomePage } from './swarm/HomePage'
+ import { SupplierView } from './swarm/SupplierView'
+ import { ProofPage } from './swarm/ProofPage'
+ import { GlobalClaimsBanner } from './swarm/GlobalClaimsBanner'
++import { RetiredClaims } from './swarm/RetiredClaims'
+ import { useLateWalletReconnect } from './swarm/useLateWalletReconnect'
+ import { ACTIVE_NETWORK, ARC_NETWORK, DEPLOYMENT_READY } from './swarm/config'
+ 
+-type Tab = 'deals' | 'post' | 'proof'
++type Tab = 'home' | 'deals' | 'post' | 'proof'
+ 
+ // ── URL param helpers ─────────────────────────────────────────────────────────
+ 
+@@ -32,8 +35,9 @@
+ 
+ export default function App() {
+   useLateWalletReconnect()
++  const theme = useTheme()
+ 
+-  const [tab,     setTab]     = useState<Tab>('deals')
++  const [tab,     setTab]     = useState<Tab>(() => (readDealId() !== undefined ? 'deals' : 'home'))
+   const [dealId,  setDealId]  = useState<bigint | null>(() => readDealId() ?? null)
+   const [listTab, setListTab] = useState<'active' | 'ended'>('active')
+ 
+@@ -70,15 +74,15 @@
+       <nav
+         className="sticky top-0 z-40 w-full"
+         style={{
+-          background: 'rgba(255,255,255,0.80)',
++          background: 'var(--nav-bg)',
+           backdropFilter: 'blur(32px) saturate(200%)',
+           WebkitBackdropFilter: 'blur(32px) saturate(200%)',
+           borderBottom: '1px solid var(--border)',
+         }}
+       >
+-        <div className="max-w-2xl mx-auto px-4 h-14 flex items-center gap-3">
++        <div className="max-w-2xl mx-auto px-4 h-14 flex items-center gap-2 sm:gap-3">
+           {/* Wordmark */}
+-          <div className="flex items-center gap-2 mr-1 shrink-0 min-w-0">
++          <button onClick={() => handleTabChange('home')} aria-label="Swarm home" className="flex items-center gap-2 mr-1 shrink-0 min-w-0">
+             <div className="size-7 rounded-lg flex items-center justify-center shrink-0"
+               style={{ background: 'var(--accent)' }}>
+               <Layers className="size-4 text-white" />
+@@ -87,23 +91,23 @@
+               Swarm
+             </span>
+             {ACTIVE_NETWORK === 'testnet' && (
+-              <span className="text-xs font-medium px-1.5 py-0.5 rounded-md shrink-0"
++              <span className="text-xs font-medium px-1.5 py-0.5 rounded-md shrink-0 hidden sm:inline"
+                 style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)' }}>
+                 testnet
+               </span>
+             )}
+-          </div>
++          </button>
+ 
+           {/* Tab bar */}
+           <div className="flex gap-1 flex-1 justify-center min-w-0">
+             {([
+               { id: 'deals' as Tab, label: 'Deals',  Icon: Layers },
+-              { id: 'post'  as Tab, label: 'Post',   Icon: PlusCircle },
++              { id: 'post'  as Tab, label: 'Sell',   Icon: PlusCircle },
+               { id: 'proof' as Tab, label: 'Proof',  Icon: FlaskConical },
+             ] as const).map(({ id, label, Icon }) => (
+               <button key={id}
+                 onClick={() => handleTabChange(id)}
+-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium transition-all"
++                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-sm font-medium transition-all"
+                 style={{
+                   background: tab === id ? 'var(--accent)' : 'transparent',
+                   color: tab === id ? '#fff' : 'var(--muted)',
+@@ -114,6 +118,13 @@
+             ))}
+           </div>
+ 
++          {/* Theme */}
++          <button onClick={toggleTheme} aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
++            className="shrink-0 size-8 sm:size-9 rounded-xl flex items-center justify-center transition-all hover:opacity-70"
++            style={{ color: 'var(--muted)', border: '1px solid var(--border)' }}>
++            {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
++          </button>
++
+           {/* Wallet */}
+           <div className="shrink-0">
+             <ConnectKitButton />
+@@ -123,6 +134,7 @@
+ 
+       {/* Global claims banner — visible on every tab when wallet has claimable funds */}
+       <GlobalClaimsBanner />
++      <div className="max-w-2xl mx-auto px-4 pt-3"><RetiredClaims /></div>
+ 
+       {/* Deployment warning */}
+       {!DEPLOYMENT_READY && (
+@@ -171,6 +183,14 @@
+             </motion.div>
+           )}
+ 
++          {tab === 'home' && (
++            <motion.div key="home"
++              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
++              exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
++              <HomePage onBrowse={() => handleTabChange('deals')} onSell={() => handleTabChange('post')} />
++            </motion.div>
++          )}
++
+           {tab === 'post' && (
+             <motion.div key="post"
+               initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+diff -ruN a/src/index.css b/src/index.css
+--- a/src/index.css	2026-10-26 11:45:51.883956300 +0100
++++ b/src/index.css	2026-10-26 11:45:52.288644300 +0100
+@@ -20,6 +20,30 @@
+   --focus: #85b1ed;
+   --success: #1a8047;
+   --danger: #ba2b4c;
++  --nav-bg: rgba(255, 255, 255, 0.80);
++  --on-accent: #ffffff;
++}
++
++/* ── Dark tokens ─────────────────────────────────────────────────────── */
++:root[data-theme="dark"] {
++  --bg: #0b1420;
++  --bg-gradient: linear-gradient(180deg, #0b1420 0%, #0e1826 52%, #101a28 100%);
++  --surface: rgba(22, 34, 50, 0.72);
++  --surface-strong: rgba(26, 39, 57, 0.92);
++  --surface-muted: #16212f;
++  --ink: #e8eef5;
++  --ink-2: #c3cdd9;
++  --muted: #93a0b2;
++  --subtle: #758296;
++  --border: rgba(200, 220, 240, 0.12);
++  --border-strong: rgba(200, 220, 240, 0.40);
++  --accent: #3f7fc4;
++  --accent-hover: #5b97d8;
++  --focus: #85b1ed;
++  --success: #4cc283;
++  --danger: #f0708c;
++  --nav-bg: rgba(11, 20, 32, 0.80);
++  --on-accent: #ffffff;
+ }
+ 
+ * {
+@@ -57,3 +81,8 @@
+ [data-sonner-toaster] {
+   font-family: 'DM Sans', sans-serif !important;
+ }
++
++/* Dividers follow the theme */
++.divide-y > :not([hidden]) ~ :not([hidden]) {
++  border-color: var(--border);
++}
+diff -ruN a/src/main.tsx b/src/main.tsx
+--- a/src/main.tsx	2026-10-26 11:45:51.887958300 +0100
++++ b/src/main.tsx	2026-10-26 11:45:52.293641800 +0100
+@@ -19,6 +19,7 @@
+ import { WagmiProvider } from 'wagmi'
+ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+ import { ConnectKitProvider } from 'connectkit'
++import { useTheme } from './swarm/theme'
+ import { Toaster } from 'sonner'
+ import { config } from './config'
+ import App from './App'
+@@ -26,6 +27,17 @@
+ 
+ const queryClient = new QueryClient()
+ 
++function ThemedShell() {
++  const theme = useTheme()
++  return (
++    <ConnectKitProvider mode={theme}>
++      <App />
++      <StudioWatermark />
++      <Toaster position="top-center" theme={theme} />
++    </ConnectKitProvider>
++  )
++}
++
+ // Studio logo SVG
+ const StudioLogo = () => (
+   <svg width="14" height="16" viewBox="0 0 20 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+@@ -73,11 +85,7 @@
+         wagmi's own restore can hang forever on a wallet that does not answer. */}
+     <WagmiProvider config={config} reconnectOnMount={false}>
+       <QueryClientProvider client={queryClient}>
+-        <ConnectKitProvider>
+-          <App />
+-          <StudioWatermark />
+-          <Toaster position="top-center" />
+-        </ConnectKitProvider>
++        <ThemedShell />
+       </QueryClientProvider>
+     </WagmiProvider>
+   </StrictMode>,
+diff -ruN a/src/swarm/CommitFlow.tsx b/src/swarm/CommitFlow.tsx
+--- a/src/swarm/CommitFlow.tsx	2026-10-26 11:45:51.977958400 +0100
++++ b/src/swarm/CommitFlow.tsx	2026-10-26 11:45:52.385847300 +0100
+@@ -113,13 +113,13 @@
+   DealNotOpen:              'This deal is no longer open.',
+   DeadlinePassed:           'This deal has closed.',
+   UnitCapReached:           'Not enough stock left for that quantity — try fewer.',
+-  UnitsPerBuyerExceeded:    'That would exceed the per-buyer limit for this deal.',
++  UnitsPerBuyerExceeded:    'That is more than one buyer can order in this deal.',
+   BuyerCapReached:          'This deal has reached its maximum number of buyers.',
+   Blocklisted:              'This address cannot use USDC.',
+ }
+ function relayerMessage(code: string | undefined): string {
+-  if (!code) return 'The order could not be sent. You can still pay gas yourself below.'
+-  return RELAYER_MESSAGES[code] ?? 'The order could not be sent. You can still pay gas yourself below.'
++  if (!code) return 'The order could not be placed. You can pay the network fee yourself below.'
++  return RELAYER_MESSAGES[code] ?? 'The order could not be placed. You can pay the network fee yourself below.'
+ }
+ 
+ // ── Main component ────────────────────────────────────────────────────────────
+@@ -340,7 +340,7 @@
+         void refetchNonce()
+         const isTopUp = myUnitsN > 0
+         setGaslessErr(
+-          `Price rose — ${isTopUp ? 'this lot' : 'order'} now costs ${formatUsdcPrice(newTotal)}. ` +
++          `Price rose — ${isTopUp ? 'these units' : 'your order'} now cost ${formatUsdcPrice(newTotal)}. ` +
+           `Sign again at the new total to continue.`
+         )
+         setGaslessStep('idle')
+@@ -362,7 +362,7 @@
+       onCommitted()
+     } catch (e: unknown) {
+       if (e instanceof WalletCannotSignError) {
+-        setGaslessErr('Your wallet could not sign a gasless order. Use "Pay gas yourself" below.')
++        setGaslessErr('Your wallet could not sign this order. Use "Pay the network fee yourself" below.')
+         setGaslessStep('error')
+         return
+       }
+@@ -504,31 +504,31 @@
+             </div>
+             <div className="text-sm space-y-0.5" style={{ color: 'var(--ink-2)' }}>
+               <p>
+-                Escrowed{' '}
++                Paid{' '}
+                 <span className="font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
+                   {formatUsdcPrice(myEscrow)}
+                 </span>
+                 <span style={{ color: 'var(--muted)' }}>
+-                  {' '}(avg {formatUsdcPrice(avgPricePaid)}/unit)
++                  {' '}(avg {formatUsdcPrice(avgPricePaid)} each)
+                 </span>
+               </p>
+               {pendingRefund > 0n && (
+                 <p>
+-                  Refund at settlement:{' '}
++                  Coming back to you at the current price:{' '}
+                   <span className="font-bold tabular-nums" style={{ color: 'var(--success)' }}>
+                     {formatUsdcPrice(pendingRefund)}
+                   </span>
+                   <span style={{ color: 'var(--muted)' }}>
+-                    {' '}at {formatUsdcPrice(clearingPrice)}/unit
++                    {' '}({formatUsdcPrice(clearingPrice)} each)
+                   </span>
+                 </p>
+               )}
+               <p style={{ color: 'var(--muted)' }}>
+-                You&#39;ll receive{' '}
++                You'll receive{' '}
+                 <span className="font-semibold" style={{ color: 'var(--ink-2)' }}>
+                   {(BigInt(myUnitsN) * tokensPerUnit).toString()} {goodsSymbol}
+                 </span>{' '}
+-                at settlement.
++                when the deal closes.
+               </p>
+             </div>
+           </motion.div>
+@@ -547,13 +547,13 @@
+                 <CheckCircle className="size-4 shrink-0" style={{ color: 'var(--success)' }} />
+                 <div className="flex-1 min-w-0">
+                   <span className="text-sm" style={{ color: 'var(--success)' }}>
+-                    {isCommitted ? 'Lot added' : 'Ordered'}
+-                    {!useGasless && ' — two confirmations done'}
+-                    {useGasless && gaslessPricePaid !== null && ` for ${formatUsdcPrice(gaslessPricePaid)}/unit`}
++                    {isCommitted ? 'Added to your order' : 'Order placed'}
++                    
++                    {useGasless && gaslessPricePaid !== null && ` at ${formatUsdcPrice(gaslessPricePaid)} each`}
+                   </span>
+                   {useGasless && gaslessExcess !== null && gaslessExcess > 0n && (
+                     <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+-                      {formatUsdcPrice(gaslessExcess)} credited back (price fell before landing)
++                      {formatUsdcPrice(gaslessExcess)} to collect: the price dropped while your order went through
+                     </p>
+                   )}
+                 </div>
+@@ -581,10 +581,10 @@
+                     <Loader2 className="size-4 animate-spin shrink-0" style={{ color: 'var(--accent)' }} />
+                     <span className="text-sm" style={{ color: 'var(--ink-2)' }}>
+                       {gaslessStep === 'signing'           ? 'Sign in your wallet…'
+-                        : gaslessStep === 'submitting'     ? 'Submitting via relayer…'
+-                        : commitStep  === 'approving'      ? 'Confirm approval in wallet…'
+-                        : commitStep  === 'approve-confirming' ? 'Confirming approval…'
+-                        : commitStep  === 'committing'     ? 'Confirm order in wallet…'
++                        : gaslessStep === 'submitting'     ? 'Placing your order…'
++                        : commitStep  === 'approving'      ? 'Allow USDC in your wallet…'
++                        : commitStep  === 'approve-confirming' ? 'Waiting for confirmation…'
++                        : commitStep  === 'committing'     ? 'Confirm the order in your wallet…'
+                         : 'Confirming order…'}
+                     </span>
+                   </div>
+@@ -642,8 +642,8 @@
+                         ? <span className="flex items-center justify-center gap-2">
+                             {isCommitted ? <PackagePlus className="size-4" /> : <Zap className="size-4" />}
+                             {isCommitted
+-                              ? `Add ${orderUnits} unit${orderUnits !== 1 ? 's' : ''} gaslessly for ${formatUsdcPrice(totalToSign)}`
+-                              : `Order ${orderUnits} unit${orderUnits !== 1 ? 's' : ''} gaslessly for ${formatUsdcPrice(totalToSign)}`}
++                              ? `Add ${orderUnits} unit${orderUnits !== 1 ? 's' : ''} for ${formatUsdcPrice(totalToSign)}`
++                              : `Order ${orderUnits} unit${orderUnits !== 1 ? 's' : ''} for ${formatUsdcPrice(totalToSign)}`}
+                           </span>
+                         : isCommitted
+                           ? <span className="flex items-center justify-center gap-2">
+@@ -661,8 +661,8 @@
+                     className="w-full text-sm py-1.5 font-medium underline-offset-2 hover:underline transition-all"
+                     style={{ color: 'var(--muted)' }}>
+                     {useGasless
+-                      ? 'Pay the gas yourself instead (two confirmations)'
+-                      : 'Order gaslessly instead (no gas prompt)'}
++                      ? 'Pay the network fee yourself instead'
++                      : 'Use fee-free ordering instead'}
+                   </button>
+                 )}
+               </>
+@@ -678,8 +678,8 @@
+             <div className="rounded-2xl p-3 text-center text-sm"
+               style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
+               {maxUnitsPerBuyer > 0
+-                ? `You&#39;ve reached the per-buyer limit of ${maxUnitsPerBuyer} unit${maxUnitsPerBuyer !== 1 ? 's' : ''}.`
+-                : 'No stock remaining.'}
++                ? `You've ordered the maximum of ${maxUnitsPerBuyer} unit${maxUnitsPerBuyer !== 1 ? 's' : ''} per buyer for this deal.`
++                : 'Sold out.'}
+             </div>
+           </motion.div>
+         )}
+@@ -721,7 +721,7 @@
+                 <div className="flex items-center gap-1.5">
+                   <ArrowDownLeft className="size-3.5" style={{ color: 'var(--muted)' }} />
+                   <span className="text-xs font-semibold" style={{ color: 'var(--muted)' }}>
+-                    Withdraw from order
++                    Reduce or cancel your order
+                   </span>
+                 </div>
+ 
+@@ -754,7 +754,7 @@
+                 <div className="flex items-baseline justify-between border-t pt-2"
+                   style={{ borderColor: 'var(--border)' }}>
+                   <span className="text-xs" style={{ color: 'var(--muted)' }}>
+-                    {withdrawUnits === myUnitsN ? 'Full escrow returned' : 'USDC returned'}
++                    {withdrawUnits === myUnitsN ? 'You get back' : 'You get back'}
+                   </span>
+                   <span className="text-lg font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
+                     {formatUsdcPrice(withdrawReturn)}
+@@ -790,8 +790,8 @@
+                           <Loader2 className="size-4 animate-spin" /> Confirming…
+                         </span>
+                       : withdrawUnits === myUnitsN
+-                        ? 'Withdraw entire order'
+-                        : `Withdraw ${withdrawUnits} unit${withdrawUnits !== 1 ? 's' : ''}`}
++                        ? 'Cancel my whole order'
++                        : `Remove ${withdrawUnits} unit${withdrawUnits !== 1 ? 's' : ''}`}
+                   </button>
+                 )}
+ 
+@@ -850,11 +850,11 @@
+         {isTopUp
+           ? <><PackagePlus className="size-3.5" style={{ color: 'var(--accent)' }} />
+               <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>
+-                Add to your order{badge === 'gasless' ? ' · gasless' : ''}
++                Add to your order{badge === 'gasless' ? ' · no network fee' : ''}
+               </span></>
+           : badge === 'gasless'
+             ? <><Zap className="size-3.5" style={{ color: 'var(--accent)' }} />
+-                <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Gasless order</span></>
++                <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>No network fee</span></>
+             : null}
+       </div>
+ 
+@@ -902,8 +902,8 @@
+           </span>
+         </div>
+         <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
+-          You&#39;ll receive {tokensReceived.toString()} {goodsSymbol}
+-          {badge === 'gasless' ? ' · Sign once, no gas prompt' : ''}
++          You'll receive {tokensReceived.toString()} {goodsSymbol}
++          {badge === 'gasless' ? ' · one signature, nothing else to pay' : ''}
+         </p>
+         {breaksTier && (
+           <p className="text-xs mt-1 font-medium" style={{ color: 'var(--accent)' }}>
+diff -ruN a/src/swarm/DealRoom.tsx b/src/swarm/DealRoom.tsx
+--- a/src/swarm/DealRoom.tsx	2026-10-26 11:45:52.031554000 +0100
++++ b/src/swarm/DealRoom.tsx	2026-10-26 11:45:52.456652400 +0100
+@@ -98,9 +98,6 @@
+         }}
+         {...fadeUp}
+       >
+-        <p className="text-xs mb-1" style={{ color: 'var(--muted)' }}>
+-          Current price / unit
+-        </p>
+         <PriceHero price={clearingPrice} loading={dealLoading} />
+         <div className="mt-5 w-full">
+           <TierProgress
+@@ -326,21 +323,18 @@
+       style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}
+       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+     >
+-      <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Deadline reached</p>
+-
+-      {canSettle ? (
+-        <button onClick={() => send('settle')} disabled={busy}
+-          className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
+-          style={{ background: 'var(--accent)', color: '#fff' }}>
+-          Settle deal
+-        </button>
+-      ) : (
+-        <button onClick={() => send('refundAll')} disabled={busy}
+-          className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
+-          style={{ background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)' }}>
+-          Refund all (minimum not reached)
+-        </button>
+-      )}
++      <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>
++        {canSettle ? 'This deal closed successfully' : 'This deal closed below its minimum'}
++      </p>
++      <p className="text-sm" style={{ color: 'var(--muted)' }}>
++        {canSettle
++          ? 'It is being finalised automatically, usually within a minute. You can then collect your items or payment here.'
++          : 'Everyone is being refunded automatically, usually within a minute. Your USDC will then be ready to collect here.'}
++      </p>
++      <button onClick={() => send(canSettle ? 'settle' : 'refundAll')} disabled={busy}
++        className="text-xs underline underline-offset-2 disabled:opacity-40" style={{ color: 'var(--muted)' }}>
++        Taking too long? Finalise it yourself
++      </button>
+ 
+       {claimableN > 0n && (
+         <button onClick={() => send('claim')} disabled={busy}
+diff -ruN a/src/swarm/HomePage.tsx b/src/swarm/HomePage.tsx
+--- a/src/swarm/HomePage.tsx	1970-01-01 01:00:00.000000000 +0100
++++ b/src/swarm/HomePage.tsx	2026-10-26 11:45:52.511650800 +0100
+@@ -0,0 +1,166 @@
++import { useState } from 'react'
++import { motion, AnimatePresence } from 'framer-motion'
++import { useSwarmStats } from './useSwarmStats'
++import { formatUsdcPrice } from './utils'
++import { Users, TrendingDown, PackageCheck, ShieldCheck, Undo2, Zap, ChevronDown, ArrowRight } from 'lucide-react'
++
++interface Props {
++  onBrowse: () => void
++  onSell: () => void
++}
++
++const STEPS = [
++  { Icon: Users,        title: 'Join a deal',          body: 'Pick how many you want and place your order in USDC. One signature, no network fee.' },
++  { Icon: TrendingDown, title: 'The price drops',      body: 'Every order brings the price down for everyone in the deal, including the people who joined first.' },
++  { Icon: PackageCheck, title: 'Collect when it closes', body: 'When the timer ends, everyone pays the same final price. Collect your items and any difference you overpaid.' },
++]
++
++const PROMISES = [
++  { Icon: ShieldCheck, title: 'Your money is never held by us', body: 'Payments sit in a public smart contract until the deal closes. Anyone can check every deal on the Proof page.' },
++  { Icon: Undo2,       title: 'Full refund if a deal falls short', body: 'If a deal doesn’t reach its minimum, everyone gets all of their money back.' },
++  { Icon: Zap,         title: 'Nothing to babysit', body: 'Deals close by themselves when the timer ends. You just come back and collect.' },
++]
++
++const FAQ = [
++  { q: 'How is the final price decided?',
++    a: 'Each deal has price levels set by the seller, for example $0.30 each, then $0.20 once 10 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },
++  { q: 'What do I need to order?',
++    a: 'A crypto wallet with USDC on Arc. Ordering takes one signature in your wallet. There is no separate network fee to pay.' },
++  { q: 'Can I change my mind?',
++    a: 'Yes. While a deal is open you can add more, remove some units or cancel your whole order, and the money goes straight back to your wallet. The one exception: you can’t cancel if it would push the price back up above what another buyer has already paid.' },
++  { q: 'What happens if not enough people join?',
++    a: 'Every deal has a minimum. If it isn’t reached by the deadline, the deal is cancelled and everyone is refunded in full. The seller gets their items back.' },
++  { q: 'When do I get my items?',
++    a: 'As soon as the deal closes, usually within a minute of the deadline. A banner at the top of the site shows anything waiting for you, with a button to collect it.' },
++  { q: 'How do I sell on Swarm?',
++    a: 'Go to Sell, choose the token you are offering, set your price levels, minimum and deadline, and post the deal. Your stock is held by the contract and anything unsold comes back to you. Your earnings are ready to collect when the deal closes.' },
++]
++
++const fade = { initial: { opacity: 0, y: 10 }, whileInView: { opacity: 1, y: 0 }, viewport: { once: true }, transition: { duration: 0.35 } }
++
++export function HomePage({ onBrowse, onSell }: Props) {
++  const [open, setOpen] = useState<number | null>(0)
++  const stats = useSwarmStats()
++  const STATS = [
++    { label: 'Volume',            value: stats && formatUsdcPrice(stats.volume) },
++    { label: 'Saved by buyers',   value: stats && formatUsdcPrice(stats.saved) },
++    { label: 'Units sold',        value: stats && stats.units.toLocaleString('en-US') },
++    { label: 'Buyers',            value: stats && stats.buyers.toLocaleString('en-US') },
++    { label: 'Deals',             value: stats && stats.deals.toLocaleString('en-US') },
++  ]
++
++  return (
++    <div className="px-4 pb-16">
++      {/* Hero */}
++      <section className="pt-12 pb-10 sm:pt-16 text-center">
++        <motion.h1 {...fade} className="display text-4xl sm:text-5xl font-bold leading-tight" style={{ color: 'var(--ink)' }}>
++          Buy together.<br />Pay less.
++        </motion.h1>
++        <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}
++          className="mt-4 text-base sm:text-lg max-w-md mx-auto" style={{ color: 'var(--muted)' }}>
++          Join group deals where every order lowers the price for everyone, including you.
++        </motion.p>
++        <motion.div {...fade} transition={{ duration: 0.35, delay: 0.1 }}
++          className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">
++          <button onClick={onBrowse}
++            className="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-90"
++            style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
++            Browse deals <ArrowRight className="size-4" />
++          </button>
++          <button onClick={onSell}
++            className="rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-80"
++            style={{ color: 'var(--ink)', border: '1px solid var(--border)', background: 'var(--surface)' }}>
++            Sell on Swarm
++          </button>
++        </motion.div>
++      </section>
++
++      {/* Live stats */}
++      <motion.section {...fade} aria-label="Swarm in numbers"
++        className="rounded-2xl grid grid-cols-2 sm:grid-cols-5 overflow-hidden"
++        style={{ background: 'var(--border)', gap: 1, border: '1px solid var(--border)' }}>
++        {STATS.map(({ label, value }, i) => (
++          <div key={label} className={"px-3 py-4 text-center" + (i === 0 ? ' col-span-2 sm:col-span-1' : '')}
++            style={{ background: 'var(--surface-strong)' }}>
++            <p className="display text-xl sm:text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
++              {value ?? <span className="inline-block w-14 h-6 rounded-md animate-pulse align-middle" style={{ background: 'var(--surface-muted)' }} />}
++            </p>
++            <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>{label}</p>
++          </div>
++        ))}
++      </motion.section>
++      <p className="text-xs text-center mt-2" style={{ color: 'var(--subtle)' }}>Live from the blockchain, updated every few seconds.</p>
++
++      {/* How it works */}
++      <section className="py-8">
++        <h2 className="display text-xl font-bold mb-4" style={{ color: 'var(--ink)' }}>How it works</h2>
++        <div className="grid gap-3 sm:grid-cols-3">
++          {STEPS.map(({ Icon, title, body }, i) => (
++            <motion.div key={title} {...fade} transition={{ duration: 0.35, delay: i * 0.06 }}
++              className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
++              <div className="flex items-center gap-2 mb-2">
++                <span className="size-7 rounded-lg flex items-center justify-center text-xs font-bold"
++                  style={{ background: 'var(--surface-muted)', color: 'var(--ink)' }}>{i + 1}</span>
++                <Icon className="size-4" style={{ color: 'var(--accent-hover)' }} />
++              </div>
++              <p className="font-semibold text-sm" style={{ color: 'var(--ink)' }}>{title}</p>
++              <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>{body}</p>
++            </motion.div>
++          ))}
++        </div>
++      </section>
++
++      {/* Promises */}
++      <section className="py-8">
++        <h2 className="display text-xl font-bold mb-4" style={{ color: 'var(--ink)' }}>Built to be fair</h2>
++        <div className="space-y-3">
++          {PROMISES.map(({ Icon, title, body }) => (
++            <motion.div key={title} {...fade} className="flex gap-3 rounded-2xl p-4"
++              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
++              <Icon className="size-5 shrink-0 mt-0.5" style={{ color: 'var(--success)' }} />
++              <div>
++                <p className="font-semibold text-sm" style={{ color: 'var(--ink)' }}>{title}</p>
++                <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>{body}</p>
++              </div>
++            </motion.div>
++          ))}
++        </div>
++      </section>
++
++      {/* FAQ */}
++      <section className="py-8">
++        <h2 className="display text-xl font-bold mb-4" style={{ color: 'var(--ink)' }}>Questions</h2>
++        <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}>
++          {FAQ.map(({ q, a }, i) => (
++            <div key={q} style={{ borderTop: i ? '1px solid var(--border)' : undefined }}>
++              <button onClick={() => setOpen(open === i ? null : i)} aria-expanded={open === i}
++                className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left text-sm font-semibold"
++                style={{ color: 'var(--ink)' }}>
++                {q}
++                <ChevronDown className="size-4 shrink-0 transition-transform"
++                  style={{ color: 'var(--muted)', transform: open === i ? 'rotate(180deg)' : undefined }} />
++              </button>
++              <AnimatePresence initial={false}>
++                {open === i && (
++                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
++                    exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
++                    <p className="px-4 pb-4 text-sm" style={{ color: 'var(--muted)' }}>{a}</p>
++                  </motion.div>
++                )}
++              </AnimatePresence>
++            </div>
++          ))}
++        </div>
++      </section>
++
++      {/* Closing CTA */}
++      <section className="pt-6 text-center">
++        <button onClick={onBrowse}
++          className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-90"
++          style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
++          See what’s live <ArrowRight className="size-4" />
++        </button>
++      </section>
++    </div>
++  )
++}
+diff -ruN a/src/swarm/PriceHero.tsx b/src/swarm/PriceHero.tsx
+--- a/src/swarm/PriceHero.tsx	2026-10-26 11:45:52.110549700 +0100
++++ b/src/swarm/PriceHero.tsx	2026-10-26 11:45:52.556652800 +0100
+@@ -45,7 +45,7 @@
+         className="text-xs font-semibold tracking-widest uppercase mb-2"
+         style={{ color: 'var(--muted)' }}
+       >
+-        Current price
++        Current price each
+       </span>
+ 
+       <motion.div
+diff -ruN a/src/swarm/ProofPage.tsx b/src/swarm/ProofPage.tsx
+--- a/src/swarm/ProofPage.tsx	2026-10-26 11:45:52.115549000 +0100
++++ b/src/swarm/ProofPage.tsx	2026-10-26 11:45:52.560652500 +0100
+@@ -10,6 +10,7 @@
+  *   refunded: full stock returned to supplier
+  */
+ 
++import { useState } from 'react'
+ import { motion } from 'framer-motion'
+ import { Play, Square, ExternalLink, CheckCircle, XCircle } from 'lucide-react'
+ import { useEventLog } from './useEventLog'
+@@ -20,6 +21,9 @@
+ 
+ export function ProofPage() {
+   const { events, scanState, progress, error, stats, scan, stop } = useEventLog()
++  const [dealsShown, setDealsShown] = useState(5)
++  const [eventsShown, setEventsShown] = useState(20)
++  const dealsNewestFirst = Array.from(stats.deals.values()).sort((a, b) => Number(b.dealId) - Number(a.dealId))
+ 
+   const pct = progress.total > 0n
+     ? Math.min(100, Math.round(Number((progress.scanned * 100n) / progress.total)))
+@@ -31,13 +35,10 @@
+     <div className="w-full max-w-2xl mx-auto px-4 pb-12 space-y-6">
+       <motion.div {...fadeUp} className="pt-6">
+         <h1 className="display text-2xl font-bold" style={{ color: 'var(--ink)', letterSpacing: '-0.03em' }}>
+-          Conservation proof
++          Every deal, accounted for
+         </h1>
+         <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
+-          Events read live from {ARC_NETWORK.name}.{' '}
+-          USDC: commits in = supplier credited + refunds.{' '}
+-          Goods: units delivered tracked from settlement events.{' '}
+-          Verified to the wei.
++          Every payment, refund and payout, read live from {ARC_NETWORK.name}. For each closed deal, the money paid in equals what the seller received plus what buyers got back, to the last cent.
+         </p>
+       </motion.div>
+ 
+@@ -87,14 +88,14 @@
+           className="grid grid-cols-2 gap-3"
+         >
+           {[
+-            { label: 'USDC committed (net)',  value: formatUsdcPrice(stats.totalCommits) },
++            { label: 'USDC paid in (net)',  value: formatUsdcPrice(stats.totalCommits) },
+             { label: 'USDC refunded',         value: formatUsdcPrice(stats.totalRefunds) },
+             { label: 'Excess credited',        value: formatUsdcPrice(stats.totalExcess) },
+             { label: 'USDC claimed',           value: formatUsdcPrice(stats.totalClaimed) },
+             { label: 'Units sold (settled)',   value: stats.totalUnitsSold.toString() },
+             { label: 'Distinct buyers',        value: stats.distinctBuyers.size.toString() },
+             { label: 'Tier breaks',            value: stats.tierBreaks.toString() },
+-            { label: 'Goods base units claimed', value: stats.totalGoodsClaimed.toString() },
++            { label: 'Items collected', value: stats.totalGoodsClaimed.toString() },
+           ].map(({ label, value }) => (
+             <div key={label} className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+               <p className="text-xs" style={{ color: 'var(--muted)' }}>{label}</p>
+@@ -116,7 +117,7 @@
+             </span>
+           </div>
+           <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+-            {Array.from(stats.deals.values()).map(deal => (
++            {dealsNewestFirst.slice(0, dealsShown).map(deal => (
+               <div key={deal.dealId} className="px-4 py-3 space-y-2">
+                 {/* Deal header */}
+                 <div className="flex items-center justify-between">
+@@ -128,7 +129,7 @@
+                     style={{
+                       background: deal.settled  ? 'rgba(26,128,71,0.1)'
+                                 : deal.refunded ? 'rgba(107,101,128,0.1)'
+-                                : 'rgba(18,45,69,0.08)',
++                                : 'var(--surface-muted)',
+                       color: deal.settled  ? 'var(--success)'
+                            : deal.refunded ? 'var(--muted)'
+                            : 'var(--subtle)',
+@@ -143,7 +144,7 @@
+                   <p className="text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>USDC</p>
+                   <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4" style={{ color: 'var(--muted)' }}>
+                     <div>
+-                      <p>Commits in</p>
++                      <p>Paid in</p>
+                       <p className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.commitsIn)}</p>
+                     </div>
+                     {deal.excessIn > 0n && (
+@@ -153,7 +154,7 @@
+                       </div>
+                     )}
+                     <div>
+-                      <p>Supplier</p>
++                      <p>Seller</p>
+                       <p className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.supplierCredited)}</p>
+                     </div>
+                     <div>
+@@ -183,6 +184,13 @@
+               </div>
+             ))}
+           </div>
++          {dealsNewestFirst.length > dealsShown && (
++            <button onClick={() => setDealsShown((n) => n + 10)}
++              className="w-full py-3 text-sm font-medium transition-all hover:opacity-70"
++              style={{ color: 'var(--accent-hover)', borderTop: '1px solid var(--border)' }}>
++              Show older deals ({dealsNewestFirst.length - dealsShown} more)
++            </button>
++          )}
+         </motion.div>
+       )}
+ 
+@@ -198,7 +206,7 @@
+             </span>
+           </div>
+           <div className="overflow-y-auto" style={{ maxHeight: 480 }}>
+-            {events.slice().reverse().map((ev, i) => (
++            {events.slice().reverse().slice(0, eventsShown).map((ev, i) => (
+               <div
+                 key={`${ev.txHash}-${ev.logIndex}`}
+                 className="flex items-start gap-3 px-4 py-2.5"
+@@ -224,6 +232,13 @@
+               </div>
+             ))}
+           </div>
++          {events.length > eventsShown && (
++            <button onClick={() => setEventsShown((n) => n + 50)}
++              className="w-full py-3 text-sm font-medium transition-all hover:opacity-70"
++              style={{ color: 'var(--accent-hover)', borderTop: '1px solid var(--border)' }}>
++              Show older events ({events.length - eventsShown} more)
++            </button>
++          )}
+         </motion.div>
+       )}
+     </div>
+@@ -233,7 +248,7 @@
+ // ── Event badge ───────────────────────────────────────────────────────────────
+ 
+ const EVENT_COLORS: Record<string, string> = {
+-  DealPosted:     '#122d45',
++  DealPosted:     'var(--ink)',
+   Committed:      '#1a8047',
+   Withdrawn:      '#6b6580',
+   TierBroken:     '#1061a6',
+diff -ruN a/src/swarm/RetiredClaims.tsx b/src/swarm/RetiredClaims.tsx
+--- a/src/swarm/RetiredClaims.tsx	1970-01-01 01:00:00.000000000 +0100
++++ b/src/swarm/RetiredClaims.tsx	2026-10-26 11:45:52.581653900 +0100
+@@ -0,0 +1,58 @@
++import { useState, useEffect } from 'react'
++import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
++import { Loader2, Archive } from 'lucide-react'
++import { ARC_NETWORK, ARC_TX_FEES, RETIRED_SETTLERS } from './config'
++import { formatUsdcPrice } from './utils'
++
++const CLAIM_ABI = [
++  { type: 'function', name: 'claimable', stateMutability: 'view', inputs: [{ name: '', type: 'address' }], outputs: [{ type: 'uint256' }] },
++  { type: 'function', name: 'claim', stateMutability: 'nonpayable', inputs: [], outputs: [] },
++] as const
++
++/**
++ * USDC still owed to the connected wallet by settler contracts from earlier
++ * testnet deployments. The app now points at newer contracts, so without this a
++ * refund or withdrawal credited by a retired deployment would be unreachable
++ * from the UI, although it is safe on chain.
++ */
++export function RetiredClaims() {
++  const { address } = useAccount()
++  const { data, refetch } = useReadContracts({
++    contracts: RETIRED_SETTLERS.map((s) => ({
++      address: s, abi: CLAIM_ABI, functionName: 'claimable' as const,
++      args: [address ?? '0x0000000000000000000000000000000000000000'] as const, chainId: ARC_NETWORK.chainId,
++    })),
++    query: { enabled: !!address && RETIRED_SETTLERS.length > 0, refetchInterval: 15_000 },
++  })
++  const owed = RETIRED_SETTLERS.map((s, i) => ({ settler: s, amount: data?.[i]?.result ?? 0n })).filter((x) => x.amount > 0n)
++
++  const { writeContract, isPending } = useWriteContract()
++  const [hash, setHash] = useState<`0x${string}` | undefined>()
++  const [target, setTarget] = useState<string | null>(null)
++  const { isSuccess } = useWaitForTransactionReceipt({ hash, chainId: ARC_NETWORK.chainId, query: { enabled: !!hash } })
++  useEffect(() => { if (isSuccess) void refetch() }, [isSuccess, refetch])
++  const busy = isPending || (!!hash && !isSuccess) ? target : null
++
++  if (!address || owed.length === 0) return null
++  const total = owed.reduce((a, x) => a + x.amount, 0n)
++
++  return (
++    <div className="rounded-2xl p-3 space-y-2" style={{ background: 'rgba(80,80,120,0.06)', border: '1px solid var(--border)' }}>
++      <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--ink)' }}>
++        <Archive className="size-4" /> {formatUsdcPrice(total)} to claim from earlier test deployments
++      </div>
++      {owed.map((x) => (
++        <button key={x.settler} disabled={busy !== null}
++          onClick={() => {
++            setTarget(x.settler)
++            writeContract({ address: x.settler, abi: CLAIM_ABI, functionName: 'claim', ...ARC_TX_FEES, chainId: ARC_NETWORK.chainId },
++              { onSuccess: (h) => setHash(h) })
++          }}
++          className="w-full rounded-xl py-2 text-sm font-semibold text-white disabled:opacity-50"
++          style={{ background: 'var(--accent)' }}>
++          {busy === x.settler ? <span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" /> Claiming…</span> : `Claim ${formatUsdcPrice(x.amount)}`}
++        </button>
++      ))}
++    </div>
++  )
++}
+diff -ruN a/src/swarm/abis.ts b/src/swarm/abis.ts
+--- a/src/swarm/abis.ts	2026-10-26 11:45:51.954959500 +0100
++++ b/src/swarm/abis.ts	2026-10-26 11:45:52.359851700 +0100
+@@ -16,13 +16,6 @@
+       { name: 'startPrice', type: 'uint64',  indexed: false },
+     ],
+   },
+-  {
+-    type: 'event', name: 'DealStateChanged',
+-    inputs: [
+-      { name: 'dealId', type: 'uint256', indexed: true },
+-      { name: 'state',  type: 'uint8',   indexed: false },
+-    ],
+-  },
+   // Read
+   {
+     type: 'function', name: 'getDeal', stateMutability: 'view',
+diff -ruN a/src/swarm/config.ts b/src/swarm/config.ts
+--- a/src/swarm/config.ts	2026-10-26 11:45:52.005963000 +0100
++++ b/src/swarm/config.ts	2026-10-26 11:45:52.413853900 +0100
+@@ -63,14 +63,14 @@
+     // Deployed and wired from a deployer wallet we control, then verified from
+     // chain: bytecode at all three, all three owner wiring calls landed,
+     // constructor links agree in both directions, USDC predeploy correct.
+-    // Swarm v2 (quantities, token delivery), deployed 24 Oct 2026 and verified:
++    // Swarm v2.2 (quantities, top-ups, partial withdrawal, token delivery), deployed 25 Oct 2026 and verified:
+     // wiring from chain, and all four contracts byte-identical to the local build.
+     // Swarm Pass has its faucet on. Earlier v1 sets are retired.
+-    DealFactory: '0xdF7ab518C23aff70ecd2Dd61e639fbEd62F2D5aD' as `0x${string}`,
+-    DemandPool:  '0x0C04e8Bf223F4C9ab45678273b8D692Ef9550B36' as `0x${string}`,
+-    Settler:     '0xfD29dd3c3003713f529912315F5e47C9c88F8DD3' as `0x${string}`,
++    DealFactory: '0xf17ee3d7920435ddc5ED2cd5e53D112758AA64d0' as `0x${string}`,
++    DemandPool:  '0x7cDcB6C4E92EAE829267C025FB9706B50F9736ae' as `0x${string}`,
++    Settler:     '0x6D4866A2bcc8a4F2Aa99eF268d420E1A3123e417' as `0x${string}`,
+     SwarmPass:   '0x28ac46d52C34a53565c481849361b8DB2cb3E4ca' as `0x${string}`,
+-    deployBlock: 68895718n,
++    deployBlock: 69088055n,
+     deployed: true,
+   },
+ } as const
+@@ -117,3 +117,15 @@
+   maxFeePerGas: 50_000_000_000n,        // 50 gwei cap, well above the 20 gwei floor
+   maxPriorityFeePerGas: 1_000_000_000n, // 1 gwei
+ } as const
++
++/**
++ * Settlers from earlier testnet deployments that may still owe a user USDC
++ * (refunds or withdrawals credited before a redeploy). The app shows a claim for
++ * any balance left on them. Empty on mainnet.
++ */
++export const RETIRED_SETTLERS: readonly `0x${string}`[] = ACTIVE_NETWORK === 'testnet'
++  ? [
++      '0x3091FBDc63c96fA37e9f29df5F10B66F47044F44', // v2.1, 25 Oct
++      '0xfD29dd3c3003713f529912315F5e47C9c88F8DD3', // v2,   24 Oct
++    ]
++  : []
+diff -ruN a/src/swarm/theme.ts b/src/swarm/theme.ts
+--- a/src/swarm/theme.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/src/swarm/theme.ts	2026-10-26 11:45:52.617689500 +0100
+@@ -0,0 +1,32 @@
++import { useSyncExternalStore } from 'react'
++
++export type Theme = 'light' | 'dark'
++const KEY = 'swarm-theme'
++
++function initial(): Theme {
++  try {
++    const saved = localStorage.getItem(KEY)
++    if (saved === 'light' || saved === 'dark') return saved
++  } catch { /* storage blocked */ }
++  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
++}
++
++let current: Theme = initial()
++const listeners = new Set<() => void>()
++function apply() {
++  document.documentElement.dataset.theme = current
++  document.documentElement.style.colorScheme = current
++}
++apply()
++
++export function toggleTheme() {
++  current = current === 'dark' ? 'light' : 'dark'
++  try { localStorage.setItem(KEY, current) } catch { /* storage blocked */ }
++  apply()
++  listeners.forEach((l) => l())
++}
++
++/** Light/dark preference: follows the system until the user picks one, then remembers it. */
++export function useTheme(): Theme {
++  return useSyncExternalStore((l) => { listeners.add(l); return () => listeners.delete(l) }, () => current)
++}
+diff -ruN a/src/swarm/useSwarmStats.ts b/src/swarm/useSwarmStats.ts
+--- a/src/swarm/useSwarmStats.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/src/swarm/useSwarmStats.ts	2026-10-26 11:45:52.673750800 +0100
+@@ -0,0 +1,50 @@
++import { useMemo } from 'react'
++import { useReadContracts } from 'wagmi'
++import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'
++import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'
++import { useDealCount } from './hooks'
++import { computePriceAt } from './utils'
++
++export interface SwarmStats {
++  volume:   bigint   // USDC (6 dp): units × price, settled deals plus open orders at today's price
++  saved:    bigint   // USDC (6 dp): what buyers saved against each deal's starting price
++  units:    number
++  buyers:   number   // unique wallets
++  deals:    number
++}
++
++/** Headline numbers for the homepage, read live from the contracts. Refunded deals count as no volume. */
++export function useSwarmStats(): SwarmStats | undefined {
++  const { data: countRaw } = useDealCount()
++  const count = countRaw !== undefined ? Number(countRaw) : 0
++  const ids = useMemo(() => Array.from({ length: count }, (_, i) => BigInt(i + 1)), [count])
++  const chainId = ARC_NETWORK.chainId
++  const q = { enabled: count > 0, refetchInterval: 15_000 }
++
++  const { data: deals } = useReadContracts({ query: q, contracts: ids.map((id) => ({
++    address: CONTRACTS_ACTIVE.DealFactory, abi: DEAL_FACTORY_ABI, functionName: 'getDeal' as const, args: [id] as const, chainId })) })
++  const { data: units } = useReadContracts({ query: q, contracts: ids.map((id) => ({
++    address: CONTRACTS_ACTIVE.DemandPool, abi: DEMAND_POOL_ABI, functionName: 'totalUnits' as const, args: [id] as const, chainId })) })
++  const { data: buyers } = useReadContracts({ query: q, contracts: ids.map((id) => ({
++    address: CONTRACTS_ACTIVE.DemandPool, abi: DEMAND_POOL_ABI, functionName: 'getBuyers' as const, args: [id] as const, chainId })) })
++
++  return useMemo(() => {
++    if (countRaw === undefined) return undefined
++    if (count > 0 && (!deals || !units || !buyers)) return undefined
++    const s: SwarmStats = { volume: 0n, saved: 0n, units: 0, buyers: 0, deals: count }
++    const wallets = new Set<string>()
++    ids.forEach((_, i) => {
++      const d = deals?.[i]?.result
++      const n = Number(units?.[i]?.result ?? 0)
++      if (!d || d.state === 2 || n === 0) return
++      const tiers = d.tiers.map((t) => ({ minUnits: Number(t.minUnits), pricePerUnit: BigInt(t.pricePerUnit) }))
++      const price = computePriceAt(tiers, n)
++      s.volume += price * BigInt(n)
++      if (tiers.length) s.saved += (tiers[0].pricePerUnit - price) * BigInt(n)
++      s.units += n
++      for (const b of (buyers?.[i]?.result ?? []) as readonly string[]) wallets.add(b.toLowerCase())
++    })
++    s.buyers = wallets.size
++    return s
++  }, [countRaw, count, ids, deals, units, buyers])
++}
+diff -ruN a/src/swarm/utils.ts b/src/swarm/utils.ts
+--- a/src/swarm/utils.ts	2026-10-26 11:45:52.222088600 +0100
++++ b/src/swarm/utils.ts	2026-10-26 11:45:52.677756200 +0100
+@@ -174,8 +174,8 @@
+ /** Parse a Solidity revert error name from a wagmi error message */
+ export function parseRevertReason(error: unknown): string {
+   const msg = (error as { message?: string })?.message ?? ''
+-  if (msg.includes('WouldStrandBuyer'))       return 'Withdrawal would strand another buyer'
+-  if (msg.includes('WithdrawInvalidUnits'))   return 'Invalid withdrawal quantity'
++  if (msg.includes('WouldStrandBuyer'))       return 'Removing these units would raise the price above what another buyer paid'
++  if (msg.includes('WithdrawInvalidUnits'))   return 'Choose between 1 and the number of units you hold'
+   if (msg.includes('DeadlinePassed'))         return 'The deadline has passed'
+   if (msg.includes('DeadlineNotReached'))     return 'The deadline has not passed yet'
+   if (msg.includes('MinUnitsNotMet'))         return 'Minimum units not reached'

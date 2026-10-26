@@ -7,13 +7,13 @@
 // the totals each account is owed across all three deals, and checks the
 // contracts end empty.
 
-import {
+import { chain,
   SETTLER, SETTLER_ABI, usd, fmt, supplier, buyers, makeRecorder, events, claimAll, checkEmpty, pub, chainNow, read, FACTORY, FACTORY_ABI, waitForDeadline,
 } from './lib-v2.mjs';
 
 const rec = makeRecorder('finish-v2-run');
 const [b1, b2, b3, b4, b5, b6] = buyers;
-if ((await pub.getChainId()) !== 5042002) throw new Error('not testnet');
+if ((await pub.getChainId()) !== chain.id) throw new Error('wrong chain');
 
 const state = async (id) => Number((await read(FACTORY, FACTORY_ABI, 'getDeal', [id])).state);
 const deal3 = await read(FACTORY, FACTORY_ABI, 'getDeal', [3n]);
