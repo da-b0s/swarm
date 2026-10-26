@@ -10,6 +10,7 @@
  *   refunded: full stock returned to supplier
  */
 
+import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Play, Square, ExternalLink, CheckCircle, XCircle } from 'lucide-react'
 import { useEventLog } from './useEventLog'
@@ -20,6 +21,9 @@ const fadeUp = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, t
 
 export function ProofPage() {
   const { events, scanState, progress, error, stats, scan, stop } = useEventLog()
+  const [dealsShown, setDealsShown] = useState(5)
+  const [eventsShown, setEventsShown] = useState(20)
+  const dealsNewestFirst = Array.from(stats.deals.values()).sort((a, b) => Number(b.dealId) - Number(a.dealId))
 
   const pct = progress.total > 0n
     ? Math.min(100, Math.round(Number((progress.scanned * 100n) / progress.total)))
@@ -31,13 +35,10 @@ export function ProofPage() {
     <div className="w-full max-w-2xl mx-auto px-4 pb-12 space-y-6">
       <motion.div {...fadeUp} className="pt-6">
         <h1 className="display text-2xl font-bold" style={{ color: 'var(--ink)', letterSpacing: '-0.03em' }}>
-          Conservation proof
+          Every deal, accounted for
         </h1>
         <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
-          Events read live from {ARC_NETWORK.name}.{' '}
-          USDC: commits in = supplier credited + refunds.{' '}
-          Goods: units delivered tracked from settlement events.{' '}
-          Verified to the wei.
+          Every payment, refund and payout, read live from {ARC_NETWORK.name}. For each closed deal, the money paid in equals what the seller received plus what buyers got back, to the last cent.
         </p>
       </motion.div>
 
@@ -87,14 +88,14 @@ export function ProofPage() {
           className="grid grid-cols-2 gap-3"
         >
           {[
-            { label: 'USDC committed (net)',  value: formatUsdcPrice(stats.totalCommits) },
+            { label: 'USDC paid in (net)',  value: formatUsdcPrice(stats.totalCommits) },
             { label: 'USDC refunded',         value: formatUsdcPrice(stats.totalRefunds) },
             { label: 'Excess credited',        value: formatUsdcPrice(stats.totalExcess) },
             { label: 'USDC claimed',           value: formatUsdcPrice(stats.totalClaimed) },
             { label: 'Units sold (settled)',   value: stats.totalUnitsSold.toString() },
             { label: 'Distinct buyers',        value: stats.distinctBuyers.size.toString() },
             { label: 'Tier breaks',            value: stats.tierBreaks.toString() },
-            { label: 'Goods base units claimed', value: stats.totalGoodsClaimed.toString() },
+            { label: 'Items collected', value: stats.totalGoodsClaimed.toString() },
           ].map(({ label, value }) => (
             <div key={label} className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
               <p className="text-xs" style={{ color: 'var(--muted)' }}>{label}</p>
@@ -116,7 +117,7 @@ export function ProofPage() {
             </span>
           </div>
           <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-            {Array.from(stats.deals.values()).map(deal => (
+            {dealsNewestFirst.slice(0, dealsShown).map(deal => (
               <div key={deal.dealId} className="px-4 py-3 space-y-2">
                 {/* Deal header */}
                 <div className="flex items-center justify-between">
@@ -128,7 +129,7 @@ export function ProofPage() {
                     style={{
                       background: deal.settled  ? 'rgba(26,128,71,0.1)'
                                 : deal.refunded ? 'rgba(107,101,128,0.1)'
-                                : 'rgba(18,45,69,0.08)',
+                                : 'var(--surface-muted)',
                       color: deal.settled  ? 'var(--success)'
                            : deal.refunded ? 'var(--muted)'
                            : 'var(--subtle)',
@@ -143,7 +144,7 @@ export function ProofPage() {
                   <p className="text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>USDC</p>
                   <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4" style={{ color: 'var(--muted)' }}>
                     <div>
-                      <p>Commits in</p>
+                      <p>Paid in</p>
                       <p className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.commitsIn)}</p>
                     </div>
                     {deal.excessIn > 0n && (
@@ -153,7 +154,7 @@ export function ProofPage() {
                       </div>
                     )}
                     <div>
-                      <p>Supplier</p>
+                      <p>Seller</p>
                       <p className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{formatUsdcPrice(deal.supplierCredited)}</p>
                     </div>
                     <div>
@@ -183,6 +184,13 @@ export function ProofPage() {
               </div>
             ))}
           </div>
+          {dealsNewestFirst.length > dealsShown && (
+            <button onClick={() => setDealsShown((n) => n + 10)}
+              className="w-full py-3 text-sm font-medium transition-all hover:opacity-70"
+              style={{ color: 'var(--accent-hover)', borderTop: '1px solid var(--border)' }}>
+              Show older deals ({dealsNewestFirst.length - dealsShown} more)
+            </button>
+          )}
         </motion.div>
       )}
 
@@ -198,7 +206,7 @@ export function ProofPage() {
             </span>
           </div>
           <div className="overflow-y-auto" style={{ maxHeight: 480 }}>
-            {events.slice().reverse().map((ev, i) => (
+            {events.slice().reverse().slice(0, eventsShown).map((ev, i) => (
               <div
                 key={`${ev.txHash}-${ev.logIndex}`}
                 className="flex items-start gap-3 px-4 py-2.5"
@@ -224,6 +232,13 @@ export function ProofPage() {
               </div>
             ))}
           </div>
+          {events.length > eventsShown && (
+            <button onClick={() => setEventsShown((n) => n + 50)}
+              className="w-full py-3 text-sm font-medium transition-all hover:opacity-70"
+              style={{ color: 'var(--accent-hover)', borderTop: '1px solid var(--border)' }}>
+              Show older events ({events.length - eventsShown} more)
+            </button>
+          )}
         </motion.div>
       )}
     </div>
@@ -233,7 +248,7 @@ export function ProofPage() {
 // ── Event badge ───────────────────────────────────────────────────────────────
 
 const EVENT_COLORS: Record<string, string> = {
-  DealPosted:     '#122d45',
+  DealPosted:     'var(--ink)',
   Committed:      '#1a8047',
   Withdrawn:      '#6b6580',
   TierBroken:     '#1061a6',

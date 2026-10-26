@@ -113,13 +113,13 @@ const RELAYER_MESSAGES: Record<string, string> = {
   DealNotOpen:              'This deal is no longer open.',
   DeadlinePassed:           'This deal has closed.',
   UnitCapReached:           'Not enough stock left for that quantity — try fewer.',
-  UnitsPerBuyerExceeded:    'That would exceed the per-buyer limit for this deal.',
+  UnitsPerBuyerExceeded:    'That is more than one buyer can order in this deal.',
   BuyerCapReached:          'This deal has reached its maximum number of buyers.',
   Blocklisted:              'This address cannot use USDC.',
 }
 function relayerMessage(code: string | undefined): string {
-  if (!code) return 'The order could not be sent. You can still pay gas yourself below.'
-  return RELAYER_MESSAGES[code] ?? 'The order could not be sent. You can still pay gas yourself below.'
+  if (!code) return 'The order could not be placed. You can pay the network fee yourself below.'
+  return RELAYER_MESSAGES[code] ?? 'The order could not be placed. You can pay the network fee yourself below.'
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -340,7 +340,7 @@ export function CommitFlow({
         void refetchNonce()
         const isTopUp = myUnitsN > 0
         setGaslessErr(
-          `Price rose — ${isTopUp ? 'this lot' : 'order'} now costs ${formatUsdcPrice(newTotal)}. ` +
+          `Price rose — ${isTopUp ? 'these units' : 'your order'} now cost ${formatUsdcPrice(newTotal)}. ` +
           `Sign again at the new total to continue.`
         )
         setGaslessStep('idle')
@@ -362,7 +362,7 @@ export function CommitFlow({
       onCommitted()
     } catch (e: unknown) {
       if (e instanceof WalletCannotSignError) {
-        setGaslessErr('Your wallet could not sign a gasless order. Use "Pay gas yourself" below.')
+        setGaslessErr('Your wallet could not sign this order. Use "Pay the network fee yourself" below.')
         setGaslessStep('error')
         return
       }
@@ -504,31 +504,31 @@ export function CommitFlow({
             </div>
             <div className="text-sm space-y-0.5" style={{ color: 'var(--ink-2)' }}>
               <p>
-                Escrowed{' '}
+                Paid{' '}
                 <span className="font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
                   {formatUsdcPrice(myEscrow)}
                 </span>
                 <span style={{ color: 'var(--muted)' }}>
-                  {' '}(avg {formatUsdcPrice(avgPricePaid)}/unit)
+                  {' '}(avg {formatUsdcPrice(avgPricePaid)} each)
                 </span>
               </p>
               {pendingRefund > 0n && (
                 <p>
-                  Refund at settlement:{' '}
+                  Coming back to you at the current price:{' '}
                   <span className="font-bold tabular-nums" style={{ color: 'var(--success)' }}>
                     {formatUsdcPrice(pendingRefund)}
                   </span>
                   <span style={{ color: 'var(--muted)' }}>
-                    {' '}at {formatUsdcPrice(clearingPrice)}/unit
+                    {' '}({formatUsdcPrice(clearingPrice)} each)
                   </span>
                 </p>
               )}
               <p style={{ color: 'var(--muted)' }}>
-                You&#39;ll receive{' '}
+                You'll receive{' '}
                 <span className="font-semibold" style={{ color: 'var(--ink-2)' }}>
                   {(BigInt(myUnitsN) * tokensPerUnit).toString()} {goodsSymbol}
                 </span>{' '}
-                at settlement.
+                when the deal closes.
               </p>
             </div>
           </motion.div>
@@ -547,13 +547,13 @@ export function CommitFlow({
                 <CheckCircle className="size-4 shrink-0" style={{ color: 'var(--success)' }} />
                 <div className="flex-1 min-w-0">
                   <span className="text-sm" style={{ color: 'var(--success)' }}>
-                    {isCommitted ? 'Lot added' : 'Ordered'}
-                    {!useGasless && ' — two confirmations done'}
-                    {useGasless && gaslessPricePaid !== null && ` for ${formatUsdcPrice(gaslessPricePaid)}/unit`}
+                    {isCommitted ? 'Added to your order' : 'Order placed'}
+                    
+                    {useGasless && gaslessPricePaid !== null && ` at ${formatUsdcPrice(gaslessPricePaid)} each`}
                   </span>
                   {useGasless && gaslessExcess !== null && gaslessExcess > 0n && (
                     <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                      {formatUsdcPrice(gaslessExcess)} credited back (price fell before landing)
+                      {formatUsdcPrice(gaslessExcess)} to collect: the price dropped while your order went through
                     </p>
                   )}
                 </div>
@@ -581,10 +581,10 @@ export function CommitFlow({
                     <Loader2 className="size-4 animate-spin shrink-0" style={{ color: 'var(--accent)' }} />
                     <span className="text-sm" style={{ color: 'var(--ink-2)' }}>
                       {gaslessStep === 'signing'           ? 'Sign in your wallet…'
-                        : gaslessStep === 'submitting'     ? 'Submitting via relayer…'
-                        : commitStep  === 'approving'      ? 'Confirm approval in wallet…'
-                        : commitStep  === 'approve-confirming' ? 'Confirming approval…'
-                        : commitStep  === 'committing'     ? 'Confirm order in wallet…'
+                        : gaslessStep === 'submitting'     ? 'Placing your order…'
+                        : commitStep  === 'approving'      ? 'Allow USDC in your wallet…'
+                        : commitStep  === 'approve-confirming' ? 'Waiting for confirmation…'
+                        : commitStep  === 'committing'     ? 'Confirm the order in your wallet…'
                         : 'Confirming order…'}
                     </span>
                   </div>
@@ -642,8 +642,8 @@ export function CommitFlow({
                         ? <span className="flex items-center justify-center gap-2">
                             {isCommitted ? <PackagePlus className="size-4" /> : <Zap className="size-4" />}
                             {isCommitted
-                              ? `Add ${orderUnits} unit${orderUnits !== 1 ? 's' : ''} gaslessly for ${formatUsdcPrice(totalToSign)}`
-                              : `Order ${orderUnits} unit${orderUnits !== 1 ? 's' : ''} gaslessly for ${formatUsdcPrice(totalToSign)}`}
+                              ? `Add ${orderUnits} unit${orderUnits !== 1 ? 's' : ''} for ${formatUsdcPrice(totalToSign)}`
+                              : `Order ${orderUnits} unit${orderUnits !== 1 ? 's' : ''} for ${formatUsdcPrice(totalToSign)}`}
                           </span>
                         : isCommitted
                           ? <span className="flex items-center justify-center gap-2">
@@ -661,8 +661,8 @@ export function CommitFlow({
                     className="w-full text-sm py-1.5 font-medium underline-offset-2 hover:underline transition-all"
                     style={{ color: 'var(--muted)' }}>
                     {useGasless
-                      ? 'Pay the gas yourself instead (two confirmations)'
-                      : 'Order gaslessly instead (no gas prompt)'}
+                      ? 'Pay the network fee yourself instead'
+                      : 'Use fee-free ordering instead'}
                   </button>
                 )}
               </>
@@ -678,8 +678,8 @@ export function CommitFlow({
             <div className="rounded-2xl p-3 text-center text-sm"
               style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
               {maxUnitsPerBuyer > 0
-                ? `You&#39;ve reached the per-buyer limit of ${maxUnitsPerBuyer} unit${maxUnitsPerBuyer !== 1 ? 's' : ''}.`
-                : 'No stock remaining.'}
+                ? `You've ordered the maximum of ${maxUnitsPerBuyer} unit${maxUnitsPerBuyer !== 1 ? 's' : ''} per buyer for this deal.`
+                : 'Sold out.'}
             </div>
           </motion.div>
         )}
@@ -721,7 +721,7 @@ export function CommitFlow({
                 <div className="flex items-center gap-1.5">
                   <ArrowDownLeft className="size-3.5" style={{ color: 'var(--muted)' }} />
                   <span className="text-xs font-semibold" style={{ color: 'var(--muted)' }}>
-                    Withdraw from order
+                    Reduce or cancel your order
                   </span>
                 </div>
 
@@ -754,7 +754,7 @@ export function CommitFlow({
                 <div className="flex items-baseline justify-between border-t pt-2"
                   style={{ borderColor: 'var(--border)' }}>
                   <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                    {withdrawUnits === myUnitsN ? 'Full escrow returned' : 'USDC returned'}
+                    {withdrawUnits === myUnitsN ? 'You get back' : 'You get back'}
                   </span>
                   <span className="text-lg font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
                     {formatUsdcPrice(withdrawReturn)}
@@ -790,8 +790,8 @@ export function CommitFlow({
                           <Loader2 className="size-4 animate-spin" /> Confirming…
                         </span>
                       : withdrawUnits === myUnitsN
-                        ? 'Withdraw entire order'
-                        : `Withdraw ${withdrawUnits} unit${withdrawUnits !== 1 ? 's' : ''}`}
+                        ? 'Cancel my whole order'
+                        : `Remove ${withdrawUnits} unit${withdrawUnits !== 1 ? 's' : ''}`}
                   </button>
                 )}
 
@@ -850,11 +850,11 @@ function OrderPreviewCard({
         {isTopUp
           ? <><PackagePlus className="size-3.5" style={{ color: 'var(--accent)' }} />
               <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>
-                Add to your order{badge === 'gasless' ? ' · gasless' : ''}
+                Add to your order{badge === 'gasless' ? ' · no network fee' : ''}
               </span></>
           : badge === 'gasless'
             ? <><Zap className="size-3.5" style={{ color: 'var(--accent)' }} />
-                <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Gasless order</span></>
+                <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>No network fee</span></>
             : null}
       </div>
 
@@ -902,8 +902,8 @@ function OrderPreviewCard({
           </span>
         </div>
         <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
-          You&#39;ll receive {tokensReceived.toString()} {goodsSymbol}
-          {badge === 'gasless' ? ' · Sign once, no gas prompt' : ''}
+          You'll receive {tokensReceived.toString()} {goodsSymbol}
+          {badge === 'gasless' ? ' · one signature, nothing else to pay' : ''}
         </p>
         {breaksTier && (
           <p className="text-xs mt-1 font-medium" style={{ color: 'var(--accent)' }}>

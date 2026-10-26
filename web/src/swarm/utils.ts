@@ -174,8 +174,8 @@ export function checkWouldStrandBuyer(
 /** Parse a Solidity revert error name from a wagmi error message */
 export function parseRevertReason(error: unknown): string {
   const msg = (error as { message?: string })?.message ?? ''
-  if (msg.includes('WouldStrandBuyer'))       return 'Withdrawal would strand another buyer'
-  if (msg.includes('WithdrawInvalidUnits'))   return 'Invalid withdrawal quantity'
+  if (msg.includes('WouldStrandBuyer'))       return 'Removing these units would raise the price above what another buyer paid'
+  if (msg.includes('WithdrawInvalidUnits'))   return 'Choose between 1 and the number of units you hold'
   if (msg.includes('DeadlinePassed'))         return 'The deadline has passed'
   if (msg.includes('DeadlineNotReached'))     return 'The deadline has not passed yet'
   if (msg.includes('MinUnitsNotMet'))         return 'Minimum units not reached'

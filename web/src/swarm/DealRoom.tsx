@@ -98,9 +98,6 @@ export function DealRoom({ dealId }: Props) {
         }}
         {...fadeUp}
       >
-        <p className="text-xs mb-1" style={{ color: 'var(--muted)' }}>
-          Current price / unit
-        </p>
         <PriceHero price={clearingPrice} loading={dealLoading} />
         <div className="mt-5 w-full">
           <TierProgress
@@ -326,21 +323,18 @@ function SettleOrRefundPanel({ dealId, totalUnits, minUnits, goodsToken, goodsSy
       style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
     >
-      <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Deadline reached</p>
-
-      {canSettle ? (
-        <button onClick={() => send('settle')} disabled={busy}
-          className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
-          style={{ background: 'var(--accent)', color: '#fff' }}>
-          Settle deal
-        </button>
-      ) : (
-        <button onClick={() => send('refundAll')} disabled={busy}
-          className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
-          style={{ background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)' }}>
-          Refund all (minimum not reached)
-        </button>
-      )}
+      <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>
+        {canSettle ? 'This deal closed successfully' : 'This deal closed below its minimum'}
+      </p>
+      <p className="text-sm" style={{ color: 'var(--muted)' }}>
+        {canSettle
+          ? 'It is being finalised automatically, usually within a minute. You can then collect your items or payment here.'
+          : 'Everyone is being refunded automatically, usually within a minute. Your USDC will then be ready to collect here.'}
+      </p>
+      <button onClick={() => send(canSettle ? 'settle' : 'refundAll')} disabled={busy}
+        className="text-xs underline underline-offset-2 disabled:opacity-40" style={{ color: 'var(--muted)' }}>
+        Taking too long? Finalise it yourself
+      </button>
 
       {claimableN > 0n && (
         <button onClick={() => send('claim')} disabled={busy}

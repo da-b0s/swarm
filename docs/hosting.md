@@ -19,6 +19,10 @@ Any host that runs a Dockerfile: Render (Web Service), Railway, or Fly.io.
 - **Health check path:** `/health`.
 - **Instances:** exactly one. The relayer tracks its nonce in memory, so two
   instances sharing a key would race for nonces.
+- **Keeper:** the relayer also closes deals. Every 30 seconds it settles each open
+  deal past its deadline, or refunds it if the minimum was not met, so buyers and
+  sellers only ever claim. It pays the gas for this from the same wallet. Set
+  `KEEPER_INTERVAL_MS=0` to turn it off; anyone can still close a deal by hand.
 
 Environment, set in the host's dashboard:
 

@@ -45,7 +45,7 @@ export function PriceHero({ price, loading }: Props) {
         className="text-xs font-semibold tracking-widest uppercase mb-2"
         style={{ color: 'var(--muted)' }}
       >
-        Current price
+        Current price each
       </span>
 
       <motion.div

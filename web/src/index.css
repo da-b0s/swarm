@@ -20,6 +20,30 @@
   --focus: #85b1ed;
   --success: #1a8047;
   --danger: #ba2b4c;
+  --nav-bg: rgba(255, 255, 255, 0.80);
+  --on-accent: #ffffff;
+}
+
+/* ── Dark tokens ─────────────────────────────────────────────────────── */
+:root[data-theme="dark"] {
+  --bg: #0b1420;
+  --bg-gradient: linear-gradient(180deg, #0b1420 0%, #0e1826 52%, #101a28 100%);
+  --surface: rgba(22, 34, 50, 0.72);
+  --surface-strong: rgba(26, 39, 57, 0.92);
+  --surface-muted: #16212f;
+  --ink: #e8eef5;
+  --ink-2: #c3cdd9;
+  --muted: #93a0b2;
+  --subtle: #758296;
+  --border: rgba(200, 220, 240, 0.12);
+  --border-strong: rgba(200, 220, 240, 0.40);
+  --accent: #3f7fc4;
+  --accent-hover: #5b97d8;
+  --focus: #85b1ed;
+  --success: #4cc283;
+  --danger: #f0708c;
+  --nav-bg: rgba(11, 20, 32, 0.80);
+  --on-accent: #ffffff;
 }
 
 * {
@@ -56,4 +80,9 @@ body {
 /* Toast alignment (sonner) */
 [data-sonner-toaster] {
   font-family: 'DM Sans', sans-serif !important;
+}
+
+/* Dividers follow the theme */
+.divide-y > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--border);
 }

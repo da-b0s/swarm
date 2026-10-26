@@ -11,6 +11,7 @@
  *   POOL_ADDRESS    — deployed DemandPool address
  *   ALLOWED_ORIGIN  — CORS origin allowed (default: refuse all cross-origin requests)
  *   PORT            — HTTP port (default 3100)
+ *   KEEPER_INTERVAL_MS — settle/refund expired deals this often (default 30000; 0 = off)
  */
 
 import http from 'node:http'
@@ -572,6 +573,73 @@ const server = http.createServer(async (req, res) => {
   json(res, 404, { error: 'Not found' })
 })
 
+// ── Settlement keeper ──────────────────────────────────────────────────────────
+// settle() and refundAll() are permissionless. Every KEEPER_INTERVAL_MS the
+// relayer looks for open deals past their deadline and closes them, so buyers
+// and suppliers only ever need to claim. Settles when the minimum was met,
+// refunds everyone otherwise. Sends share the relay nonce chain.
+// KEEPER_INTERVAL_MS=0 turns it off.
+
+const KEEPER_INTERVAL_MS = parseInt(process.env['KEEPER_INTERVAL_MS'] ?? '30000', 10)
+const KEEPER_ABI = parseAbi([
+  'function factory() view returns (address)',
+  'function settler() view returns (address)',
+  'function totalUnits(uint256) view returns (uint32)',
+  'function dealCount() view returns (uint256)',
+  'function getDeal(uint256) view returns ((address supplier, address goodsToken, uint256 tokensPerUnit, (uint32 minUnits, uint64 price)[] tiers, uint32 minUnits, uint32 maxUnits, uint32 maxUnitsPerBuyer, uint32 maxBuyers, uint64 deadline, uint8 state, string title, string description))',
+  'function settle(uint256 dealId)',
+  'function refundAll(uint256 dealId)',
+])
+const keeperFailures = new Map<string, number>()   // dealId → failed attempts
+let keeperBusy = false
+
+async function keeperTick(): Promise<void> {
+  if (keeperBusy) return
+  keeperBusy = true
+  try {
+    const [factory, settler] = await Promise.all([
+      publicClient.readContract({ address: POOL_ADDRESS, abi: KEEPER_ABI, functionName: 'factory' }),
+      publicClient.readContract({ address: POOL_ADDRESS, abi: KEEPER_ABI, functionName: 'settler' }),
+    ])
+    const count = await publicClient.readContract({ address: factory, abi: KEEPER_ABI, functionName: 'dealCount' })
+    const now = (await publicClient.getBlock()).timestamp
+    for (let id = 1n; id <= count; id++) {
+      if ((keeperFailures.get(id.toString()) ?? 0) >= 3) continue
+      const deal = await publicClient.readContract({ address: factory, abi: KEEPER_ABI, functionName: 'getDeal', args: [id] })
+      if (deal.state !== 0 || now < deal.deadline) continue
+      const units = await publicClient.readContract({ address: POOL_ADDRESS, abi: KEEPER_ABI, functionName: 'totalUnits', args: [id] })
+      const fn = units >= deal.minUnits ? 'settle' : 'refundAll'
+      const work = async (): Promise<void> => {
+        await resolveNonce()
+        const nonce = consumeNonce()
+        try {
+          const hash = await walletClient.writeContract({
+            address: settler, abi: KEEPER_ABI, functionName: fn, args: [id], nonce,
+            maxFeePerGas: (await currentMaxFeePerGas()) * 2n, maxPriorityFeePerGas: 1_000_000_000n,
+          })
+          const r = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 })
+          if (r.status !== 'success') throw new Error(`reverted ${hash}`)
+          console.log(`[keeper] deal #${id} ${fn} ${hash}`)
+          appendRelayLog({ kind: 'keeper', dealId: id.toString(), action: fn, hash })
+        } catch (e) {
+          resetNonce()
+          throw e
+        }
+      }
+      const run = sendMutex.then(work)
+      sendMutex = run.catch(() => {})
+      try { await run } catch (e) {
+        keeperFailures.set(id.toString(), (keeperFailures.get(id.toString()) ?? 0) + 1)
+        console.error(`[keeper] deal #${id} ${fn} failed: ${(e as Error).message.split('\n')[0]}`)
+      }
+    }
+  } catch (e) {
+    console.error(`[keeper] scan failed: ${(e as Error).message.split('\n')[0]}`)
+  } finally {
+    keeperBusy = false
+  }
+}
+
 // ── Startup chain-id check ─────────────────────────────────────────────────────
 
 const liveChainId = await publicClient.getChainId()
@@ -587,4 +655,9 @@ server.listen(PORT, () => {
   console.log(`  pool     ${POOL_ADDRESS}`)
   console.log(`  relayer  ${account.address}`)
   console.log(`  origin   ${originLabel}`)
+  if (KEEPER_INTERVAL_MS > 0) {
+    console.log(`  keeper   every ${KEEPER_INTERVAL_MS / 1000}s`)
+    void keeperTick()
+    setInterval(() => void keeperTick(), KEEPER_INTERVAL_MS)
+  }
 })
