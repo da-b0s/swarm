@@ -2,8 +2,9 @@
 
 Chain 5042 · explorer: https://explorer.arc.io
 
-> Status: nothing deployed yet. This file is filled from chain, not by hand —
-> see `tools/proof.mjs` (pending) and the live `/proof` page.
+> Status: deployed 26 October 2026 at block 28,005,197. Deals sell **EURC**, Circle's
+> euro stablecoin, paid for in USDC. Every figure below is read from chain; the live
+> `/proof` page recomputes them in the browser.
 
 ## Totals
 
@@ -21,10 +22,15 @@ Chain 5042 · explorer: https://explorer.arc.io
 
 | Contract | Address | Tx | Verified |
 |---|---|---|---|
-| `DealFactory` | _pending_ | | |
-| `DemandPool` | _pending_ | | |
-| `Settler` | _pending_ | | |
-| `CommitRelayer` | _pending_ | | |
+| `DealFactory` | [`0x27F8…0e2a`](https://explorer.arc.io/address/0x27F8863e5e52f1DacF699f063f6dAe79690D0e2a) | [tx](https://explorer.arc.io/tx/0xc08ef106026f9e05a150b0ce7109a42b4bcf70a31942fec3e99a43ad24b86579) | byte-identical to the tested build |
+| `DemandPool` | [`0x7A87…E78f`](https://explorer.arc.io/address/0x7A8754dB7B0d629841523c0694A7788221e9F78f) | [tx](https://explorer.arc.io/tx/0x3aabd8bda29b81be4826918e95d5a5d0a6a6326e0dbe8a0bd81dba500f1a9882) | byte-identical to the tested build |
+| `Settler` | [`0x2401…96Ac`](https://explorer.arc.io/address/0x2401F31355A8D1EA713BE0C83bE193C79b6F96Ac) | [tx](https://explorer.arc.io/tx/0x9d26dd8d4f4c2630c7ef16f2cd57417cae6546fcfb55d0cd4b0069a128f4c17f) | byte-identical to the tested build |
+
+Gasless orders are part of `DemandPool` (`commitWithAuthorization`), so there is no
+separate relayer contract. Wiring (three one-time owner calls) was checked from chain
+after deploy: factory ↔ pool ↔ settler links agree in both directions. "Byte-identical"
+means the runtime bytecode on chain equals the local build the 67-test suite runs,
+with only constructor-set immutable addresses masked.
 
 ## Phase 1 — the open house deal
 

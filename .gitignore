@@ -26,7 +26,7 @@ Thumbs.db
 .DS_Store
 
 # relayer runtime log
-relayer/relay-log.jsonl
+relayer/relay-log*.jsonl
 
 # local test harness, never committed
 web/dev-mock-wallet.html

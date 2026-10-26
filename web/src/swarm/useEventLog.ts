@@ -42,7 +42,7 @@
 
 import { useState, useCallback, useRef } from 'react'
 import { decodeEventLog, keccak256, toBytes, type Hex } from 'viem'
-import { ARC_NETWORK, CONTRACTS_ACTIVE, GOODS_TOKENS } from './config'
+import { ARC_NETWORK, CONTRACTS_ACTIVE, DEPLOYMENT_READY, GOODS_TOKENS } from './config'
 import { formatTokenAmount } from './utils'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI, SETTLER_ABI } from './abis'
 import {
@@ -212,11 +212,11 @@ export function useEventLog() {
     setError('')
 
     try {
-      if (CONTRACTS_ACTIVE.deployBlock === 0n) {
+      if (!DEPLOYMENT_READY) {
         setScanState('error')
         setError(
-          `No deployment block recorded for ${ARC_NETWORK.name}. ` +
-          `Swarm is not deployed on this network yet.`
+          `Swarm is not deployed on ${ARC_NETWORK.name}. ` +
+          `Switch to a supported network.`
         )
         return
       }

@@ -8,12 +8,9 @@ export type SwarmNetwork = 'mainnet' | 'testnet'
 
 const ZERO = '0x0000000000000000000000000000000000000000'
 
-// Default: testnet, because Swarm is not deployed to mainnet yet. Flip the default
-// to 'mainnet' in the same commit that records verified mainnet addresses below —
-// not before. Pointing the app at chain 5042 with no contracts there invites a
-// reviewer to approve USDC to an address holding no code.
+// Default: mainnet. Override with VITE_SWARM_NETWORK=testnet to use the testnet deployment.
 export const ACTIVE_NETWORK: SwarmNetwork =
-  (import.meta.env.VITE_SWARM_NETWORK as SwarmNetwork | undefined) ?? 'testnet'
+  (import.meta.env.VITE_SWARM_NETWORK as SwarmNetwork | undefined) ?? 'mainnet'
 
 // Arc mainnet: chain 5042
 export const ARC_MAINNET = {
@@ -51,13 +48,16 @@ export const ARC_NETWORK: ArcNetworkConfig =
 // it could not wire, so an address appearing there is not evidence it works.
 const CONTRACTS = {
   mainnet: {
-    // NOT DEPLOYED YET. Zero addresses rather than placeholders that look real.
-    DealFactory: ZERO as `0x${string}`,
-    DemandPool:  ZERO as `0x${string}`,
-    Settler:     ZERO as `0x${string}`,
+    // Deployed 26 October 2026 and verified from chain: bytecode at all three
+    // addresses, all wiring calls landed, constructor links agree in both
+    // directions. Swarm v2.2 (quantities, top-ups, partial withdrawal, token
+    // delivery). Mainnet deals sell EURC; there is no Swarm Pass on mainnet.
+    DealFactory: '0x27F8863e5e52f1DacF699f063f6dAe79690D0e2a' as `0x${string}`,
+    DemandPool:  '0x7A8754dB7B0d629841523c0694A7788221e9F78f' as `0x${string}`,
+    Settler:     '0x2401F31355A8D1EA713BE0C83bE193C79b6F96Ac' as `0x${string}`,
     SwarmPass:   ZERO as `0x${string}`,
-    deployBlock: 0n,
-    deployed: false,
+    deployBlock: 28005197n,
+    deployed: true,
   },
   testnet: {
     // Deployed and wired from a deployer wallet we control, then verified from
