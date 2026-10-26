@@ -14,8 +14,8 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Play, Square, ExternalLink, CheckCircle, XCircle } from 'lucide-react'
 import { useEventLog } from './useEventLog'
-import { formatUsdcPrice, txUrl, shortAddr } from './utils'
-import { ARC_NETWORK } from './config'
+import { formatUsdcPrice, txUrl, shortAddr, formatTokenAmount } from './utils'
+import { ARC_NETWORK, GOODS_TOKENS } from './config'
 
 const fadeUp = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.22 } }
 
@@ -325,12 +325,17 @@ function EventSummary({ ev }: { ev: import('./useEventLog').SwarmEvent }) {
           {shortAddr(String(a.claimant))} claimed {formatUsdcPrice(BigInt(String(a.amount)))} USDC
         </p>
       )
-    case 'GoodsClaimed':
+    case 'GoodsClaimed': {
+      const tok = GOODS_TOKENS.find(t => t.address.toLowerCase() === ((a.token as string | undefined) ?? '').toLowerCase())
+      const amtStr = tok
+        ? `${formatTokenAmount(BigInt(String(a.amount)), tok.decimals)} ${tok.symbol}`
+        : `${String(a.amount)} tokens`
       return (
         <p className="text-xs" style={{ color: 'var(--ink-2)' }}>
-          {shortAddr(String(a.claimant))} claimed {String(a.amount)} goods token base units
+          {shortAddr(String(a.claimant))} claimed {amtStr}
         </p>
       )
+    }
     default:
       return <p className="text-xs" style={{ color: 'var(--muted)' }}>Unknown event</p>
   }

@@ -123,6 +123,37 @@ export const ARC_TX_FEES = {
  * (refunds or withdrawals credited before a redeploy). The app shows a claim for
  * any balance left on them. Empty on mainnet.
  */
+// ── Goods tokens ──────────────────────────────────────────────────────────────
+
+export interface GoodsToken {
+  symbol:   string
+  name:     string
+  address:  `0x${string}`
+  decimals: number
+}
+
+/**
+ * Tokens offered for sale in Swarm deals, per network.
+ * Today: EURC only. Adding a token is one entry here.
+ */
+export const GOODS_TOKENS: readonly GoodsToken[] = ACTIVE_NETWORK === 'mainnet'
+  ? [
+      {
+        symbol:   'EURC',
+        name:     'EURC',
+        address:  '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1',
+        decimals: 6,
+      },
+    ]
+  : [
+      {
+        symbol:   'EURC',
+        name:     'EURC',
+        address:  '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a',
+        decimals: 6,
+      },
+    ]
+
 export const RETIRED_SETTLERS: readonly `0x${string}`[] = ACTIVE_NETWORK === 'testnet'
   ? [
       '0x3091FBDc63c96fA37e9f29df5F10B66F47044F44', // v2.1, 25 Oct

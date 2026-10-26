@@ -6,8 +6,8 @@
 # Rehearse first against a local fork (nothing is sent to mainnet):
 #   RPC=http://127.0.0.1:8545 bash tools/deploy-mainnet.sh
 #
-# Swarm Pass is deployed with its faucet OFF: on mainnet passes are minted only by
-# the owner. MINT_TO / MINT_AMOUNT mint the first supply to the supplier wallet.
+# Deals on mainnet sell EURC (Circle's euro stablecoin, already live on Arc), so
+# only the three Swarm contracts are deployed. Swarm Pass is testnet only.
 # Every step is checked from chain; any failure stops the script.
 set -uo pipefail
 export PATH="$HOME/.local/bin:$PATH"
@@ -17,8 +17,7 @@ die() { echo "ABORT $*"; exit 1; }
 
 KEY="$(envget DEPLOYER_KEY)"; OWNER="$(envget DEPLOYER_ADDRESS)"
 RPC=${RPC:-https://rpc.mainnet.arc.io}
-MINT_TO=${MINT_TO:-}
-MINT_AMOUNT=${MINT_AMOUNT:-0}
+EURC=0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1
 GAS="--gas-price 30gwei --priority-gas-price 1gwei"   # Arc drops anything under 20 gwei
 REMAP="--remappings @openzeppelin/=node_modules/@openzeppelin/"
 
@@ -26,8 +25,9 @@ REMAP="--remappings @openzeppelin/=node_modules/@openzeppelin/"
 [ "$(arc-cast wallet address --private-key "$KEY")" = "$OWNER" ] || die "DEPLOYER_KEY does not match DEPLOYER_ADDRESS"
 BAL=$(arc-cast balance "$OWNER" --rpc-url "$RPC")
 echo "deployer $OWNER  balance $(arc-cast from-wei "$BAL") USDC  gas price $(arc-cast gas-price --rpc-url "$RPC") wei"
-# 4 contracts + 3 wiring calls + 1 mint ~ 8M gas ~ 0.24 USDC at 30 gwei; demand 1 USDC of headroom.
+# 3 contracts + 3 wiring calls ~ 7M gas ~ 0.21 USDC at 30 gwei; demand 1 USDC of headroom.
 [ "$(echo "$BAL >= 1000000000000000000" | bc)" = "1" ] || die "deployer needs at least 1 USDC on mainnet"
+[ "$(arc-cast call $EURC 'symbol()(string)' --rpc-url "$RPC")" = '"EURC"' ] || die "EURC not found at $EURC"
 
 arc-forge build $REMAP > /dev/null || die "build"
 
@@ -54,16 +54,11 @@ BLOCK=$(arc-cast block-number --rpc-url "$RPC")
 FACTORY=$(deploy contracts/DealFactory.sol:DealFactory "$OWNER") || { echo "$FACTORY"; exit 1; }; echo "DealFactory $FACTORY"
 POOL=$(deploy contracts/DemandPool.sol:DemandPool "$FACTORY" "$OWNER") || { echo "$POOL"; exit 1; };   echo "DemandPool  $POOL"
 SETTLER=$(deploy contracts/Settler.sol:Settler "$FACTORY" "$POOL" "$OWNER") || { echo "$SETTLER"; exit 1; }; echo "Settler     $SETTLER"
-PASS=$(deploy contracts/SwarmPass.sol:SwarmPass false) || { echo "$PASS"; exit 1; };   echo "SwarmPass   $PASS (faucet off)"
 
 echo "wiring"
 send "$FACTORY" 'setDemandPool(address)' "$POOL"
 send "$FACTORY" 'setSettler(address)' "$SETTLER"
 send "$POOL" 'setSettler(address)' "$SETTLER"
-if [ -n "$MINT_TO" ] && [ "$MINT_AMOUNT" != "0" ]; then
-  echo "minting $MINT_AMOUNT PASS to $MINT_TO"
-  send "$PASS" 'mint(address,uint256)' "$MINT_TO" "$MINT_AMOUNT"
-fi
 
 echo "verifying from chain"
 fail=0
@@ -77,13 +72,8 @@ check "pool settler set"       "$(call "$POOL" 'settlerSet()(bool)')"           
 check "settler -> factory"     "$(addr "$(call "$SETTLER" 'factory()(address)')")"     "$(lc "$FACTORY")"
 check "settler -> pool"        "$(addr "$(call "$SETTLER" 'pool()(address)')")"        "$(lc "$POOL")"
 check "factory not paused"     "$(call "$FACTORY" 'paused()(bool)')"                   "false"
-check "pass faucet off"        "$(call "$PASS" 'faucetEnabled()(bool)')"               "false"
-check "pass decimals 0"        "$(call "$PASS" 'decimals()(uint8)')"                   "0"
-for c in "$FACTORY" "$POOL" "$SETTLER" "$PASS"; do
+for c in "$FACTORY" "$POOL" "$SETTLER"; do
   check "owner of $c"          "$(addr "$(call "$c" 'owner()(address)')")"             "$(lc "$OWNER")"
 done
-if [ -n "$MINT_TO" ] && [ "$MINT_AMOUNT" != "0" ]; then
-  check "PASS minted to $MINT_TO" "$(call "$PASS" 'balanceOf(address)(uint256)' "$MINT_TO" | awk '{print $1}')" "$MINT_AMOUNT"
-fi
 [ $fail = 0 ] || die "verification failed"
-echo "RESULT $FACTORY $POOL $SETTLER $PASS $BLOCK"
+echo "RESULT $FACTORY $POOL $SETTLER $BLOCK"

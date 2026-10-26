@@ -1,0 +1,548 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading all the files I need to touch before writing anything. Now I have everything. Let me read the GlobalClaimsBanner, ProofPage, and hooks to know where goods amounts appear: Good. Now I have a complete picture. The work is:\n\n1. `config.ts` — add `GOODS_TOKENS`\n2. `utils.ts` — add `formatTokenAmount`\n3. `SupplierView.tsx` — replace free-text token address with picker, remove SwarmPass faucet, new defaults, no-EURC notice\n4. `DealRoom.tsx` — fix \"1 unit = N SYMBOL\" line and goods claim buttons\n5. `CommitFlow.tsx` — fix \"You'll receive\" line in order summary and OrderPreviewCard\n6. `GlobalClaimsBanner.tsx` — fix goods claim amount display\n7. `ProofPage.tsx` — fix GoodsClaimed event summary\n8. `HomePage.tsx` — update copy (hero subtitle, FAQ \"What can I buy?\", \"items\"→\"tokens\")\n\nThe `GlobalClaimsBanner` needs decimals for each token to format amounts. It already reads symbols; I'll add decimals reads too. The `ProofPage` `GoodsClaimed` event gets `amount` in base units but the banner and deal room need the token's decimals. The ProofPage doesn't know decimals for GoodsClaimed — I'll note it shows base units there (the event log is a technical view). Actually the spec says \"wherever goods are shown including the proof page\" — but for the event log we don't have decimals in context. I'll add a `useTokenDecimals` hook call to `GlobalClaimsBanner` (which already has the token address list) and pass decimals through.\n\nLet me plan carefully: `GlobalClaimsBanner` already reads `symbol` per token; extend it to also read `decimals`. `DealRoom` already has `tokenMeta` from `useGoodsTokenMeta` which returns `symbol` and `decimals`. The `CommitFlow` receives `tokensPerUnit` as raw bigint and `goodsSymbol`; it needs `goodsDecimals` too. I'll add it as a prop.\n\nActually — looking at this more carefully, `tokensPerUnit` is already in raw base units (e.g. `1000000` for 1 EURC with 6 decimals). `formatTokenAmount(tokensPerUnit, decimals)` gives `\"1\"`. The `DealRoom` passes `tokensPerUnit={deal.tokensPerUnit}` and already has `tokenMeta?.symbol`. I need to pass `goodsDecimals` as a prop to `CommitFlow`. Let me add it.\n\nSetting up todos and working: Now add `formatTokenAmount` to utils.ts and update the `GOODS_TOKENS` import: Now rewrite `SupplierView.tsx` — replace free-text token address with a `GOODS_TOKENS` picker, remove SwarmPass faucet, update defaults to EURC: Now update `DealRoom.tsx` — fix `tokensPerUnit` display and goods claim buttons using `formatTokenAmount`: Fix the \"1 unit = N SYMBOL\" line — `tokensPerUnit` is in base units, needs `formatTokenAmount` with `tokenMeta?.decimals`: Now fix the `CommitFlow` — pass `goodsDecimals` prop and use `formatTokenAmount`. I also need to pass `goodsDecimals` from `DealRoom`: Now fix the goods claim buttons in `DealRoom` — `SettleOrRefundPanel` and `ClaimPanel` both show `goodsN.toString()`. They need decimals. Pass `goodsDecimals` to them: Now update the `SettleOrRefundPanel` and `ClaimPanel` interfaces and their goods claim button: Now fix the `ClaimPanel`'s goods button: Now update `CommitFlow.tsx` — add `goodsDecimals` prop and use `formatTokenAmount` in the order summary and `OrderPreviewCard`: Add `goodsDecimals` to the Props interface: Now thread `goodsDecimals` through the component and `OrderPreviewCard`: Now fix the order summary \"You'll receive\" line in the committed card: Now pass `goodsDecimals` to `OrderPreviewCard` and update its \"You'll receive\" line: Also fix the disconnected state's `OrderPreviewCard`: Now update `OrderPreviewCard` props and its \"You'll receive\" line: Now fix the \"You'll receive\" line in `OrderPreviewCard`: Now update `GlobalClaimsBanner` — add `useTokenDecimals` hook and use `formatTokenAmount`: The banner already reads symbols for each token; I'll extend `useTokenSymbols` to also return decimals, or add a parallel `useTokenDecimals` hook. The cleanest approach: extend the existing hook into `useTokenMeta` that returns both symbol and decimals in one batch: Replace `useTokenSymbols` with `useTokenMeta` that returns both symbol and decimals: Now update the banner component to use `useTokenMeta` and `formatTokenAmount`: Now fix the goods claim button in the banner render: Now update `ProofPage.tsx` — the `GoodsClaimed` event summary. The proof page doesn't have per-token decimals in context, but it does have a `goodsNote` string per deal and the `GoodsClaimed` event handler. The event log doesn't carry decimals. For the `GoodsClaimed` event, I'll show \"N base units\" when decimals are unknown — this is a technical proof page so precision matters. Actually the spec says \"wherever goods are shown including the proof page\". The proof page `goodsNote` comes from `useEventLog` which returns string notes. I'll update the `GoodsClaimed` event summary to say \"base units\" clearly, and separately update `useEventLog`'s `goodsNote` computation to format amounts if the token is in `GOODS_TOKENS`: The `useEventLog` builds `goodsNote` strings and the `ProofPage` renders `EventSummary` for `GoodsClaimed`. I need to:\n1. Update `ProofPage`'s `EventSummary` for `GoodsClaimed` to use `formatTokenAmount` when the token is in `GOODS_TOKENS`\n2. Update `useEventLog`'s `goodsNote` to use formatted amounts\n\nLet me check `useEventLog` quickly for where `goodsNote` is built: The `useEventLog` builds `goodsNote` at line 407-408. It has access to the `DealPosted` events in the event list but doesn't track `goodsToken` per deal. I can look up the `goodsToken` from `DealPosted` events during the pass, then use `GOODS_TOKENS` to resolve decimals.\n\nLet me update `useEventLog` to track `goodsToken` per deal and format `goodsNote` using `formatTokenAmount` when the token is known: Now add a `goodsToken` field to `DealProof` and populate it from `DealPosted`, then use it in `goodsNote`: Now update the `getDeal` initialiser to include `goodsToken: ''`, and the `DealPosted` case to populate it. Then update `goodsNote` to format with `formatTokenAmount`: Now update the `goodsNote` computation to use `formatTokenAmount` with known decimals: Now update `ProofPage.tsx`'s `GoodsClaimed` `EventSummary` to use `formatTokenAmount` when the token is in `GOODS_TOKENS`. The `GoodsClaimed` event has `(claimant, token, amount)` — the token address is available in `a.token`: Now update the `GoodsClaimed` case in `EventSummary`: Now update `HomePage.tsx` — new subtitle, \"What can I buy?\" FAQ, \"items\"→\"tokens\": The FAQ array uses curly apostrophes (from the patch). Let me read the exact content: Good — I can see the exact content with curly apostrophes. Now I can replace it: The file uses special Unicode curly quotes. Let me write the whole FAQ array directly: The file uses UTF-8 curly apostrophes (`'` = `\\xe2\\x80\\x99`). I need to use Python to do a byte-level replacement, or just overwrite lines 24–37 using Python. The cleanest approach is to use `sed` or Python to replace the FAQ block: Now update the hero subtitle in `HomePage.tsx`: Now run check: Two `no-base-to-string` errors on `a.goodsToken` and `a.token` — these are `unknown` typed args. I need to cast them to `string` explicitly rather than wrapping in `String()`: Zero warnings, zero errors. Dev server still running: **Actual output:**\n\n```\noxlint: Found 0 warnings and 0 errors  (35 + 39 files)\ntsc --noEmit:  exit 0\n```\n\n---\n\nHere is what changed:\n\n**`src/swarm/config.ts`** — `GoodsToken` interface and `GOODS_TOKENS` exported: EURC at `0x89B50855…` (testnet, 6 decimals) and `0xbEf5f6d5…` (mainnet, 6 decimals). One entry per network; adding a token later is one line.\n\n**`src/swarm/utils.ts`** — `formatTokenAmount(raw, decimals)` added: divides base units by `10^decimals`, trims trailing zeros. `1_000_000n` with 6 decimals → `\"1\"`, `1_500_000n` → `\"1.5\"`.\n\n**`src/swarm/SupplierView.tsx`** — rewritten. Free-text address field replaced by `TokenPickerCard` listing `GOODS_TOKENS` (EURC preselected, balance shown when connected). Swarm Pass faucet and `SWARM_PASS_ABI` import removed. Default tiers changed to `$1.20` from 1 unit / `$1.17` from 25 / `$1.15` from 50 with 1 EURC per unit. \"Units per token\" label now says \"EURC per unit\". No-balance notice: \"You need EURC to sell.\" \"More tokens are coming soon.\" shown under the picker. Token decimals come from the config entry (no on-chain read needed), so all validation works immediately on address selection.\n\n**`src/swarm/DealRoom.tsx`** — \"1 unit = N SYMBOL\" now uses `formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)` — shows `\"1\"` not `\"1000000\"`. Goods claim buttons in `SettleOrRefundPanel` and `ClaimPanel` use `formatTokenAmount`. Both panels gain `goodsDecimals?: number` prop, passed from `DealRoom` via `tokenMeta?.decimals`.\n\n**`src/swarm/CommitFlow.tsx`** — `goodsDecimals?: number` added to `Props` and `OrderPreviewCard`. \"You will receive\" in the order summary card and the order preview both use `formatTokenAmount` when decimals are known; shows nothing while loading rather than a raw number.\n\n**`src/swarm/GlobalClaimsBanner.tsx`** — `useTokenSymbols` replaced by `useTokenMeta` (reads `symbol` + `decimals` in one batch). Goods claim button shows `formatTokenAmount(amount, dec) SYM` when decimals are available; shows raw amount with symbol as fallback while loading.\n\n**`src/swarm/useEventLog.ts`** — `DealProof` gains `goodsToken: string`. `DealPosted` event case added to the stats loop to record each deal's token address. `goodsNote` for settled deals now uses `formatTokenAmount` when the token is in `GOODS_TOKENS`, and names the token symbol (`\"50 EURC delivered to buyers\"` instead of `\"50000000 token base units delivered to buyers\"`).\n\n**`src/swarm/ProofPage.tsx`** — `GoodsClaimed` `EventSummary` now resolves the token from `GOODS_TOKENS` by the event's `a.token` field and formats the amount with `formatTokenAmount`.\n\n**`src/swarm/HomePage.tsx`** — Hero subtitle updated. \"What can I buy?\" added as the first FAQ entry: \"Today every deal sells EURC, Circle's euro stablecoin, paid for in USDC. More tokens are coming soon.\" Price example in \"How is the final price decided?\" updated from `$0.30/$0.20/10 units` to `$1.20/$1.17/25 units`. \"items\" → \"tokens\" throughout; curly-apostrophe contractions replaced with full words.",
+  "todos": [
+    {
+      "id": "todo:add goods_tokens to config.ts:0",
+      "text": "Add GOODS_TOKENS to config.ts",
+      "status": "done"
+    },
+    {
+      "id": "todo:add formattokenamount to utils.ts:0",
+      "text": "Add formatTokenAmount to utils.ts",
+      "status": "done"
+    },
+    {
+      "id": "todo:rewrite supplierview: token picker, eurc defaults, no faucet:0",
+      "text": "Rewrite SupplierView: token picker, EURC defaults, no faucet",
+      "status": "done"
+    },
+    {
+      "id": "todo:update dealroom: formattokenamount for goods amounts:0",
+      "text": "Update DealRoom: formatTokenAmount for goods amounts",
+      "status": "done"
+    },
+    {
+      "id": "todo:update commitflow: goodsdecimals prop, formattokenamount:0",
+      "text": "Update CommitFlow: goodsDecimals prop, formatTokenAmount",
+      "status": "done"
+    },
+    {
+      "id": "todo:update globalclaimsbanner: formattokenamount for goods:0",
+      "text": "Update GlobalClaimsBanner: formatTokenAmount for goods",
+      "status": "done"
+    },
+    {
+      "id": "todo:update proofpage: formattokenamount for goodsclaimed:0",
+      "text": "Update ProofPage: formatTokenAmount for GoodsClaimed",
+      "status": "done"
+    },
+    {
+      "id": "todo:update homepage: new subtitle, what can i buy faq, items→tokens:0",
+      "text": "Update HomePage: new subtitle, What can I buy FAQ, items→tokens",
+      "status": "done"
+    },
+    {
+      "id": "todo:run tsc + lint, paste output:0",
+      "text": "Run tsc + lint, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/DealRoom.tsx",
+    "src/swarm/GlobalClaimsBanner.tsx",
+    "src/swarm/HomePage.tsx",
+    "src/swarm/ProofPage.tsx",
+    "src/swarm/SupplierView.tsx",
+    "src/swarm/config.ts",
+    "src/swarm/useEventLog.ts",
+    "src/swarm/utils.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import {\n   formatUsdcPrice, txUrl, parseRevertReason,\n-  checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn,\n+  checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn, formatTokenAmount,\n } from './utils'"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 15,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface Props {\n   dealId:           bigint\n   clearingPrice:    bigint\n   totalUnits:       number\n   buyerCount:       number\n   tiers:            DealTier[]\n   maxUnits:         number\n   maxUnitsPerBuyer: number"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function CommitFlow({\n   dealId, clearingPrice, totalUnits, buyerCount, tiers,\n   maxUnits, maxUnitsPerBuyer, deadline, state, goodsToken: _goodsToken,\n-  goodsSymbol, tokensPerUnit, onCommitted,\n+  goodsSymbol, goodsDecimals, tokensPerUnit, onCommitted,\n }: Props) {"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "               <p style={{ color: 'var(--muted)' }}>\n-                You'll receive{' '}\n+                You will receive{' '}\n                 <span className=\"font-semibold\" style={{ color: 'var(--ink-2)' }}>\n-                  {(BigInt(myUnitsN) * tokensPerUnit).toString()} {goodsSymbol}\n+                  {goodsDecimals !== undefined\n+                    ? `${formatTokenAmount(BigInt(myUnitsN) * tokensPerUnit, goodsDecimals)} ${goodsSymbol}`\n+                    : null}\n                 </span>{' '}\n-                when the deal closes.\n-              </p>\n+                when the deal closes."
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "               <OrderPreviewCard\n                   units={orderUnits} quotedPPU={quotedPPU} quotedTotal={quotedTotal}\n-                  breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensPerUnit={tokensPerUnit}\n+                  breaksTier={breaksTier} goodsSymbol={goodsSymbol} goodsDecimals={goodsDecimals}\n+                  tokensPerUnit={tokensPerUnit}\n                   maxOrderable={maxOrderable} isTopUp={isCommitted}\n                   onUnits={setOrderUnits}\n                   badge={useGasless ? 'gasless' : undefined}\n                 />"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <OrderPreviewCard\n           units={orderUnits} quotedPPU={quotedPPU} quotedTotal={quotedTotal}\n-          breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensPerUnit={tokensPerUnit}\n+          breaksTier={breaksTier} goodsSymbol={goodsSymbol} goodsDecimals={goodsDecimals}\n+          tokensPerUnit={tokensPerUnit}\n           maxOrderable={maxAddable > 0 ? maxAddable : (remainingStock)} isTopUp={false}\n           onUnits={setOrderUnits}\n           badge={RELAYER_URL ? 'gasless' : undefined}\n         />"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 19,
+      "removedLines": 18,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface OrderPreviewProps {\n-  units:         number\n-  quotedPPU:     bigint\n-  quotedTotal:   bigint\n-  breaksTier:    boolean\n-  goodsSymbol:   string\n-  tokensPerUnit: bigint\n-  maxOrderable:  number\n+  units:          number\n+  quotedPPU:      bigint\n+  quotedTotal:    bigint\n+  breaksTier:     boolean\n+  goodsSymbol:    string\n+  goodsDecimals?: number\n+  tokensPerUnit:  bigint"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <p className=\"text-xs mt-0.5\" style={{ color: 'var(--subtle)' }}>\n-          You'll receive {tokensReceived.toString()} {goodsSymbol}\n+          {goodsDecimals !== undefined\n+            ? `You will receive ${formatTokenAmount(tokensReceived, goodsDecimals)} ${goodsSymbol}`\n+            : null}\n           {badge === 'gasless' ? ' · one signature, nothing else to pay' : ''}\n         </p>"
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 32,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-export const RETIRED_SETTLERS: readonly `0x${string}`[] = ACTIVE_NETWORK === 'testnet'\n+// ── Goods tokens ──────────────────────────────────────────────────────────────\n+\n+export interface GoodsToken {\n+  symbol:   string\n+  name:     string\n+  address:  `0x${string}`\n+  decimals: number\n+}"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { formatUsdcPrice, formatCountdown, shortAddr, txUrl } from './utils'\n+import { formatUsdcPrice, formatCountdown, shortAddr, txUrl, formatTokenAmount } from './utils'"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <div className=\"flex items-center gap-1.5 pt-0.5\">\n           <Package className=\"size-3.5 shrink-0\" style={{ color: 'var(--muted)' }} />\n           <span className=\"text-xs\" style={{ color: 'var(--muted)' }}>\n-            1 unit = {deal.tokensPerUnit.toString()} {symbol}\n+            {tokenMeta?.decimals !== undefined\n+              ? `1 unit = ${formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)} ${symbol}`\n+              : symbol !== '…' ? `1 unit = ? ${symbol}` : null}\n           </span>\n         </div>"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 15,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <CommitFlow\n           dealId={dealId}\n           clearingPrice={clearingPrice}\n           totalUnits={unitCount}\n           buyerCount={count}\n           tiers={deal.tiers}\n           maxUnits={deal.maxUnits}\n           maxUnitsPerBuyer={deal.maxUnitsPerBuyer}"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 15,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {deal.state === 0 && secondsLeft !== undefined && secondsLeft === 0 && (\n         <SettleOrRefundPanel\n           dealId={dealId}\n           totalUnits={unitCount}\n           minUnits={deal.minUnits}\n           goodsToken={deal.goodsToken}\n           goodsSymbol={symbol}\n-          onDone={refetchAll}\n+          goodsDecimals={tokenMeta?.decimals}"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 11,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface SettleProps {\n   dealId: bigint\n   totalUnits: number\n   minUnits: number\n   goodsToken: `0x${string}`\n   goodsSymbol: string\n-  onDone: () => void\n-}\n+  goodsDecimals?: number\n+  onDone: () => void"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 28,
+      "removedLines": 27,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {goodsN > 0n && (\n         <button onClick={() => send('claimGoods')} disabled={busy}\n           className=\"w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40\"\n           style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}>\n-          Claim {goodsN.toString()} {goodsSymbol}\n+          Claim {goodsDecimals !== undefined ? formatTokenAmount(goodsN, goodsDecimals) : goodsN.toString()} {goodsSymbol}\n         </button>\n       )}"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 19,
+      "removedLines": 19,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {goodsN > 0n && (\n         <button onClick={() => send('claimGoods')} disabled={busy}\n           className=\"w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40\"\n           style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}>\n-          Claim {goodsN.toString()} {goodsSymbol}\n+          Claim {goodsDecimals !== undefined ? formatTokenAmount(goodsN, goodsDecimals) : goodsN.toString()} {goodsSymbol}\n         </button>\n       )}"
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { formatUsdcPrice } from './utils'\n+import { formatUsdcPrice, formatTokenAmount } from './utils'"
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "edit",
+      "addedLines": 39,
+      "removedLines": 29,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-// ── Token symbol helper ───────────────────────────────────────────────────────\n+// ── Token symbol + decimals helper ───────────────────────────────────────────\n \n import { ERC20_ABI } from './abis'\n-function useTokenSymbols(tokens: `0x${string}`[]): Map<string, string> {\n-  const calls = useMemo(() =>\n-    tokens.map(tok => ({\n-      address: tok,\n-      abi: ERC20_ABI,\n+\n+interface TokenMeta { symbol: string; decimals: number }\n+\n+function useTokenMeta(tokens: `0x${string}`[]): Map<string, TokenMeta> {\n+  const symbolCalls = useMemo(() =>"
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const goodsTokens    = useGoodsTokens(dealCount)\n+  const goodsTokens     = useGoodsTokens(dealCount)\n   const goodsClaimables = useGoodsClaimables(goodsTokens, address)\n-  const symbols        = useTokenSymbols(goodsTokens)\n+  const tokenMeta       = useTokenMeta(goodsTokens)"
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 16,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           {goodsClaimables.map(({ token, amount }) => {\n-            const sym = symbols.get(token.toLowerCase()) ?? '…'\n+            const meta = tokenMeta.get(token.toLowerCase())\n+            const sym  = meta?.symbol ?? '…'\n+            const dec  = meta?.decimals\n             return (\n               <button\n                 key={token}\n-                onClick={() => claimGoods(token)}\n-                disabled={!!busyToken}\n-                className=\"flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:scale-[1.02] disabled:opacity-40\"\n+                onClick={() => claimGoods(token)}"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " const STEPS = [\n   { Icon: Users,        title: 'Join a deal',          body: 'Pick how many you want and place your order in USDC. One signature, no network fee.' },\n   { Icon: TrendingDown, title: 'The price drops',      body: 'Every order brings the price down for everyone in the deal, including the people who joined first.' },\n-  { Icon: PackageCheck, title: 'Collect when it closes', body: 'When the timer ends, everyone pays the same final price. Collect your items and any difference you overpaid.' },\n+  { Icon: PackageCheck, title: 'Collect when it closes', body: 'When the timer ends, everyone pays the same final price. Collect your tokens and any difference you overpaid.' },\n ]"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 14,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " const FAQ = [\n+  { q: 'What can I buy?',\n+    a: 'Today every deal sells EURC, Circle\\'s euro stablecoin, paid for in USDC. More tokens are coming soon.' },\n   { q: 'How is the final price decided?',\n-    a: 'Each deal has price levels set by the seller, for example $0.30 each, then $0.20 once 10 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },\n+    a: 'Each deal has price levels set by the seller, for example $1.20 each, then $1.17 once 25 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },\n   { q: 'What do I need to order?',\n     a: 'A crypto wallet with USDC on Arc. Ordering takes one signature in your wallet. There is no separate network fee to pay.' },\n-  { q: 'Can I change my mind?',\n-    a: 'Yes. While a deal is open you can add more, remove some units or cancel your whole order, and the money goes straight back to your wallet. The one exception: you can\\'t cancel if it would push the price back up above what another buyer has already paid.' },\n-  { q: 'What happens if not enough people join?',\n+  { q: 'Can I change my mind?',"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 15,
+      "removedLines": 13,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "+  { q: 'What can I buy?',\n+    a: 'Today every deal sells EURC, Circle\\'s euro stablecoin, paid for in USDC. More tokens are coming soon.' },\n   { q: 'How is the final price decided?',\n-    a: 'Each deal has price levels set by the seller, for example $0.30 each, then $0.20 once 10 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },\n+    a: 'Each deal has price levels set by the seller, for example $1.20 each, then $1.17 once 25 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },\n   { q: 'What do I need to order?',\n     a: 'A crypto wallet with USDC on Arc. Ordering takes one signature in your wallet. There is no separate network fee to pay.' },\n   { q: 'Can I change my mind?',\n-    a: 'Yes. While a deal is open you can add more, remove some units or cancel your whole order, and the money goes straight back to your wallet. The one exception: you can't cancel if it would push the price back up above what another buyer has already paid.' },\n-  { q: 'What happens if not enough people join?',\n-    a: 'Every deal has a minimum. If it isn't reached by the deadline, the deal is cancelled and everyone is refunded in full. The seller gets their items back.' },\n+    a: 'Yes. While a deal is open you can add more, remove some units or cancel your whole order, and the money goes straight back to your wallet. The one exception: you cannot cancel if it would push the price back up above what another buyer has already paid.' },"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}\n           className=\"mt-4 text-base sm:text-lg max-w-md mx-auto\" style={{ color: 'var(--muted)' }}>\n-          Join group deals where every order lowers the price for everyone, including you.\n+          Group deals on EURC, Circle&apos;s euro stablecoin. The more people buy, the better everyone&apos;s rate.\n         </motion.p>"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { formatUsdcPrice, txUrl, shortAddr } from './utils'\n-import { ARC_NETWORK } from './config'\n+import { formatUsdcPrice, txUrl, shortAddr, formatTokenAmount } from './utils'\n+import { ARC_NETWORK, GOODS_TOKENS } from './config'"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 11,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    case 'GoodsClaimed':\n+    case 'GoodsClaimed': {\n+      const tok = GOODS_TOKENS.find(t => t.address.toLowerCase() === String(a.token ?? '').toLowerCase())\n+      const amtStr = tok\n+        ? `${formatTokenAmount(BigInt(String(a.amount)), tok.decimals)} ${tok.symbol}`\n+        : `${String(a.amount)} tokens`\n       return (\n         <p className=\"text-xs\" style={{ color: 'var(--ink-2)' }}>\n-          {shortAddr(String(a.claimant))} claimed {String(a.amount)} goods token base units\n-        </p>\n-      )\n+          {shortAddr(String(a.claimant))} claimed {amtStr}"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-      const tok = GOODS_TOKENS.find(t => t.address.toLowerCase() === String(a.token ?? '').toLowerCase())\n+      const tok = GOODS_TOKENS.find(t => t.address.toLowerCase() === ((a.token as string | undefined) ?? '').toLowerCase())"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "write",
+      "addedLines": 788,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * SupplierView v2 — post a Swarm deal with an ERC-20 goods token.\n+ *\n+ * Two-step flow:\n+ *   1. Approve the factory to spend exactly (maxUnits × tokensPerUnit) of the\n+ *      goods token.\n+ *   2. Call postDeal(PostParams, Tier[]) — the factory pulls the stock in the\n+ *      same transaction."
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'\n+import { ARC_NETWORK, CONTRACTS_ACTIVE, GOODS_TOKENS } from './config'\n+import { formatTokenAmount } from './utils'"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 15,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export interface DealProof {\n   dealId: string\n+  goodsToken: string  // address of the goods token (from DealPosted), lowercase\n   // USDC conservation\n   commitsIn:        bigint  // net escrowed USDC (Committed.escrow − Withdrawn.amountReturned)\n   excessIn:         bigint  // ExcessCredited.amount sum\n   supplierCredited: bigint  // cp × totalUnits from Settled; 0 for refunded\n-  refundsOut:       bigint  // totalRefunds from Settled OR sum of Refunded events\n-  usdcConserved:    boolean | null\n+  refundsOut:       bigint  // totalRefunds from Settled OR sum of Refunded events"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 35,
+      "removedLines": 23,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "+    // Build a lookup from token address (lowercase) → decimals from GOODS_TOKENS\n+    const knownTokenDecimals = new Map<string, number>(\n+      GOODS_TOKENS.map(t => [t.address.toLowerCase(), t.decimals])\n+    )\n+\n     const getDeal = (id: string): DealProof => {\n       if (!s.deals.has(id)) {\n-        s.deals.set(id, {\n-          dealId:            id,\n-          commitsIn:         0n,\n-          excessIn:          0n,\n-          supplierCredited:  0n,\n-          refundsOut:        0n,\n+        s.deals.set(id, {"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 12,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       if (deal.settled) {\n+        const dec = deal.goodsToken ? knownTokenDecimals.get(deal.goodsToken) : undefined\n+        const fmt = (v: bigint) => dec !== undefined ? formatTokenAmount(v, dec) : v.toString()\n+        const tok = deal.goodsToken\n+          ? (GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken)?.symbol ?? 'tokens')\n+          : 'tokens'\n         deal.goodsNote = deal.unitsDelivered > 0n\n-          ? `${deal.unitsDelivered.toString()} token base units delivered to buyers`\n-          : 'No units delivered (all stock unsold or deal had zero buyers)'\n-      } else if (deal.refunded) {\n-        deal.goodsNote = 'Refunded — full stock returned to supplier'\n-      }\n+          ? `${fmt(deal.unitsDelivered)} ${tok} delivered to buyers`"
+    },
+    {
+      "path": "src/swarm/useEventLog.ts",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         case 'DealPosted': {\n           const dealId = String(a.dealId)\n-          const tok    = String(a.goodsToken ?? '').toLowerCase()\n+          const tok    = (a.goodsToken as string | undefined ?? '').toLowerCase()\n           if (tok) getDeal(dealId).goodsToken = tok\n           break\n         }"
+    },
+    {
+      "path": "src/swarm/utils.ts",
+      "action": "edit",
+      "addedLines": 25,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-/** Parse a Solidity revert error name from a wagmi error message */\n+/**\n+ * Format a token amount in base units to a human-readable string,\n+ * trimming trailing zeros. Mirrors the display semantics of formatUnits.\n+ *\n+ * Examples (decimals = 6):\n+ *   1_000_000n → \"1\"\n+ *   1_500_000n → \"1.5\"\n+ *   1_234_567n → \"1.234567\""
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

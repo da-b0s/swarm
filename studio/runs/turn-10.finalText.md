@@ -1,0 +1,51 @@
+Reading all the files I need to touch before writing anything. Now I have everything. Let me read the GlobalClaimsBanner, ProofPage, and hooks to know where goods amounts appear: Good. Now I have a complete picture. The work is:
+
+1. `config.ts` — add `GOODS_TOKENS`
+2. `utils.ts` — add `formatTokenAmount`
+3. `SupplierView.tsx` — replace free-text token address with picker, remove SwarmPass faucet, new defaults, no-EURC notice
+4. `DealRoom.tsx` — fix "1 unit = N SYMBOL" line and goods claim buttons
+5. `CommitFlow.tsx` — fix "You'll receive" line in order summary and OrderPreviewCard
+6. `GlobalClaimsBanner.tsx` — fix goods claim amount display
+7. `ProofPage.tsx` — fix GoodsClaimed event summary
+8. `HomePage.tsx` — update copy (hero subtitle, FAQ "What can I buy?", "items"→"tokens")
+
+The `GlobalClaimsBanner` needs decimals for each token to format amounts. It already reads symbols; I'll add decimals reads too. The `ProofPage` `GoodsClaimed` event gets `amount` in base units but the banner and deal room need the token's decimals. The ProofPage doesn't know decimals for GoodsClaimed — I'll note it shows base units there (the event log is a technical view). Actually the spec says "wherever goods are shown including the proof page" — but for the event log we don't have decimals in context. I'll add a `useTokenDecimals` hook call to `GlobalClaimsBanner` (which already has the token address list) and pass decimals through.
+
+Let me plan carefully: `GlobalClaimsBanner` already reads `symbol` per token; extend it to also read `decimals`. `DealRoom` already has `tokenMeta` from `useGoodsTokenMeta` which returns `symbol` and `decimals`. The `CommitFlow` receives `tokensPerUnit` as raw bigint and `goodsSymbol`; it needs `goodsDecimals` too. I'll add it as a prop.
+
+Actually — looking at this more carefully, `tokensPerUnit` is already in raw base units (e.g. `1000000` for 1 EURC with 6 decimals). `formatTokenAmount(tokensPerUnit, decimals)` gives `"1"`. The `DealRoom` passes `tokensPerUnit={deal.tokensPerUnit}` and already has `tokenMeta?.symbol`. I need to pass `goodsDecimals` as a prop to `CommitFlow`. Let me add it.
+
+Setting up todos and working: Now add `formatTokenAmount` to utils.ts and update the `GOODS_TOKENS` import: Now rewrite `SupplierView.tsx` — replace free-text token address with a `GOODS_TOKENS` picker, remove SwarmPass faucet, update defaults to EURC: Now update `DealRoom.tsx` — fix `tokensPerUnit` display and goods claim buttons using `formatTokenAmount`: Fix the "1 unit = N SYMBOL" line — `tokensPerUnit` is in base units, needs `formatTokenAmount` with `tokenMeta?.decimals`: Now fix the `CommitFlow` — pass `goodsDecimals` prop and use `formatTokenAmount`. I also need to pass `goodsDecimals` from `DealRoom`: Now fix the goods claim buttons in `DealRoom` — `SettleOrRefundPanel` and `ClaimPanel` both show `goodsN.toString()`. They need decimals. Pass `goodsDecimals` to them: Now update the `SettleOrRefundPanel` and `ClaimPanel` interfaces and their goods claim button: Now fix the `ClaimPanel`'s goods button: Now update `CommitFlow.tsx` — add `goodsDecimals` prop and use `formatTokenAmount` in the order summary and `OrderPreviewCard`: Add `goodsDecimals` to the Props interface: Now thread `goodsDecimals` through the component and `OrderPreviewCard`: Now fix the order summary "You'll receive" line in the committed card: Now pass `goodsDecimals` to `OrderPreviewCard` and update its "You'll receive" line: Also fix the disconnected state's `OrderPreviewCard`: Now update `OrderPreviewCard` props and its "You'll receive" line: Now fix the "You'll receive" line in `OrderPreviewCard`: Now update `GlobalClaimsBanner` — add `useTokenDecimals` hook and use `formatTokenAmount`: The banner already reads symbols for each token; I'll extend `useTokenSymbols` to also return decimals, or add a parallel `useTokenDecimals` hook. The cleanest approach: extend the existing hook into `useTokenMeta` that returns both symbol and decimals in one batch: Replace `useTokenSymbols` with `useTokenMeta` that returns both symbol and decimals: Now update the banner component to use `useTokenMeta` and `formatTokenAmount`: Now fix the goods claim button in the banner render: Now update `ProofPage.tsx` — the `GoodsClaimed` event summary. The proof page doesn't have per-token decimals in context, but it does have a `goodsNote` string per deal and the `GoodsClaimed` event handler. The event log doesn't carry decimals. For the `GoodsClaimed` event, I'll show "N base units" when decimals are unknown — this is a technical proof page so precision matters. Actually the spec says "wherever goods are shown including the proof page". The proof page `goodsNote` comes from `useEventLog` which returns string notes. I'll update the `GoodsClaimed` event summary to say "base units" clearly, and separately update `useEventLog`'s `goodsNote` computation to format amounts if the token is in `GOODS_TOKENS`: The `useEventLog` builds `goodsNote` strings and the `ProofPage` renders `EventSummary` for `GoodsClaimed`. I need to:
+1. Update `ProofPage`'s `EventSummary` for `GoodsClaimed` to use `formatTokenAmount` when the token is in `GOODS_TOKENS`
+2. Update `useEventLog`'s `goodsNote` to use formatted amounts
+
+Let me check `useEventLog` quickly for where `goodsNote` is built: The `useEventLog` builds `goodsNote` at line 407-408. It has access to the `DealPosted` events in the event list but doesn't track `goodsToken` per deal. I can look up the `goodsToken` from `DealPosted` events during the pass, then use `GOODS_TOKENS` to resolve decimals.
+
+Let me update `useEventLog` to track `goodsToken` per deal and format `goodsNote` using `formatTokenAmount` when the token is known: Now add a `goodsToken` field to `DealProof` and populate it from `DealPosted`, then use it in `goodsNote`: Now update the `getDeal` initialiser to include `goodsToken: ''`, and the `DealPosted` case to populate it. Then update `goodsNote` to format with `formatTokenAmount`: Now update the `goodsNote` computation to use `formatTokenAmount` with known decimals: Now update `ProofPage.tsx`'s `GoodsClaimed` `EventSummary` to use `formatTokenAmount` when the token is in `GOODS_TOKENS`. The `GoodsClaimed` event has `(claimant, token, amount)` — the token address is available in `a.token`: Now update the `GoodsClaimed` case in `EventSummary`: Now update `HomePage.tsx` — new subtitle, "What can I buy?" FAQ, "items"→"tokens": The FAQ array uses curly apostrophes (from the patch). Let me read the exact content: Good — I can see the exact content with curly apostrophes. Now I can replace it: The file uses special Unicode curly quotes. Let me write the whole FAQ array directly: The file uses UTF-8 curly apostrophes (`'` = `\xe2\x80\x99`). I need to use Python to do a byte-level replacement, or just overwrite lines 24–37 using Python. The cleanest approach is to use `sed` or Python to replace the FAQ block: Now update the hero subtitle in `HomePage.tsx`: Now run check: Two `no-base-to-string` errors on `a.goodsToken` and `a.token` — these are `unknown` typed args. I need to cast them to `string` explicitly rather than wrapping in `String()`: Zero warnings, zero errors. Dev server still running: **Actual output:**
+
+```
+oxlint: Found 0 warnings and 0 errors  (35 + 39 files)
+tsc --noEmit:  exit 0
+```
+
+---
+
+Here is what changed:
+
+**`src/swarm/config.ts`** — `GoodsToken` interface and `GOODS_TOKENS` exported: EURC at `0x89B50855…` (testnet, 6 decimals) and `0xbEf5f6d5…` (mainnet, 6 decimals). One entry per network; adding a token later is one line.
+
+**`src/swarm/utils.ts`** — `formatTokenAmount(raw, decimals)` added: divides base units by `10^decimals`, trims trailing zeros. `1_000_000n` with 6 decimals → `"1"`, `1_500_000n` → `"1.5"`.
+
+**`src/swarm/SupplierView.tsx`** — rewritten. Free-text address field replaced by `TokenPickerCard` listing `GOODS_TOKENS` (EURC preselected, balance shown when connected). Swarm Pass faucet and `SWARM_PASS_ABI` import removed. Default tiers changed to `$1.20` from 1 unit / `$1.17` from 25 / `$1.15` from 50 with 1 EURC per unit. "Units per token" label now says "EURC per unit". No-balance notice: "You need EURC to sell." "More tokens are coming soon." shown under the picker. Token decimals come from the config entry (no on-chain read needed), so all validation works immediately on address selection.
+
+**`src/swarm/DealRoom.tsx`** — "1 unit = N SYMBOL" now uses `formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)` — shows `"1"` not `"1000000"`. Goods claim buttons in `SettleOrRefundPanel` and `ClaimPanel` use `formatTokenAmount`. Both panels gain `goodsDecimals?: number` prop, passed from `DealRoom` via `tokenMeta?.decimals`.
+
+**`src/swarm/CommitFlow.tsx`** — `goodsDecimals?: number` added to `Props` and `OrderPreviewCard`. "You will receive" in the order summary card and the order preview both use `formatTokenAmount` when decimals are known; shows nothing while loading rather than a raw number.
+
+**`src/swarm/GlobalClaimsBanner.tsx`** — `useTokenSymbols` replaced by `useTokenMeta` (reads `symbol` + `decimals` in one batch). Goods claim button shows `formatTokenAmount(amount, dec) SYM` when decimals are available; shows raw amount with symbol as fallback while loading.
+
+**`src/swarm/useEventLog.ts`** — `DealProof` gains `goodsToken: string`. `DealPosted` event case added to the stats loop to record each deal's token address. `goodsNote` for settled deals now uses `formatTokenAmount` when the token is in `GOODS_TOKENS`, and names the token symbol (`"50 EURC delivered to buyers"` instead of `"50000000 token base units delivered to buyers"`).
+
+**`src/swarm/ProofPage.tsx`** — `GoodsClaimed` `EventSummary` now resolves the token from `GOODS_TOKENS` by the event's `a.token` field and formats the amount with `formatTokenAmount`.
+
+**`src/swarm/HomePage.tsx`** — Hero subtitle updated. "What can I buy?" added as the first FAQ entry: "Today every deal sells EURC, Circle's euro stablecoin, paid for in USDC. More tokens are coming soon." Price example in "How is the final price decided?" updated from `$0.30/$0.20/10 units` to `$1.20/$1.17/25 units`. "items" → "tokens" throughout; curly-apostrophe contractions replaced with full words.

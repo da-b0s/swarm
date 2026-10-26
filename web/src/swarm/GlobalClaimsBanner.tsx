@@ -17,7 +17,7 @@ import { Gift, Loader2 } from 'lucide-react'
 import { CONTRACTS_ACTIVE, ARC_NETWORK, ARC_TX_FEES } from './config'
 import { DEAL_FACTORY_ABI, SETTLER_ABI } from './abis'
 import { useDealCount, useClaimable } from './hooks'
-import { formatUsdcPrice } from './utils'
+import { formatUsdcPrice, formatTokenAmount } from './utils'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 const ZERO = '0x0000000000000000000000000000000000000000' as `0x${string}`
@@ -90,34 +90,44 @@ function useGoodsClaimables(
   }, [data, tokens.join(',')])
 }
 
-// ── Token symbol helper ───────────────────────────────────────────────────────
+// ── Token symbol + decimals helper ───────────────────────────────────────────
 
 import { ERC20_ABI } from './abis'
-function useTokenSymbols(tokens: `0x${string}`[]): Map<string, string> {
-  const calls = useMemo(() =>
+
+interface TokenMeta { symbol: string; decimals: number }
+
+function useTokenMeta(tokens: `0x${string}`[]): Map<string, TokenMeta> {
+  const symbolCalls = useMemo(() =>
     tokens.map(tok => ({
-      address: tok,
-      abi: ERC20_ABI,
-      functionName: 'symbol' as const,
-      chainId: CHAIN_ID,
+      address: tok, abi: ERC20_ABI, functionName: 'symbol' as const, chainId: CHAIN_ID,
     })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tokens.join(',')]
   )
-  const { data } = useReadContracts({
-    contracts: calls,
-    query: { enabled: tokens.length > 0, staleTime: Infinity },
-  })
+  const decimalsCalls = useMemo(() =>
+    tokens.map(tok => ({
+      address: tok, abi: ERC20_ABI, functionName: 'decimals' as const, chainId: CHAIN_ID,
+    })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tokens.join(',')]
+  )
+  const { data: symData  } = useReadContracts({ contracts: symbolCalls,   query: { enabled: tokens.length > 0, staleTime: Infinity } })
+  const { data: decData  } = useReadContracts({ contracts: decimalsCalls, query: { enabled: tokens.length > 0, staleTime: Infinity } })
 
   return useMemo(() => {
-    const m = new Map<string, string>()
-    if (!data) return m
+    const m = new Map<string, TokenMeta>()
+    if (!symData || !decData) return m
     tokens.forEach((tok, i) => {
-      if (data[i]?.status === 'success') m.set(tok.toLowerCase(), String(data[i].result ?? '?'))
+      if (symData[i]?.status === 'success' && decData[i]?.status === 'success') {
+        m.set(tok.toLowerCase(), {
+          symbol:   String(symData[i].result  ?? '?'),
+          decimals: Number(decData[i].result  ?? 0),
+        })
+      }
     })
     return m
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, tokens.join(',')])
+  }, [symData, decData, tokens.join(',')])
 }
 
 // ── Banner component ──────────────────────────────────────────────────────────
@@ -130,9 +140,9 @@ export function GlobalClaimsBanner() {
   const { data: usdcClaimableRaw, refetch: refetchUsdc } = useClaimable(address)
   const usdcClaimable = usdcClaimableRaw !== undefined ? BigInt(usdcClaimableRaw) : 0n
 
-  const goodsTokens    = useGoodsTokens(dealCount)
+  const goodsTokens     = useGoodsTokens(dealCount)
   const goodsClaimables = useGoodsClaimables(goodsTokens, address)
-  const symbols        = useTokenSymbols(goodsTokens)
+  const tokenMeta       = useTokenMeta(goodsTokens)
 
   const { writeContract } = useWriteContract()
   const [busyToken, setBusyToken] = useState<string | null>(null)
@@ -189,7 +199,9 @@ export function GlobalClaimsBanner() {
           )}
 
           {goodsClaimables.map(({ token, amount }) => {
-            const sym = symbols.get(token.toLowerCase()) ?? '…'
+            const meta = tokenMeta.get(token.toLowerCase())
+            const sym  = meta?.symbol ?? '…'
+            const dec  = meta?.decimals
             return (
               <button
                 key={token}
@@ -200,7 +212,9 @@ export function GlobalClaimsBanner() {
                 {busyToken === token.toLowerCase()
                   ? <Loader2 className="size-3.5 animate-spin" />
                   : null}
-                Claim {amount.toString()} {sym}
+                {dec !== undefined
+                  ? `Claim ${formatTokenAmount(amount, dec)} ${sym}`
+                  : sym !== '…' ? `Claim ${amount.toString()} ${sym}` : 'Claim tokens'}
               </button>
             )
           })}

@@ -42,7 +42,8 @@
 
 import { useState, useCallback, useRef } from 'react'
 import { decodeEventLog, keccak256, toBytes, type Hex } from 'viem'
-import { ARC_NETWORK, CONTRACTS_ACTIVE } from './config'
+import { ARC_NETWORK, CONTRACTS_ACTIVE, GOODS_TOKENS } from './config'
+import { formatTokenAmount } from './utils'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI, SETTLER_ABI } from './abis'
 import {
   rpcFetch, getLatestBlock,
@@ -129,6 +130,7 @@ export interface ProofStats {
 
 export interface DealProof {
   dealId: string
+  goodsToken: string  // address of the goods token (from DealPosted), lowercase
   // USDC conservation
   commitsIn:        bigint  // net escrowed USDC (Committed.escrow − Withdrawn.amountReturned)
   excessIn:         bigint  // ExcessCredited.amount sum
@@ -302,10 +304,16 @@ export function useEventLog() {
       deals:             new Map(),
     }
 
+    // Build a lookup from token address (lowercase) → decimals from GOODS_TOKENS
+    const knownTokenDecimals = new Map<string, number>(
+      GOODS_TOKENS.map(t => [t.address.toLowerCase(), t.decimals])
+    )
+
     const getDeal = (id: string): DealProof => {
       if (!s.deals.has(id)) {
         s.deals.set(id, {
           dealId:            id,
+          goodsToken:        '',
           commitsIn:         0n,
           excessIn:          0n,
           supplierCredited:  0n,
@@ -324,6 +332,12 @@ export function useEventLog() {
     for (const ev of events) {
       const a = ev.args
       switch (ev.type) {
+        case 'DealPosted': {
+          const dealId = String(a.dealId)
+          const tok    = (a.goodsToken as string | undefined ?? '').toLowerCase()
+          if (tok) getDeal(dealId).goodsToken = tok
+          break
+        }
         case 'Committed': {
           // v2: escrow = paidPerUnit × units (full amount escrowed by this buyer)
           const dealId = String(a.dealId)
@@ -404,9 +418,14 @@ export function useEventLog() {
       //            don't have from events alone, so we report units delivered.
       //   refunded: all stock returned to supplier (no delivery).
       if (deal.settled) {
+        const dec = deal.goodsToken ? knownTokenDecimals.get(deal.goodsToken) : undefined
+        const fmt = (v: bigint) => dec !== undefined ? formatTokenAmount(v, dec) : v.toString()
+        const tok = deal.goodsToken
+          ? (GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken)?.symbol ?? 'tokens')
+          : 'tokens'
         deal.goodsNote = deal.unitsDelivered > 0n
-          ? `${deal.unitsDelivered.toString()} token base units delivered to buyers`
-          : 'No units delivered (all stock unsold or deal had zero buyers)'
+          ? `${fmt(deal.unitsDelivered)} ${tok} delivered to buyers`
+          : 'No tokens delivered (all stock unsold or deal had zero buyers)'
       } else if (deal.refunded) {
         deal.goodsNote = 'Refunded — full stock returned to supplier'
       }

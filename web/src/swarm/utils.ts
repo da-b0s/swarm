@@ -171,6 +171,30 @@ export function checkWouldStrandBuyer(
   return { blocked: false }
 }
 
+/**
+ * Format a token amount in base units to a human-readable string,
+ * trimming trailing zeros. Mirrors the display semantics of formatUnits.
+ *
+ * Examples (decimals = 6):
+ *   1_000_000n → "1"
+ *   1_500_000n → "1.5"
+ *   1_234_567n → "1.234567"
+ *       500n   → "0.0005"  (if decimals = 6)
+ *
+ * While decimals are loading, callers should show nothing rather than
+ * the raw number — pass undefined and check for undefined return.
+ */
+export function formatTokenAmount(raw: bigint, decimals: number): string {
+  if (decimals === 0) return raw.toString()
+  const scale = 10 ** decimals
+  const whole = raw / BigInt(scale)
+  const frac  = raw % BigInt(scale)
+  if (frac === 0n) return whole.toString()
+  // Pad fractional part to `decimals` digits, then trim trailing zeros
+  const fracStr = frac.toString().padStart(decimals, '0').replace(/0+$/, '')
+  return `${whole}.${fracStr}`
+}
+
 /** Parse a Solidity revert error name from a wagmi error message */
 export function parseRevertReason(error: unknown): string {
   const msg = (error as { message?: string })?.message ?? ''

@@ -11,7 +11,7 @@ import {
 } from './hooks'
 import { useDealHistory } from './useDealHistory'
 import { SETTLER_ABI } from './abis'
-import { formatUsdcPrice, formatCountdown, shortAddr, txUrl } from './utils'
+import { formatUsdcPrice, formatCountdown, shortAddr, txUrl, formatTokenAmount } from './utils'
 import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES } from './config'
 
 interface Props { dealId: bigint }
@@ -82,7 +82,9 @@ export function DealRoom({ dealId }: Props) {
         <div className="flex items-center gap-1.5 pt-0.5">
           <Package className="size-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
           <span className="text-xs" style={{ color: 'var(--muted)' }}>
-            1 unit = {deal.tokensPerUnit.toString()} {symbol}
+            {tokenMeta?.decimals !== undefined
+              ? `1 unit = ${formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)} ${symbol}`
+              : symbol !== '…' ? `1 unit = ? ${symbol}` : null}
           </span>
         </div>
       </motion.div>
@@ -170,6 +172,7 @@ export function DealRoom({ dealId }: Props) {
           state={deal.state}
           goodsToken={deal.goodsToken}
           goodsSymbol={symbol}
+          goodsDecimals={tokenMeta?.decimals}
           tokensPerUnit={deal.tokensPerUnit}
           onCommitted={refetchAll}
         />
@@ -257,13 +260,14 @@ export function DealRoom({ dealId }: Props) {
           minUnits={deal.minUnits}
           goodsToken={deal.goodsToken}
           goodsSymbol={symbol}
+          goodsDecimals={tokenMeta?.decimals}
           onDone={refetchAll}
         />
       )}
 
       {/* Settled / refunded — show claim buttons */}
       {(deal.state === 1 || deal.state === 2) && (
-        <ClaimPanel goodsToken={deal.goodsToken} goodsSymbol={symbol} onDone={refetchAll} />
+        <ClaimPanel goodsToken={deal.goodsToken} goodsSymbol={symbol} goodsDecimals={tokenMeta?.decimals} onDone={refetchAll} />
       )}
     </div>
   )
@@ -277,10 +281,11 @@ interface SettleProps {
   minUnits: number
   goodsToken: `0x${string}`
   goodsSymbol: string
+  goodsDecimals?: number
   onDone: () => void
 }
 
-function SettleOrRefundPanel({ dealId, totalUnits, minUnits, goodsToken, goodsSymbol, onDone }: SettleProps) {
+function SettleOrRefundPanel({ dealId, totalUnits, minUnits, goodsToken, goodsSymbol, goodsDecimals, onDone }: SettleProps) {
   const { address } = useAccount()
   const { data: claimable,      refetch: refetchClaimable }      = useClaimable(address)
   const { data: goodsClaimable, refetch: refetchGoodsClaimable } = useGoodsClaimable(goodsToken, address)
@@ -348,7 +353,7 @@ function SettleOrRefundPanel({ dealId, totalUnits, minUnits, goodsToken, goodsSy
         <button onClick={() => send('claimGoods')} disabled={busy}
           className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
           style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}>
-          Claim {goodsN.toString()} {goodsSymbol}
+          Claim {goodsDecimals !== undefined ? formatTokenAmount(goodsN, goodsDecimals) : goodsN.toString()} {goodsSymbol}
         </button>
       )}
 
@@ -365,12 +370,13 @@ function SettleOrRefundPanel({ dealId, totalUnits, minUnits, goodsToken, goodsSy
 // ── Claim panel (settled/refunded state) ──────────────────────────────────────
 
 interface ClaimPanelProps {
-  goodsToken:  `0x${string}`
-  goodsSymbol: string
-  onDone:      () => void
+  goodsToken:   `0x${string}`
+  goodsSymbol:  string
+  goodsDecimals?: number
+  onDone:       () => void
 }
 
-function ClaimPanel({ goodsToken, goodsSymbol, onDone }: ClaimPanelProps) {
+function ClaimPanel({ goodsToken, goodsSymbol, goodsDecimals, onDone }: ClaimPanelProps) {
   const { address }  = useAccount()
   const { data: claimable,      refetch: refetchClaimable }      = useClaimable(address)
   const { data: goodsClaimable, refetch: refetchGoodsClaimable } = useGoodsClaimable(goodsToken, address)
@@ -423,7 +429,7 @@ function ClaimPanel({ goodsToken, goodsSymbol, onDone }: ClaimPanelProps) {
         <button onClick={() => send('claimGoods')} disabled={busy}
           className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all disabled:opacity-40"
           style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)', border: '1px solid rgba(26,128,71,0.2)' }}>
-          Claim {goodsN.toString()} {goodsSymbol}
+          Claim {goodsDecimals !== undefined ? formatTokenAmount(goodsN, goodsDecimals) : goodsN.toString()} {goodsSymbol}
         </button>
       )}
 

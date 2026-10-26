@@ -23,8 +23,12 @@ export const USDC = '0x3600000000000000000000000000000000000000';
 export const ENV = Object.fromEntries(readFileSync(new URL('../.env', import.meta.url), 'utf8')
   .split(/\r?\n/).filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]));
 if (!FORK_RPC && ENV.ARC_NETWORK !== 'testnet') throw new Error(`refusing: .env ARC_NETWORK is ${ENV.ARC_NETWORK}, not testnet`);
+const EURC_MAINNET = '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1';
 const FORK = FORK_RPC ? JSON.parse(readFileSync(process.env.FORK_ADDRESSES, 'utf8')) : null;
-export const FACTORY = FORK?.factory ?? ENV.DEAL_FACTORY, POOL = FORK?.pool ?? ENV.DEMAND_POOL, SETTLER = FORK?.settler ?? ENV.SETTLER, PASS = FORK?.pass ?? ENV.SWARM_PASS;
+export const FACTORY = FORK?.factory ?? ENV.DEAL_FACTORY, POOL = FORK?.pool ?? ENV.DEMAND_POOL, SETTLER = FORK?.settler ?? ENV.SETTLER, PASS = FORK ? EURC_MAINNET : ENV.SWARM_PASS;
+// Goods per unit, in base units: 1 Swarm Pass on testnet (0 decimals), 1 EURC on the mainnet fork (6 decimals).
+export const TPU = FORK ? 10n ** 6n : 1n;
+export const GOODS = FORK ? 'EURC' : 'PASS';
 for (const [k, v] of Object.entries({ FACTORY, POOL, SETTLER, PASS })) if (!/^0x[0-9a-fA-F]{40}$/.test(v ?? '')) throw new Error(`${k} missing from .env`);
 
 const abi = (n) => JSON.parse(readFileSync(new URL(`../onchain/contracts/out/${n}.sol/${n}.json`, import.meta.url), 'utf8')).abi;
@@ -90,6 +94,10 @@ export const events = (receipt, a) => receipt.logs.flatMap((l) => { try { return
 // Make sure the supplier holds at least `need` passes, using the faucet once if not.
 export async function ensurePasses(rec, need) {
   let have = await passOf(supplier);
+  if (FORK) {   // EURC cannot be minted: the fork setup gives the supplier EURC from a real holder
+    rec.check(`supplier holds at least ${need} EURC`, have >= BigInt(need) * TPU, `${Number(have) / 1e6} EURC`);
+    return;
+  }
   if (have < BigInt(need)) {
     const faucetOn = await pub.readContract({ address: PASS, abi: PASS_ABI, functionName: 'faucetEnabled' });
     if (faucetOn) await rec.send('supplier takes 100 passes from the faucet', supplier, { address: PASS, abi: PASS_ABI, functionName: 'faucet' });
@@ -101,12 +109,12 @@ export async function ensurePasses(rec, need) {
 
 // Post a pass deal; returns its id. `tiers` are [minUnits, priceUsd] pairs.
 export async function postPassDeal(rec, label, { tiers, minUnits, maxUnits, maxUnitsPerBuyer = 0, maxBuyers = 10, minutes = 10, title, description = '' }) {
-  await rec.send(`${label}: approve factory for ${maxUnits} passes`, supplier, { address: PASS, abi: ERC20_ABI, functionName: 'approve', args: [FACTORY, BigInt(maxUnits)] });
+  await rec.send(`${label}: approve factory for ${maxUnits} passes`, supplier, { address: PASS, abi: ERC20_ABI, functionName: 'approve', args: [FACTORY, BigInt(maxUnits) * TPU] });
   const deadline = BigInt((await chainNow()) + minutes * 60);
   const r = await rec.send(`${label}: post`, supplier, {
     address: FACTORY, abi: FACTORY_ABI, functionName: 'postDeal',
     args: [
-      { goodsToken: PASS, tokensPerUnit: 1n, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers, deadline, title, description },
+      { goodsToken: PASS, tokensPerUnit: TPU, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers, deadline, title, description },
       tiers.map(([u, p]) => ({ minUnits: u, pricePerUnit: usd(p) })),
     ],
   });
@@ -145,7 +153,7 @@ export async function signOrder(buyer, dealId, units, amount) {
 export async function claimAll(rec, label, account, expectUsdc, expectPass) {
   const owedUsdc = await read(SETTLER, SETTLER_ABI, 'claimable', [account.address]);
   const owedPass = await read(SETTLER, SETTLER_ABI, 'goodsClaimable', [PASS, account.address]);
-  rec.check(`${label} is owed ${fmt(expectUsdc)} and ${expectPass} PASS`, owedUsdc === expectUsdc && owedPass === BigInt(expectPass), `${fmt(owedUsdc)}, ${owedPass} PASS`);
+  rec.check(`${label} is owed ${fmt(expectUsdc)} and ${expectPass} ${GOODS}`, owedUsdc === expectUsdc && owedPass === BigInt(expectPass) * TPU, `${fmt(owedUsdc)}, ${owedPass} base units`);
   if (owedUsdc > 0n) {
     const before = await usdcOf(account);
     const r = await rec.send(`${label} claims USDC`, account, { address: SETTLER, abi: SETTLER_ABI, functionName: 'claim' });

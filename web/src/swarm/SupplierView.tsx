@@ -7,8 +7,8 @@
  *   2. Call postDeal(PostParams, Tier[]) — the factory pulls the stock in the
  *      same transaction.
  *
- * On testnet, the SwarmPass token is offered as a default goods token with a
- * "Get 100 test passes" faucet button that calls SwarmPass.faucet().
+ * Token picker shows GOODS_TOKENS from config; today that is EURC only.
+ * Free-text address entry has been removed — adding a token is one line in config.
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react'
@@ -18,17 +18,15 @@ import {
 } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { motion } from 'framer-motion'
-import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown, Droplets, CheckCircle2 } from 'lucide-react'
-import { DEAL_FACTORY_ABI, ERC20_ABI, SWARM_PASS_ABI } from './abis'
-import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ACTIVE_NETWORK, ARC_TX_FEES } from './config'
+import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown, CheckCircle2 } from 'lucide-react'
+import { DEAL_FACTORY_ABI, ERC20_ABI } from './abis'
+import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS } from './config'
+import type { GoodsToken } from './config'
 import { useChainNow } from './hooks'
 import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt } from './utils'
 
 const CHAIN_ID = ARC_NETWORK.chainId
-const ZERO = '0x0000000000000000000000000000000000000000' as `0x${string}`
-const USDC  = ARC_NETWORK.usdc.address
-// On testnet, show the SwarmPass helper when the address is not the zero address.
-const SWARM_PASS_ADDR = CONTRACTS_ACTIVE.SwarmPass
+const USDC     = ARC_NETWORK.usdc.address
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -38,11 +36,12 @@ type PostStep = 'idle' | 'approving' | 'approved' | 'posting' | 'done'
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
+/** Default tiers suited to EURC: $1.20 → $1.17 → $1.15, 1 EURC per unit */
 function defaultTiers(): TierInput[] {
   return [
-    { minUnits: '10', pricePerUnit: '2.00' },
-    { minUnits: '25', pricePerUnit: '1.50' },
-    { minUnits: '50', pricePerUnit: '1.00' },
+    { minUnits: '1',  pricePerUnit: '1.20' },
+    { minUnits: '25', pricePerUnit: '1.17' },
+    { minUnits: '50', pricePerUnit: '1.15' },
   ]
 }
 
@@ -58,15 +57,12 @@ function byteLengthOf(s: string): number {
   return new TextEncoder().encode(s).length
 }
 
-function isValidAddress(s: string): s is `0x${string}` {
-  return /^0x[0-9a-fA-F]{40}$/.test(s)
-}
-
 // ── Validation ────────────────────────────────────────────────────────────────
 
 interface PostInputs {
   goodsToken:       `0x${string}`
   tokensPerUnit:    bigint
+  tokenDecimals:    number
   tiers:            TierInput[]
   minUnits:         string
   maxUnits:         string
@@ -88,17 +84,17 @@ interface ValidatedInputs {
   deadline:         bigint
   title:            string
   description:      string
-  stockAmount:      bigint // maxUnits × tokensPerUnit, in token base units
+  stockAmount:      bigint
 }
 
 function validate(
   inp: PostInputs,
-  tokenDecimals: number | undefined,
   chainNow: number,
 ): ValidatedInputs | string {
-  if (!isValidAddress(inp.goodsToken)) return 'Enter a valid goods token address.'
-  if (inp.goodsToken.toLowerCase() === USDC.toLowerCase()) return 'USDC cannot be the goods token.'
-  if (inp.goodsToken === ZERO) return 'Goods token address must not be zero.'
+  if (!inp.goodsToken || inp.goodsToken === '0x0000000000000000000000000000000000000000')
+    return 'Select a goods token.'
+  if (inp.goodsToken.toLowerCase() === USDC.toLowerCase())
+    return 'USDC cannot be the goods token.'
 
   const titleBytes = byteLengthOf(inp.title)
   if (titleBytes === 0) return 'Title is required.'
@@ -106,7 +102,6 @@ function validate(
   const descBytes = byteLengthOf(inp.description)
   if (descBytes > 500) return `Description is ${descBytes} bytes; maximum is 500.`
 
-  if (tokenDecimals === undefined) return 'Could not read token decimals. Is this a valid ERC-20?'
   if (inp.tokensPerUnit <= 0n) return 'Tokens per unit must be at least 1.'
 
   const minNum = parseInt(inp.minUnits)
@@ -168,6 +163,73 @@ function validate(
   }
 }
 
+// ── Token picker card ─────────────────────────────────────────────────────────
+
+interface TokenPickerProps {
+  selected:    GoodsToken
+  onSelect:    (t: GoodsToken) => void
+  balance:     number | undefined
+  hasEnough:   boolean
+  stockTokens: number
+  symbol:      string
+}
+
+function TokenPickerCard({ selected, onSelect, balance, hasEnough, stockTokens, symbol }: TokenPickerProps) {
+  return (
+    <div className="rounded-3xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>Token</span>
+
+      {/* Token list */}
+      <div className="space-y-2">
+        {GOODS_TOKENS.map(tok => {
+          const active = tok.address.toLowerCase() === selected.address.toLowerCase()
+          return (
+            <button
+              key={tok.address}
+              onClick={() => onSelect(tok)}
+              className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-all hover:scale-[1.01]"
+              style={{
+                background: active ? 'var(--surface-muted)' : 'var(--surface)',
+                border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>{tok.symbol}</span>
+                <span className="text-xs" style={{ color: 'var(--muted)' }}>{tok.name}</span>
+              </div>
+              {active && balance !== undefined && (
+                <span className="text-xs tabular-nums" style={{ color: hasEnough ? 'var(--muted)' : 'var(--danger)' }}>
+                  Balance: {balance.toLocaleString(undefined, { maximumFractionDigits: tok.decimals })}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      <p className="text-xs" style={{ color: 'var(--subtle)' }}>More tokens are coming soon.</p>
+
+      {/* No-balance notice */}
+      {balance !== undefined && stockTokens > 0 && !hasEnough && (
+        <div className="rounded-xl px-3 py-2.5 flex items-start gap-2.5"
+          style={{ background: 'rgba(186,43,76,0.06)', border: '1px solid rgba(186,43,76,0.15)' }}>
+          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
+          <p className="text-xs" style={{ color: 'var(--danger)' }}>
+            You need {symbol} to sell. Units you do not sell are returned to you when the deal closes.
+          </p>
+        </div>
+      )}
+
+      {/* Stock summary */}
+      {stockTokens > 0 && symbol && (
+        <p className="text-xs" style={{ color: 'var(--muted)' }}>
+          Deposit required: {stockTokens.toLocaleString()} {symbol}
+        </p>
+      )}
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => void }) {
@@ -177,12 +239,10 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   const chainNow = useChainNow()
 
   // ── Form state ───────────────────────────────────────────────────────────
-  const [goodsTokenStr, setGoodsTokenStr] = useState(
-    ACTIVE_NETWORK === 'testnet' && SWARM_PASS_ADDR !== ZERO ? SWARM_PASS_ADDR : ''
-  )
+  const [selectedToken, setSelectedToken] = useState<GoodsToken>(GOODS_TOKENS[0])
   const [unitsPerToken, setUnitsPerToken] = useState('1')
   const [tiers, setTiers] = useState<TierInput[]>(defaultTiers)
-  const [minUnits, setMinUnits] = useState('10')
+  const [minUnits, setMinUnits] = useState('1')
   const [maxUnits, setMaxUnits] = useState('50')
   const [maxUnitsPerBuyer, setMaxUnitsPerBuyer] = useState('')
   const [maxBuyers, setMaxBuyers] = useState('50')
@@ -197,46 +257,26 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   const [approveTxHash, setApproveTxHash] = useState<`0x${string}` | undefined>()
   const [postTxHash, setPostTxHash] = useState<`0x${string}` | undefined>()
 
-
   // ── Token reads ──────────────────────────────────────────────────────────
-  const goodsAddr = isValidAddress(goodsTokenStr) ? goodsTokenStr : undefined
-  const isSwarmPass = goodsAddr?.toLowerCase() === SWARM_PASS_ADDR.toLowerCase() && SWARM_PASS_ADDR !== ZERO
+  const goodsAddr   = selectedToken.address
+  const decimals    = selectedToken.decimals
+  const symbol      = selectedToken.symbol
 
-  const { data: tokenSymbol } = useReadContract({
-    address: goodsAddr, abi: ERC20_ABI, functionName: 'symbol',
-    chainId: CHAIN_ID, query: { enabled: !!goodsAddr, staleTime: Infinity },
-  })
-  const { data: tokenDecimals } = useReadContract({
-    address: goodsAddr, abi: ERC20_ABI, functionName: 'decimals',
-    chainId: CHAIN_ID, query: { enabled: !!goodsAddr, staleTime: Infinity },
-  })
   const { data: tokenBalance, refetch: refetchBalance } = useReadContract({
     address: goodsAddr, abi: ERC20_ABI, functionName: 'balanceOf',
     args: address ? [address] : undefined,
-    chainId: CHAIN_ID, query: { enabled: !!goodsAddr && !!address, refetchInterval: 6000 },
+    chainId: CHAIN_ID, query: { enabled: !!address, refetchInterval: 6000 },
   })
 
-  // Faucet cooldown: nextFaucetAt[address] = timestamp after which faucet is available
-  // We read the PASS token's day bucket from a synthetic cooldown (24h per address).
-  // SwarmPass tracks this internally; we just show a helpful message if we detect failure.
-  const [faucetCooldown, setFaucetCooldown] = useState(false)
-
   // ── Computed values ──────────────────────────────────────────────────────
-  const decimals = tokenDecimals !== undefined ? Number(tokenDecimals) : undefined
   const unitsPerTokenNum = parseInt(unitsPerToken) || 1
-  const tokensPerUnit = decimals !== undefined
-    ? BigInt(unitsPerTokenNum) * (10n ** BigInt(decimals))
-    : 0n
-  const symbol = tokenSymbol ?? (goodsAddr ? '…' : '')
-
-  // Stock display: maxUnits × tokensPerUnit, in display units
-  const maxUnitsNum = parseInt(maxUnits) || 0
-  const stockTokens = decimals !== undefined && tokensPerUnit > 0n
+  const tokensPerUnit    = BigInt(unitsPerTokenNum) * (10n ** BigInt(decimals))
+  const maxUnitsNum      = parseInt(maxUnits) || 0
+  const stockTokens      = maxUnitsNum > 0 && tokensPerUnit > 0n
     ? Number(BigInt(maxUnitsNum) * tokensPerUnit) / (10 ** decimals)
     : 0
 
-  // Wallet balance in display units
-  const walletDisplayBalance = tokenBalance !== undefined && decimals !== undefined
+  const walletDisplayBalance = tokenBalance !== undefined
     ? Number(tokenBalance) / (10 ** decimals)
     : undefined
 
@@ -279,13 +319,9 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     useWaitForTransactionReceipt({ hash: approveTxHash, chainId: CHAIN_ID })
   const { isLoading: postConfirming, isSuccess: postReceiptArrived, data: postReceipt } =
     useWaitForTransactionReceipt({ hash: postTxHash, chainId: CHAIN_ID })
-  // A receipt is not success: a transaction can be mined and still revert.
-  const postSuccess = postReceiptArrived && postReceipt?.status === 'success'
+  const postSuccess  = postReceiptArrived && postReceipt?.status === 'success'
   const postReverted = postReceiptArrived && postReceipt?.status === 'reverted'
 
-  // If a sent transaction has no receipt after a minute, say so rather than spin.
-  // On Arc a transaction priced under the 20 gwei floor disappears without a
-  // receipt; fees are now set explicitly, but the page should never wait silently.
   const [postSlow, setPostSlow] = useState(false)
   useEffect(() => {
     if (!postTxHash || postReceiptArrived) return
@@ -293,7 +329,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     return () => { clearTimeout(t); setPostSlow(false) }
   }, [postTxHash, postReceiptArrived])
 
-  // Parse DealPosted from receipt to get the new deal id (derived, no effect needed)
+  // Parse DealPosted from receipt to get the new deal id
   const parsedDealId = useMemo<bigint | null>(() => {
     if (!postSuccess || !postReceipt) return null
     try {
@@ -307,40 +343,20 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     return null
   }, [postSuccess, postReceipt])
 
-  // ── Faucet ───────────────────────────────────────────────────────────────
-  const handleFaucet = useCallback(() => {
-    if (!isSwarmPass || !address) return
-    writeContract(
-      {
-        address: SWARM_PASS_ADDR,
-        abi: SWARM_PASS_ABI,
-        functionName: 'faucet',
-        ...ARC_TX_FEES, chainId: CHAIN_ID,
-      },
-      {
-        onSuccess: () => {
-          setFaucetCooldown(true)
-          void refetchBalance()
-        },
-        onError: () => {
-          // faucet() reverts if called more than once per day
-          setFaucetCooldown(true)
-        },
-      }
-    )
-  }, [isSwarmPass, address, writeContract, refetchBalance])
+  // Reset balance when token changes
+  useEffect(() => { void refetchBalance() }, [selectedToken, refetchBalance])
 
   // ── Step 1: Approve ──────────────────────────────────────────────────────
   const handleApprove = useCallback(() => {
     setValidationErr(null)
     setErrMsg('')
     const inp: PostInputs = {
-      goodsToken: goodsAddr ?? ZERO,
-      tokensPerUnit,
+      goodsToken: goodsAddr,
+      tokensPerUnit, tokenDecimals: decimals,
       tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
       durationHours, title, description,
     }
-    const result = validate(inp, decimals, chainNow)
+    const result = validate(inp, chainNow)
     if (typeof result === 'string') { setValidationErr(result); return }
 
     if (!hasEnoughBalance) {
@@ -366,23 +382,21 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       }
     )
   }, [
-    goodsAddr, tokensPerUnit, tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
-    durationHours, title, description, decimals, chainNow, hasEnoughBalance,
+    goodsAddr, tokensPerUnit, decimals, tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
+    durationHours, title, description, chainNow, hasEnoughBalance,
     walletDisplayBalance, symbol, stockTokens, writeContract,
   ])
-
-  // step advances to 'approved' when the approve tx confirms (handled in render tree below)
 
   // ── Step 2: Post deal ────────────────────────────────────────────────────
   const handlePost = useCallback(() => {
     setErrMsg('')
     const inp: PostInputs = {
-      goodsToken: goodsAddr ?? ZERO,
-      tokensPerUnit,
+      goodsToken: goodsAddr,
+      tokensPerUnit, tokenDecimals: decimals,
       tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
       durationHours, title, description,
     }
-    const result = validate(inp, decimals, chainNow)
+    const result = validate(inp, chainNow)
     if (typeof result === 'string') { setValidationErr(result); return }
 
     const postParams = {
@@ -412,15 +426,12 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       }
     )
   }, [
-    goodsAddr, tokensPerUnit, tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
-    durationHours, title, description, decimals, chainNow, writeContract,
+    goodsAddr, tokensPerUnit, decimals, tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
+    durationHours, title, description, chainNow, writeContract,
   ])
 
   // ── Render ───────────────────────────────────────────────────────────────
-  const busy = step === 'approving' || approveConfirming || step === 'posting' || postConfirming
-  // Step 2 has its own busy state. It used to share 'busy', which counts the
-  // approval as in progress until step leaves 'approving' -- and nothing ever
-  // moved it on once the approval confirmed, so Post deal stayed disabled.
+  const busy     = step === 'approving' || approveConfirming || step === 'posting' || postConfirming
   const postBusy = step === 'posting' || postConfirming
 
   const titleBytes = byteLengthOf(title)
@@ -435,69 +446,21 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         </p>
       </motion.div>
 
-      {/* ── Goods token ─────────────────────────────────────────────────── */}
+      {/* ── Token picker ──────────────────────────────────────────────── */}
+      <TokenPickerCard
+        selected={selectedToken}
+        onSelect={t => { setSelectedToken(t) }}
+        balance={walletDisplayBalance}
+        hasEnough={hasEnoughBalance}
+        stockTokens={stockTokens}
+        symbol={symbol}
+      />
+
+      {/* ── Tokens per unit ───────────────────────────────────────────── */}
       <div className="rounded-3xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>Goods token</span>
-
-        <div className="space-y-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: 'var(--subtle)' }}>Token address</span>
-            <input
-              value={goodsTokenStr}
-              onChange={e => setGoodsTokenStr(e.target.value)}
-              placeholder="0x…"
-              spellCheck={false}
-              className="rounded-xl px-3 py-2 text-sm mono outline-none transition-colors"
-              style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
-            />
-          </label>
-
-          {/* Token info strip */}
-          {goodsAddr && (
-            <div className="rounded-xl px-3 py-2 flex items-center gap-3"
-              style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-              {tokenSymbol ? (
-                <>
-                  <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>{tokenSymbol}</span>
-                  <span className="text-xs" style={{ color: 'var(--muted)' }}>{decimals !== undefined ? `${decimals} decimals` : '…'}</span>
-                  {walletDisplayBalance !== undefined && (
-                    <span className="text-xs ml-auto" style={{ color: hasEnoughBalance ? 'var(--muted)' : 'var(--danger)' }}>
-                      Balance: {walletDisplayBalance.toLocaleString()}
-                    </span>
-                  )}
-                </>
-              ) : (
-                <span className="text-xs" style={{ color: 'var(--muted)' }}>Reading token…</span>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* SwarmPass faucet on testnet */}
-        {isSwarmPass && !wrongChain && isConnected && (
-          <div className="rounded-xl px-3 py-2.5 flex items-center gap-3"
-            style={{ background: 'rgba(18,97,166,0.06)', border: '1px solid rgba(18,97,166,0.15)' }}>
-            <Droplets className="size-4 shrink-0" style={{ color: '#1061a6' }} />
-            <span className="text-xs flex-1" style={{ color: 'var(--ink-2)' }}>
-              Swarm Pass (test token, 0 decimals, faucet mints 100 once per day)
-            </span>
-            {faucetCooldown ? (
-              <span className="text-xs" style={{ color: 'var(--muted)' }}>Cooldown active</span>
-            ) : (
-              <button
-                onClick={handleFaucet}
-                className="text-xs font-semibold rounded-lg px-2.5 py-1 transition-all hover:scale-[1.02] active:scale-[0.98]"
-                style={{ background: 'rgba(18,97,166,0.12)', color: '#1061a6' }}
-              >
-                Get 100 test passes
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Tokens per unit */}
+        <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>Units</span>
         <label className="flex flex-col gap-1">
-          <span className="text-xs" style={{ color: 'var(--subtle)' }}>Units per token (whole tokens)</span>
+          <span className="text-xs" style={{ color: 'var(--subtle)' }}>{symbol} per unit (whole tokens)</span>
           <input
             type="number" min="1" step="1"
             value={unitsPerToken}
@@ -506,12 +469,9 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
             className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none transition-colors"
             style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
           />
-          {symbol && decimals !== undefined && (
-            <span className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-              1 unit = {unitsPerToken || '1'} {symbol}
-              {decimals > 0 ? ` (${tokensPerUnit.toString()} base units)` : ''}
-            </span>
-          )}
+          <span className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+            1 unit = {unitsPerToken || '1'} {symbol}
+          </span>
         </label>
       </div>
 
@@ -528,7 +488,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
           <input
             value={title}
             onChange={e => setTitle(e.target.value)}
-            placeholder="e.g. Early-access Swarm passes"
+            placeholder="e.g. Group buy: EURC at a discount"
             maxLength={200}
             className="rounded-xl px-3 py-2 text-sm outline-none transition-colors"
             style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
@@ -718,8 +678,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(255,160,0,0.08)' }}>
           <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--warn, #b45309)' }} />
           <p className="text-sm" style={{ color: 'var(--warn, #b45309)' }}>
-            Still not confirmed after a minute. Check the transaction in your wallet's Activity tab — if it shows as
-            dropped or failed, press Post deal again.
+            Still not confirmed after a minute. Check the transaction in your wallet — if it shows as dropped or failed, press Post deal again.
           </p>
         </div>
       )}
@@ -753,7 +712,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
           <div className="flex items-center gap-2">
             <CheckCircle2 className="size-4" style={{ color: 'var(--success)' }} />
             <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
-              Deal #{parsedDealId?.toString() ?? '…'} posted
+              Deal #{parsedDealId?.toString() ?? '...'} posted
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -775,7 +734,6 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         </div>
       ) : approveSuccess || step === 'approved' || step === 'posting' ? (
         <div className="space-y-3">
-          {/* Step indicator */}
           <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--muted)' }}>
             <CheckCircle2 className="size-3.5" style={{ color: 'var(--success)' }} />
             <span>Approval confirmed</span>
@@ -788,9 +746,9 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
             className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100"
             style={{ background: 'var(--accent)' }}>
             {postConfirming
-              ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Confirming…</span>
+              ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Confirming...</span>
               : step === 'posting'
-              ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Confirm in wallet…</span>
+              ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Confirm in wallet...</span>
               : 'Post deal'}
           </button>
           {approveTxHash && (
@@ -802,7 +760,6 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         </div>
       ) : (
         <div className="space-y-3">
-          {/* Step indicator */}
           <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--muted)' }}>
             <span className="size-4 rounded-full border flex items-center justify-center text-xs font-bold"
               style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}>1</span>
@@ -818,9 +775,9 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
             className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100"
             style={{ background: 'var(--accent)' }}>
             {approveConfirming
-              ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Confirming approval…</span>
+              ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Confirming approval...</span>
               : step === 'approving'
-              ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Confirm in wallet…</span>
+              ? <span className="flex items-center justify-center gap-2"><Loader2 className="size-4 animate-spin" /> Confirm in wallet...</span>
               : 'Approve token'}
           </button>
         </div>

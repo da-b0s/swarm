@@ -24,7 +24,7 @@ import {
 } from 'lucide-react'
 import {
   formatUsdcPrice, txUrl, parseRevertReason,
-  checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn,
+  checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn, formatTokenAmount,
 } from './utils'
 import {
   useEscrowed, useUnitsOf, usePaidPerUnit, useTierCounts, useChainNow,
@@ -48,6 +48,7 @@ interface Props {
   state:            number
   goodsToken:       `0x${string}`
   goodsSymbol:      string
+  goodsDecimals?:   number
   tokensPerUnit:    bigint
   onCommitted:      () => void
 }
@@ -127,7 +128,7 @@ function relayerMessage(code: string | undefined): string {
 export function CommitFlow({
   dealId, clearingPrice, totalUnits, buyerCount, tiers,
   maxUnits, maxUnitsPerBuyer, deadline, state, goodsToken: _goodsToken,
-  goodsSymbol, tokensPerUnit, onCommitted,
+  goodsSymbol, goodsDecimals, tokensPerUnit, onCommitted,
 }: Props) {
   const { address, isConnected, chainId: walletChain, connector } = useAccount()
   const { switchChain }   = useSwitchChain()
@@ -445,7 +446,8 @@ export function CommitFlow({
       <div className="space-y-3">
         <OrderPreviewCard
           units={orderUnits} quotedPPU={quotedPPU} quotedTotal={quotedTotal}
-          breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensPerUnit={tokensPerUnit}
+          breaksTier={breaksTier} goodsSymbol={goodsSymbol} goodsDecimals={goodsDecimals}
+          tokensPerUnit={tokensPerUnit}
           maxOrderable={maxAddable > 0 ? maxAddable : (remainingStock)} isTopUp={false}
           onUnits={setOrderUnits}
           badge={RELAYER_URL ? 'gasless' : undefined}
@@ -524,9 +526,11 @@ export function CommitFlow({
                 </p>
               )}
               <p style={{ color: 'var(--muted)' }}>
-                You'll receive{' '}
+                You will receive{' '}
                 <span className="font-semibold" style={{ color: 'var(--ink-2)' }}>
-                  {(BigInt(myUnitsN) * tokensPerUnit).toString()} {goodsSymbol}
+                  {goodsDecimals !== undefined
+                    ? `${formatTokenAmount(BigInt(myUnitsN) * tokensPerUnit, goodsDecimals)} ${goodsSymbol}`
+                    : null}
                 </span>{' '}
                 when the deal closes.
               </p>
@@ -568,7 +572,8 @@ export function CommitFlow({
               <>
                 <OrderPreviewCard
                   units={orderUnits} quotedPPU={quotedPPU} quotedTotal={quotedTotal}
-                  breaksTier={breaksTier} goodsSymbol={goodsSymbol} tokensPerUnit={tokensPerUnit}
+                  breaksTier={breaksTier} goodsSymbol={goodsSymbol} goodsDecimals={goodsDecimals}
+                  tokensPerUnit={tokensPerUnit}
                   maxOrderable={maxOrderable} isTopUp={isCommitted}
                   onUnits={setOrderUnits}
                   badge={useGasless ? 'gasless' : undefined}
@@ -824,21 +829,22 @@ export function CommitFlow({
 // ── Order preview card ────────────────────────────────────────────────────────
 
 interface OrderPreviewProps {
-  units:         number
-  quotedPPU:     bigint
-  quotedTotal:   bigint
-  breaksTier:    boolean
-  goodsSymbol:   string
-  tokensPerUnit: bigint
-  maxOrderable:  number
-  isTopUp:       boolean
-  onUnits:       (n: number) => void
-  badge?:        'gasless' | undefined
+  units:          number
+  quotedPPU:      bigint
+  quotedTotal:    bigint
+  breaksTier:     boolean
+  goodsSymbol:    string
+  goodsDecimals?: number
+  tokensPerUnit:  bigint
+  maxOrderable:   number
+  isTopUp:        boolean
+  onUnits:        (n: number) => void
+  badge?:         'gasless' | undefined
 }
 
 function OrderPreviewCard({
   units, quotedPPU, quotedTotal, breaksTier,
-  goodsSymbol, tokensPerUnit, maxOrderable, isTopUp, onUnits, badge,
+  goodsSymbol, goodsDecimals, tokensPerUnit, maxOrderable, isTopUp, onUnits, badge,
 }: OrderPreviewProps) {
   const tokensReceived = BigInt(units) * tokensPerUnit
 
@@ -902,7 +908,9 @@ function OrderPreviewCard({
           </span>
         </div>
         <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
-          You'll receive {tokensReceived.toString()} {goodsSymbol}
+          {goodsDecimals !== undefined
+            ? `You will receive ${formatTokenAmount(tokensReceived, goodsDecimals)} ${goodsSymbol}`
+            : null}
           {badge === 'gasless' ? ' · one signature, nothing else to pay' : ''}
         </p>
         {breaksTier && (

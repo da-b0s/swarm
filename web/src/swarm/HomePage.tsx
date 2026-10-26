@@ -12,7 +12,7 @@ interface Props {
 const STEPS = [
   { Icon: Users,        title: 'Join a deal',          body: 'Pick how many you want and place your order in USDC. One signature, no network fee.' },
   { Icon: TrendingDown, title: 'The price drops',      body: 'Every order brings the price down for everyone in the deal, including the people who joined first.' },
-  { Icon: PackageCheck, title: 'Collect when it closes', body: 'When the timer ends, everyone pays the same final price. Collect your items and any difference you overpaid.' },
+  { Icon: PackageCheck, title: 'Collect when it closes', body: 'When the timer ends, everyone pays the same final price. Collect your tokens and any difference you overpaid.' },
 ]
 
 const PROMISES = [
@@ -22,15 +22,17 @@ const PROMISES = [
 ]
 
 const FAQ = [
+  { q: 'What can I buy?',
+    a: "Today every deal sells EURC, Circle's euro stablecoin, paid for in USDC. More tokens are coming soon." },
   { q: 'How is the final price decided?',
-    a: 'Each deal has price levels set by the seller, for example $0.30 each, then $0.20 once 10 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },
+    a: 'Each deal has price levels set by the seller, for example $1.20 each, then $1.17 once 25 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },
   { q: 'What do I need to order?',
     a: 'A crypto wallet with USDC on Arc. Ordering takes one signature in your wallet. There is no separate network fee to pay.' },
   { q: 'Can I change my mind?',
-    a: 'Yes. While a deal is open you can add more, remove some units or cancel your whole order, and the money goes straight back to your wallet. The one exception: you can’t cancel if it would push the price back up above what another buyer has already paid.' },
+    a: 'Yes. While a deal is open you can add more, remove some units or cancel your whole order, and the money goes straight back to your wallet. The one exception: you cannot cancel if it would push the price back up above what another buyer has already paid.' },
   { q: 'What happens if not enough people join?',
-    a: 'Every deal has a minimum. If it isn’t reached by the deadline, the deal is cancelled and everyone is refunded in full. The seller gets their items back.' },
-  { q: 'When do I get my items?',
+    a: 'Every deal has a minimum. If it is not reached by the deadline, the deal is cancelled and everyone is refunded in full. The seller gets their tokens back.' },
+  { q: 'When do I get my tokens?',
     a: 'As soon as the deal closes, usually within a minute of the deadline. A banner at the top of the site shows anything waiting for you, with a button to collect it.' },
   { q: 'How do I sell on Swarm?',
     a: 'Go to Sell, choose the token you are offering, set your price levels, minimum and deadline, and post the deal. Your stock is held by the contract and anything unsold comes back to you. Your earnings are ready to collect when the deal closes.' },
@@ -58,7 +60,7 @@ export function HomePage({ onBrowse, onSell }: Props) {
         </motion.h1>
         <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}
           className="mt-4 text-base sm:text-lg max-w-md mx-auto" style={{ color: 'var(--muted)' }}>
-          Join group deals where every order lowers the price for everyone, including you.
+          Group deals on EURC, Circle&apos;s euro stablecoin. The more people buy, the better everyone&apos;s rate.
         </motion.p>
         <motion.div {...fade} transition={{ duration: 0.35, delay: 0.1 }}
           className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">
