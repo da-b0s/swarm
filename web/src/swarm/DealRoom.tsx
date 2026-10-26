@@ -153,7 +153,7 @@ export function DealRoom({ dealId }: Props) {
             {secondsLeft === undefined ? '—' : formatCountdown(secondsLeft)}
           </span>
           <span className="text-xs" style={{ color: 'var(--subtle)' }}>
-            min {deal.minUnits} units
+            minimum {deal.minUnits} {deal.minUnits === 1 ? 'unit' : 'units'}
           </span>
         </div>
       </motion.div>

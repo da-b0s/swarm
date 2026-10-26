@@ -8,7 +8,6 @@
  *      same transaction.
  *
  * Token picker shows GOODS_TOKENS from config; today that is EURC only.
- * Free-text address entry has been removed — adding a token is one line in config.
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react'
@@ -16,14 +15,15 @@ import {
   useAccount, useWriteContract, useWaitForTransactionReceipt,
   useSwitchChain, useReadContract,
 } from 'wagmi'
+import { parseUnits } from 'viem'
 import { ConnectKitButton } from 'connectkit'
 import { motion } from 'framer-motion'
-import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown, CheckCircle2 } from 'lucide-react'
+import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown, CheckCircle2, Info } from 'lucide-react'
 import { DEAL_FACTORY_ABI, ERC20_ABI } from './abis'
 import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS } from './config'
 import type { GoodsToken } from './config'
 import { useChainNow } from './hooks'
-import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt } from './utils'
+import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount } from './utils'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 const USDC     = ARC_NETWORK.usdc.address
@@ -36,7 +36,7 @@ type PostStep = 'idle' | 'approving' | 'approved' | 'posting' | 'done'
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
-/** Default tiers suited to EURC: $1.20 → $1.17 → $1.15, 1 EURC per unit */
+/** Default tiers suited to EURC: $1.20 → $1.17 → $1.15 */
 function defaultTiers(): TierInput[] {
   return [
     { minUnits: '1',  pricePerUnit: '1.20' },
@@ -57,11 +57,46 @@ function byteLengthOf(s: string): number {
   return new TextEncoder().encode(s).length
 }
 
+/**
+ * Parse a human-entered amount string to base units using the token's decimal count.
+ * Returns null if the string is invalid, zero, negative, or uses more decimal places
+ * than the token allows.
+ */
+function parseTokenAmount(str: string, decimals: number): bigint | null {
+  if (!str || str.trim() === '') return null
+  const trimmed = str.trim()
+  // Reject if more decimal places than the token allows
+  const dotIdx = trimmed.indexOf('.')
+  if (dotIdx !== -1 && trimmed.length - dotIdx - 1 > decimals) return null
+  try {
+    const val = parseUnits(trimmed, decimals)
+    if (val <= 0n) return null
+    return val
+  } catch {
+    return null
+  }
+}
+
+/** Format a closing-time duration in plain language, e.g. "30 minutes", "3 days 2 hours". */
+function formatDuration(hours: number): string {
+  if (!Number.isFinite(hours) || hours <= 0) return ''
+  const totalMins = Math.round(hours * 60)
+  if (totalMins < 60) return `${totalMins} minute${totalMins === 1 ? '' : 's'}`
+  const h = Math.floor(totalMins / 60)
+  const m = totalMins % 60
+  const days = Math.floor(h / 24)
+  const rem  = h % 24
+  if (days > 0 && rem > 0) return `${days} day${days === 1 ? '' : 's'} ${rem} hour${rem === 1 ? '' : 's'}`
+  if (days > 0)            return `${days} day${days === 1 ? '' : 's'}`
+  if (m > 0) return `${h} hour${h === 1 ? '' : 's'} ${m} minute${m === 1 ? '' : 's'}`
+  return `${h} hour${h === 1 ? '' : 's'}`
+}
+
 // ── Validation ────────────────────────────────────────────────────────────────
 
 interface PostInputs {
   goodsToken:       `0x${string}`
-  tokensPerUnit:    bigint
+  tokensPerUnit:    bigint        // already parsed, validated non-null before calling validate()
   tokenDecimals:    number
   tiers:            TierInput[]
   minUnits:         string
@@ -74,23 +109,20 @@ interface PostInputs {
 }
 
 interface ValidatedInputs {
-  goodsToken:       `0x${string}`
-  tokensPerUnit:    bigint
-  tierArgs:         { minUnits: number; pricePerUnit: bigint }[]
-  minUnitsNum:      number
-  maxUnitsNum:      number
+  goodsToken:          `0x${string}`
+  tokensPerUnit:       bigint
+  tierArgs:            { minUnits: number; pricePerUnit: bigint }[]
+  minUnitsNum:         number
+  maxUnitsNum:         number
   maxUnitsPerBuyerNum: number
-  maxBuyersNum:     number
-  deadline:         bigint
-  title:            string
-  description:      string
-  stockAmount:      bigint
+  maxBuyersNum:        number
+  deadline:            bigint
+  title:               string
+  description:         string
+  stockAmount:         bigint
 }
 
-function validate(
-  inp: PostInputs,
-  chainNow: number,
-): ValidatedInputs | string {
+function validate(inp: PostInputs, chainNow: number): ValidatedInputs | string {
   if (!inp.goodsToken || inp.goodsToken === '0x0000000000000000000000000000000000000000')
     return 'Select a goods token.'
   if (inp.goodsToken.toLowerCase() === USDC.toLowerCase())
@@ -98,33 +130,32 @@ function validate(
 
   const titleBytes = byteLengthOf(inp.title)
   if (titleBytes === 0) return 'Title is required.'
-  if (titleBytes > 80) return `Title is ${titleBytes} bytes; maximum is 80.`
+  if (titleBytes > 80)  return `Title is ${titleBytes} bytes; maximum is 80.`
   const descBytes = byteLengthOf(inp.description)
-  if (descBytes > 500) return `Description is ${descBytes} bytes; maximum is 500.`
+  if (descBytes > 500)  return `Description is ${descBytes} bytes; maximum is 500.`
 
-  if (inp.tokensPerUnit <= 0n) return 'Tokens per unit must be at least 1.'
+  if (inp.tokensPerUnit <= 0n) return 'EURC per unit must be greater than zero.'
 
   const minNum = parseInt(inp.minUnits)
   const maxNum = parseInt(inp.maxUnits)
   const ppbNum = parseInt(inp.maxUnitsPerBuyer) || 0
   const mbNum  = parseInt(inp.maxBuyers)
 
-  if (!Number.isFinite(maxNum) || maxNum < 1) return 'Max units (stock) must be at least 1.'
-  if (!Number.isFinite(minNum) || minNum < 1) return 'Deal minimum must be at least 1 unit.'
-  if (minNum > maxNum) return 'Deal minimum cannot exceed max units.'
+  if (!Number.isFinite(maxNum) || maxNum < 1)              return 'Max units (stock) must be at least 1.'
+  if (!Number.isFinite(minNum) || minNum < 1)              return 'Deal minimum must be at least 1 unit.'
+  if (minNum > maxNum)                                     return 'Deal minimum cannot exceed max units.'
   if (!Number.isFinite(mbNum) || mbNum < 1 || mbNum > MAX_CAP)
     return `Max buyers must be 1–${MAX_CAP}.`
-  if (ppbNum > 0 && ppbNum > maxNum) return 'Per-buyer limit cannot exceed max units.'
+  if (ppbNum > 0 && ppbNum > maxNum)                       return 'Per-buyer limit cannot exceed max units.'
 
   const hours = parseFloat(inp.durationHours)
   if (!Number.isFinite(hours) || hours <= 0) return 'Duration must be positive.'
   if (chainNow === 0) return 'Still reading chain time — try again in a moment.'
   const deadline = BigInt(chainNow + Math.round(hours * 3600))
 
-  // Tiers
   const tiers = inp.tiers
-  if (tiers.length === 0) return 'Add at least one tier.'
-  if (tiers.length > MAX_TIERS) return `Maximum ${MAX_TIERS} tiers.`
+  if (tiers.length === 0)        return 'Add at least one tier.'
+  if (tiers.length > MAX_TIERS)  return `Maximum ${MAX_TIERS} tiers.`
   let prevMin = 0, prevPrice = Infinity
   for (let i = 0; i < tiers.length; i++) {
     const mu = parseInt(tiers[i].minUnits)
@@ -132,14 +163,14 @@ function validate(
     if (!Number.isFinite(mu) || mu < 1) return `Tier ${i + 1}: min units must be at least 1.`
     if (!Number.isFinite(pr) || pr <= 0) return `Tier ${i + 1}: price must be greater than zero.`
     if (BigInt(Math.round(pr * 1_000_000)) > MAX_PRICE_USDC) return `Tier ${i + 1}: price exceeds the $5 cap.`
-    if (i > 0 && mu <= prevMin) return `Tier ${i + 1}: min units must be strictly ascending.`
+    if (i > 0 && mu <= prevMin)  return `Tier ${i + 1}: min units must be strictly ascending.`
     if (i > 0 && pr >= prevPrice) return `Tier ${i + 1}: price must be strictly descending.`
     prevMin = mu; prevPrice = pr
   }
   const firstMin = parseInt(tiers[0].minUnits)
   if (firstMin > minNum) return `First tier threshold (${firstMin}) exceeds deal minimum (${minNum}).`
-  const lastMin = parseInt(tiers[tiers.length - 1].minUnits)
-  if (lastMin > maxNum) return `Last tier threshold (${lastMin}) exceeds max units (${maxNum}).`
+  const lastMin  = parseInt(tiers[tiers.length - 1].minUnits)
+  if (lastMin > maxNum)  return `Last tier threshold (${lastMin}) exceeds max units (${maxNum}).`
 
   const tierArgs = tiers.map(t => ({
     minUnits:     parseInt(t.minUnits),
@@ -149,16 +180,16 @@ function validate(
   const stockAmount = BigInt(maxNum) * inp.tokensPerUnit
 
   return {
-    goodsToken:       inp.goodsToken,
-    tokensPerUnit:    inp.tokensPerUnit,
+    goodsToken:          inp.goodsToken,
+    tokensPerUnit:       inp.tokensPerUnit,
     tierArgs,
-    minUnitsNum:      minNum,
-    maxUnitsNum:      maxNum,
+    minUnitsNum:         minNum,
+    maxUnitsNum:         maxNum,
     maxUnitsPerBuyerNum: ppbNum,
-    maxBuyersNum:     mbNum,
+    maxBuyersNum:        mbNum,
     deadline,
-    title:            inp.title,
-    description:      inp.description,
+    title:               inp.title,
+    description:         inp.description,
     stockAmount,
   }
 }
@@ -166,40 +197,39 @@ function validate(
 // ── Token picker card ─────────────────────────────────────────────────────────
 
 interface TokenPickerProps {
-  selected:    GoodsToken
-  onSelect:    (t: GoodsToken) => void
-  balance:     number | undefined
-  hasEnough:   boolean
-  stockTokens: number
-  symbol:      string
+  selected:  GoodsToken
+  onSelect:  (t: GoodsToken) => void
+  balance:   bigint | undefined   // raw base units
 }
 
-function TokenPickerCard({ selected, onSelect, balance, hasEnough, stockTokens, symbol }: TokenPickerProps) {
-  return (
-    <div className="rounded-3xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-      <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>Token</span>
+function TokenPickerCard({ selected, onSelect, balance }: TokenPickerProps) {
+  const balanceDisplay = balance !== undefined
+    ? formatTokenAmount(balance, selected.decimals)
+    : undefined
 
-      {/* Token list */}
+  return (
+    <div className="rounded-3xl p-5 space-y-4"
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      <span className="text-xs font-semibold tracking-wide uppercase"
+        style={{ color: 'var(--muted)' }}>Token</span>
+
       <div className="space-y-2">
         {GOODS_TOKENS.map(tok => {
           const active = tok.address.toLowerCase() === selected.address.toLowerCase()
           return (
-            <button
-              key={tok.address}
-              onClick={() => onSelect(tok)}
+            <button key={tok.address} onClick={() => onSelect(tok)}
               className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-all hover:scale-[1.01]"
               style={{
                 background: active ? 'var(--surface-muted)' : 'var(--surface)',
                 border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-              }}
-            >
+              }}>
               <div className="flex items-center gap-3">
                 <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>{tok.symbol}</span>
                 <span className="text-xs" style={{ color: 'var(--muted)' }}>{tok.name}</span>
               </div>
-              {active && balance !== undefined && (
-                <span className="text-xs tabular-nums" style={{ color: hasEnough ? 'var(--muted)' : 'var(--danger)' }}>
-                  Balance: {balance.toLocaleString(undefined, { maximumFractionDigits: tok.decimals })}
+              {active && balanceDisplay !== undefined && (
+                <span className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>
+                  Balance: {balanceDisplay} {tok.symbol}
                 </span>
               )}
             </button>
@@ -208,24 +238,6 @@ function TokenPickerCard({ selected, onSelect, balance, hasEnough, stockTokens, 
       </div>
 
       <p className="text-xs" style={{ color: 'var(--subtle)' }}>More tokens are coming soon.</p>
-
-      {/* No-balance notice */}
-      {balance !== undefined && stockTokens > 0 && !hasEnough && (
-        <div className="rounded-xl px-3 py-2.5 flex items-start gap-2.5"
-          style={{ background: 'rgba(186,43,76,0.06)', border: '1px solid rgba(186,43,76,0.15)' }}>
-          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
-          <p className="text-xs" style={{ color: 'var(--danger)' }}>
-            You need {symbol} to sell. Units you do not sell are returned to you when the deal closes.
-          </p>
-        </div>
-      )}
-
-      {/* Stock summary */}
-      {stockTokens > 0 && symbol && (
-        <p className="text-xs" style={{ color: 'var(--muted)' }}>
-          Deposit required: {stockTokens.toLocaleString()} {symbol}
-        </p>
-      )}
     </div>
   )
 }
@@ -236,53 +248,90 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   const { address, isConnected, chainId: walletChain } = useAccount()
   const { switchChain } = useSwitchChain()
   const wrongChain = isConnected && walletChain !== CHAIN_ID
-  const chainNow = useChainNow()
+  const chainNow   = useChainNow()
 
   // ── Form state ───────────────────────────────────────────────────────────
-  const [selectedToken, setSelectedToken] = useState<GoodsToken>(GOODS_TOKENS[0])
-  const [unitsPerToken, setUnitsPerToken] = useState('1')
-  const [tiers, setTiers] = useState<TierInput[]>(defaultTiers)
-  const [minUnits, setMinUnits] = useState('1')
-  const [maxUnits, setMaxUnits] = useState('50')
+  const [selectedToken,    setSelectedToken]    = useState<GoodsToken>(GOODS_TOKENS[0])
+  const [tokensPerUnitStr, setTokensPerUnitStr] = useState('1')
+  const [tiers,            setTiers]            = useState<TierInput[]>(defaultTiers)
+  const [minUnits,         setMinUnits]         = useState('1')
+  const [maxUnits,         setMaxUnits]         = useState('50')
   const [maxUnitsPerBuyer, setMaxUnitsPerBuyer] = useState('')
-  const [maxBuyers, setMaxBuyers] = useState('50')
-  const [durationHours, setDurationHours] = useState('72')
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
+  const [maxBuyers,        setMaxBuyers]        = useState('50')
+  const [durationHours,    setDurationHours]    = useState('72')
+  const [title,            setTitle]            = useState('')
+  const [description,      setDescription]      = useState('')
+
+  // Track whether the seller has manually edited the stock field yet
+  const [stockEdited, setStockEdited] = useState(false)
 
   // ── Two-step state ───────────────────────────────────────────────────────
-  const [step, setStep] = useState<PostStep>('idle')
+  const [step,          setStep]          = useState<PostStep>('idle')
   const [validationErr, setValidationErr] = useState<string | null>(null)
-  const [errMsg, setErrMsg] = useState('')
+  const [errMsg,        setErrMsg]        = useState('')
   const [approveTxHash, setApproveTxHash] = useState<`0x${string}` | undefined>()
-  const [postTxHash, setPostTxHash] = useState<`0x${string}` | undefined>()
+  const [postTxHash,    setPostTxHash]    = useState<`0x${string}` | undefined>()
 
   // ── Token reads ──────────────────────────────────────────────────────────
-  const goodsAddr   = selectedToken.address
-  const decimals    = selectedToken.decimals
-  const symbol      = selectedToken.symbol
+  const goodsAddr = selectedToken.address
+  const decimals  = selectedToken.decimals
+  const symbol    = selectedToken.symbol
 
-  const { data: tokenBalance, refetch: refetchBalance } = useReadContract({
+  const { data: tokenBalanceRaw, refetch: refetchBalance } = useReadContract({
     address: goodsAddr, abi: ERC20_ABI, functionName: 'balanceOf',
     args: address ? [address] : undefined,
     chainId: CHAIN_ID, query: { enabled: !!address, refetchInterval: 6000 },
   })
 
-  // ── Computed values ──────────────────────────────────────────────────────
-  const unitsPerTokenNum = parseInt(unitsPerToken) || 1
-  const tokensPerUnit    = BigInt(unitsPerTokenNum) * (10n ** BigInt(decimals))
-  const maxUnitsNum      = parseInt(maxUnits) || 0
-  const stockTokens      = maxUnitsNum > 0 && tokensPerUnit > 0n
-    ? Number(BigInt(maxUnitsNum) * tokensPerUnit) / (10 ** decimals)
+  const tokenBalance = tokenBalanceRaw !== undefined ? BigInt(String(tokenBalanceRaw)) : undefined
+
+  // ── Parse tokensPerUnit ──────────────────────────────────────────────────
+  // Uses parseUnits so any precision the token allows works correctly.
+  const tokensPerUnit: bigint | null = useMemo(
+    () => parseTokenAmount(tokensPerUnitStr, decimals),
+    [tokensPerUnitStr, decimals]
+  )
+
+  const tokensPerUnitErr: string | null = useMemo(() => {
+    if (!tokensPerUnitStr || tokensPerUnitStr.trim() === '') return `${symbol} per unit is required.`
+    const dotIdx = tokensPerUnitStr.indexOf('.')
+    if (dotIdx !== -1 && tokensPerUnitStr.length - dotIdx - 1 > decimals)
+      return `${symbol} has ${decimals} decimal places; you entered more.`
+    const n = parseFloat(tokensPerUnitStr)
+    if (isNaN(n) || n <= 0) return `${symbol} per unit must be greater than zero.`
+    return null
+  }, [tokensPerUnitStr, decimals, symbol])
+
+  // ── Computed deposit ─────────────────────────────────────────────────────
+  // stockAmount and effectiveMaxUnitsNum are derived below after balance check.
+  // stockDisplay is also derived below.
+
+
+  // ── Balance checks ───────────────────────────────────────────────────────
+  const balanceIsZero = tokenBalance !== undefined && tokenBalance === 0n
+  const maxAffordable = tokenBalance !== undefined && tokensPerUnit !== null && tokensPerUnit > 0n
+    ? Number(tokenBalance / tokensPerUnit)
     : 0
 
-  const walletDisplayBalance = tokenBalance !== undefined
-    ? Number(tokenBalance) / (10 ** decimals)
-    : undefined
+  // Default stock = min(50, floor(balance/tokensPerUnit)) until the seller edits the field.
+  // Derived during render — no setState in an effect.
+  const effectiveMaxUnitsNum: number = (() => {
+    if (stockEdited) return parseInt(maxUnits) || 0
+    if (tokenBalance !== undefined && tokensPerUnit !== null && tokensPerUnit > 0n) {
+      const affordable = Number(tokenBalance / tokensPerUnit)
+      if (affordable > 0) return Math.min(50, affordable)
+    }
+    return parseInt(maxUnits) || 0
+  })()
 
-  const hasEnoughBalance = walletDisplayBalance !== undefined && stockTokens > 0
-    ? walletDisplayBalance >= stockTokens
-    : true
+  const stockAmount  = tokensPerUnit !== null && effectiveMaxUnitsNum > 0
+    ? BigInt(effectiveMaxUnitsNum) * tokensPerUnit
+    : 0n
+  const overBudget   = tokenBalance !== undefined && stockAmount > 0n && tokenBalance < stockAmount
+  // Display the deposit in whole tokens — same computation as what is posted
+  const stockDisplay = tokensPerUnit !== null && effectiveMaxUnitsNum > 0
+    ? formatTokenAmount(stockAmount, decimals)
+    : null
 
   // ── Tier chart ───────────────────────────────────────────────────────────
   const parsedTiers = tiers.map(t => ({
@@ -290,7 +339,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     pricePerUnit: parsePriceToMicro(t.pricePerUnit) ?? 0n,
   })).filter(t => t.minUnits > 0 && t.pricePerUnit > 0n)
 
-  const chartMax = Math.max(...parsedTiers.map(t => t.minUnits), parseInt(maxUnits) || 0, 1)
+  const chartMax    = Math.max(...parsedTiers.map(t => t.minUnits), effectiveMaxUnitsNum, 1)
   const chartPoints = (() => {
     if (parsedTiers.length === 0) return []
     const pts: { x: number; y: number }[] = []
@@ -303,8 +352,8 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   const toSvgX = (x: number) => (x / chartMax) * 260
   const toSvgY = (y: number) => 80 - ((y - chartMinPrice) / (chartMaxPrice - chartMinPrice || 1)) * 70
 
-  const clearingAtFull = parsedTiers.length ? computePriceAt(parsedTiers, maxUnitsNum) : 0n
-  const revenueAtFull  = clearingAtFull * BigInt(maxUnitsNum)
+  const clearingAtFull = parsedTiers.length ? computePriceAt(parsedTiers, effectiveMaxUnitsNum) : 0n
+  const revenueAtFull  = clearingAtFull * BigInt(effectiveMaxUnitsNum)
 
   // ── Tier mutations ───────────────────────────────────────────────────────
   const addTier    = () => setTiers(t => [...t, { minUnits: '', pricePerUnit: '' }])
@@ -343,26 +392,35 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     return null
   }, [postSuccess, postReceipt])
 
-  // Reset balance when token changes
+  // Reset balance when token changes (stockEdited reset happens in onSelect)
   useEffect(() => { void refetchBalance() }, [selectedToken, refetchBalance])
+
+  // ── Duration display ─────────────────────────────────────────────────────
+  const hoursNum      = parseFloat(durationHours)
+  const durationLabel = Number.isFinite(hoursNum) && hoursNum > 0
+    ? `Closes in ${formatDuration(hoursNum)}`
+    : ''
 
   // ── Step 1: Approve ──────────────────────────────────────────────────────
   const handleApprove = useCallback(() => {
     setValidationErr(null)
     setErrMsg('')
+    if (tokensPerUnit === null) {
+      setValidationErr(tokensPerUnitErr ?? 'Invalid EURC per unit.')
+      return
+    }
     const inp: PostInputs = {
-      goodsToken: goodsAddr,
-      tokensPerUnit, tokenDecimals: decimals,
-      tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
+      goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,
+      tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,
       durationHours, title, description,
     }
     const result = validate(inp, chainNow)
     if (typeof result === 'string') { setValidationErr(result); return }
 
-    if (!hasEnoughBalance) {
+    if (overBudget) {
       setValidationErr(
-        `Wallet holds ${walletDisplayBalance?.toFixed(2) ?? '?'} ${symbol}, ` +
-        `but the stock requires ${stockTokens.toFixed(2)} ${symbol}.`
+        `Your balance covers up to ${maxAffordable} unit${maxAffordable === 1 ? '' : 's'} at ` +
+        `${tokensPerUnitStr} ${symbol} each. Lower your stock or add more ${symbol}.`
       )
       return
     }
@@ -370,30 +428,29 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     setStep('approving')
     writeContract(
       {
-        address: result.goodsToken,
-        abi: ERC20_ABI,
-        functionName: 'approve',
+        address: result.goodsToken, abi: ERC20_ABI, functionName: 'approve',
         args: [CONTRACTS_ACTIVE.DealFactory, result.stockAmount],
         ...ARC_TX_FEES, chainId: CHAIN_ID,
       },
       {
         onSuccess: (hash) => { setApproveTxHash(hash) },
-        onError: (e) => { setErrMsg(parseRevertReason(e)); setStep('idle') },
+        onError:   (e)    => { setErrMsg(parseRevertReason(e)); setStep('idle') },
       }
     )
   }, [
-    goodsAddr, tokensPerUnit, decimals, tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
-    durationHours, title, description, chainNow, hasEnoughBalance,
-    walletDisplayBalance, symbol, stockTokens, writeContract,
+    goodsAddr, tokensPerUnit, tokensPerUnitErr, tokensPerUnitStr, decimals,
+    tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,
+    durationHours, title, description, chainNow,
+    overBudget, maxAffordable, symbol, writeContract,
   ])
 
   // ── Step 2: Post deal ────────────────────────────────────────────────────
   const handlePost = useCallback(() => {
     setErrMsg('')
+    if (tokensPerUnit === null) { setValidationErr(tokensPerUnitErr ?? 'Invalid EURC per unit.'); return }
     const inp: PostInputs = {
-      goodsToken: goodsAddr,
-      tokensPerUnit, tokenDecimals: decimals,
-      tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
+      goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,
+      tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,
       durationHours, title, description,
     }
     const result = validate(inp, chainNow)
@@ -410,23 +467,21 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       title:            result.title,
       description:      result.description,
     }
-
     setStep('posting')
     writeContract(
       {
-        address: CONTRACTS_ACTIVE.DealFactory,
-        abi: DEAL_FACTORY_ABI,
-        functionName: 'postDeal',
-        args: [postParams, result.tierArgs],
+        address: CONTRACTS_ACTIVE.DealFactory, abi: DEAL_FACTORY_ABI,
+        functionName: 'postDeal', args: [postParams, result.tierArgs],
         ...ARC_TX_FEES, chainId: CHAIN_ID,
       },
       {
         onSuccess: (hash) => { setPostTxHash(hash) },
-        onError: (e) => { setErrMsg(parseRevertReason(e)); setStep('approved') },
+        onError:   (e)    => { setErrMsg(parseRevertReason(e)); setStep('approved') },
       }
     )
   }, [
-    goodsAddr, tokensPerUnit, decimals, tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,
+    goodsAddr, tokensPerUnit, tokensPerUnitErr, decimals,
+    tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,
     durationHours, title, description, chainNow, writeContract,
   ])
 
@@ -434,55 +489,80 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   const busy     = step === 'approving' || approveConfirming || step === 'posting' || postConfirming
   const postBusy = step === 'posting' || postConfirming
 
-  const titleBytes = byteLengthOf(title)
-  const descBytes  = byteLengthOf(description)
+  const titleBytes      = byteLengthOf(title)
+  const descBytes       = byteLengthOf(description)
+  const titleCharsLeft  = 80 - titleBytes
+  const descCharsLeft   = 500 - descBytes
+
+  // "1 unit = X SYMBOL" — same parsed value that is posted
+  const unitDisplayStr = tokensPerUnit !== null
+    ? formatTokenAmount(tokensPerUnit, decimals)
+    : null
 
   return (
     <div className="w-full max-w-md mx-auto px-4 pb-8 space-y-5">
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24 }}>
-        <h2 className="display text-2xl font-bold mt-6 mb-1" style={{ color: 'var(--ink)', letterSpacing: '-0.03em' }}>Post a deal</h2>
+        <h2 className="display text-2xl font-bold mt-6 mb-1"
+          style={{ color: 'var(--ink)', letterSpacing: '-0.03em' }}>Post a deal</h2>
         <p className="text-sm" style={{ color: 'var(--muted)' }}>
-          Sell a token. Buyers escrow the live unit price; everyone settles at one clearing price.
+          Buyers pay the current price. When the deal closes, everyone pays the same final price and gets the difference back.
         </p>
       </motion.div>
 
-      {/* ── Token picker ──────────────────────────────────────────────── */}
+      {/* ── Token picker ──────────────────────────────────────────────────── */}
       <TokenPickerCard
         selected={selectedToken}
-        onSelect={t => { setSelectedToken(t) }}
-        balance={walletDisplayBalance}
-        hasEnough={hasEnoughBalance}
-        stockTokens={stockTokens}
-        symbol={symbol}
+        onSelect={t => { setSelectedToken(t); setStockEdited(false) }}
+        balance={tokenBalance}
       />
 
-      {/* ── Tokens per unit ───────────────────────────────────────────── */}
-      <div className="rounded-3xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>Units</span>
+      {/* Zero-balance notice — only when balance is exactly zero */}
+      {balanceIsZero && (
+        <div className="rounded-2xl px-3 py-2.5 flex items-start gap-2.5"
+          style={{ background: 'rgba(186,43,76,0.06)', border: '1px solid rgba(186,43,76,0.15)' }}>
+          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
+          <p className="text-xs" style={{ color: 'var(--danger)' }}>
+            You need {symbol} to sell. Units you do not sell are returned to you when the deal closes.
+          </p>
+        </div>
+      )}
+
+      {/* ── EURC per unit ─────────────────────────────────────────────────── */}
+      <div className="rounded-3xl p-5 space-y-4"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <span className="text-xs font-semibold tracking-wide uppercase"
+          style={{ color: 'var(--muted)' }}>Units</span>
         <label className="flex flex-col gap-1">
-          <span className="text-xs" style={{ color: 'var(--subtle)' }}>{symbol} per unit (whole tokens)</span>
+          <span className="text-xs" style={{ color: 'var(--subtle)' }}>{symbol} per unit</span>
           <input
-            type="number" min="1" step="1"
-            value={unitsPerToken}
-            onChange={e => setUnitsPerToken(e.target.value)}
+            type="number" min="0.000001" step="any"
+            value={tokensPerUnitStr}
+            onChange={e => setTokensPerUnitStr(e.target.value)}
             placeholder="1"
             className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none transition-colors"
-            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+            style={{ background: 'var(--surface-muted)', border: `1px solid ${tokensPerUnitErr ? 'var(--danger)' : 'var(--border)'}`, color: 'var(--ink)' }}
           />
-          <span className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-            1 unit = {unitsPerToken || '1'} {symbol}
-          </span>
+          {tokensPerUnitErr ? (
+            <span className="text-xs mt-0.5" style={{ color: 'var(--danger)' }}>{tokensPerUnitErr}</span>
+          ) : unitDisplayStr !== null ? (
+            <span className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+              1 unit = {unitDisplayStr} {symbol}
+            </span>
+          ) : null}
         </label>
       </div>
 
       {/* ── Title & description ──────────────────────────────────────────── */}
-      <div className="rounded-3xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>Listing</span>
+      <div className="rounded-3xl p-5 space-y-4"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <span className="text-xs font-semibold tracking-wide uppercase"
+          style={{ color: 'var(--muted)' }}>Listing</span>
         <label className="flex flex-col gap-1">
           <div className="flex items-center justify-between">
             <span className="text-xs" style={{ color: 'var(--subtle)' }}>Title (required)</span>
-            <span className="text-xs tabular-nums" style={{ color: titleBytes > 80 ? 'var(--danger)' : 'var(--subtle)' }}>
-              {titleBytes}/80 bytes
+            <span className="text-xs tabular-nums"
+              style={{ color: titleBytes > 80 ? 'var(--danger)' : 'var(--subtle)' }}>
+              {titleCharsLeft >= 0 ? `${titleCharsLeft} left` : `${-titleCharsLeft} over`}
             </span>
           </div>
           <input
@@ -497,8 +577,9 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         <label className="flex flex-col gap-1">
           <div className="flex items-center justify-between">
             <span className="text-xs" style={{ color: 'var(--subtle)' }}>Description (optional)</span>
-            <span className="text-xs tabular-nums" style={{ color: descBytes > 500 ? 'var(--danger)' : 'var(--subtle)' }}>
-              {descBytes}/500 bytes
+            <span className="text-xs tabular-nums"
+              style={{ color: descBytes > 500 ? 'var(--danger)' : 'var(--subtle)' }}>
+              {descCharsLeft >= 0 ? `${descCharsLeft} left` : `${-descCharsLeft} over`}
             </span>
           </div>
           <textarea
@@ -513,15 +594,14 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       </div>
 
       {/* ── Tier builder ─────────────────────────────────────────────────── */}
-      <div className="rounded-3xl p-5 space-y-3" style={{ background: 'var(--surface)', border: '1px solid var(--border)', backdropFilter: 'blur(20px)' }}>
+      <div className="rounded-3xl p-5 space-y-3"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)', backdropFilter: 'blur(20px)' }}>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>Tiers</span>
-          <button
-            onClick={addTier}
-            disabled={tiers.length >= MAX_TIERS}
+          <span className="text-xs font-semibold tracking-wide uppercase"
+            style={{ color: 'var(--muted)' }}>Tiers</span>
+          <button onClick={addTier} disabled={tiers.length >= MAX_TIERS}
             className="flex items-center gap-1 text-xs font-semibold rounded-lg px-2.5 py-1 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-30"
-            style={{ background: 'var(--surface-muted)', color: 'var(--accent)' }}
-          >
+            style={{ background: 'var(--surface-muted)', color: 'var(--accent)' }}>
             <Plus className="size-3" /> Add tier
           </button>
         </div>
@@ -533,28 +613,23 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         <div className="space-y-2">
           {tiers.map((tier, i) => (
             <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-              <input
-                type="number" min="1"
+              <input type="number" min="1"
                 value={tier.minUnits}
                 onChange={e => updateTier(i, 'minUnits', e.target.value)}
                 placeholder="10"
                 className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
                 style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
               />
-              <input
-                type="number" min="0.000001" max="5" step="0.01"
+              <input type="number" min="0.000001" max="5" step="0.01"
                 value={tier.pricePerUnit}
                 onChange={e => updateTier(i, 'pricePerUnit', e.target.value)}
                 placeholder="1.00"
                 className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
                 style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
               />
-              <button
-                onClick={() => removeTier(i)}
-                disabled={tiers.length <= 1}
+              <button onClick={() => removeTier(i)} disabled={tiers.length <= 1}
                 className="size-7 flex items-center justify-center rounded-lg disabled:opacity-20 hover:opacity-60"
-                style={{ color: 'var(--danger)' }}
-              >
+                style={{ color: 'var(--danger)' }}>
                 <Trash2 className="size-3.5" />
               </button>
             </div>
@@ -563,7 +638,8 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
 
         {/* Curve chart */}
         {chartPoints.length >= 2 && (
-          <div className="mt-3 rounded-xl overflow-hidden" style={{ background: 'var(--surface-muted)' }}>
+          <div className="mt-3 rounded-xl overflow-hidden"
+            style={{ background: 'var(--surface-muted)' }}>
             <div className="px-3 pt-2 pb-1 flex items-center gap-1.5">
               <TrendingDown className="size-3.5" style={{ color: 'var(--muted)' }} />
               <span className="text-xs" style={{ color: 'var(--muted)' }}>Price curve (units → $/unit)</span>
@@ -597,8 +673,9 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
 
         {/* Revenue preview */}
         {parsedTiers.length > 0 && (
-          <div className="rounded-xl p-3 space-y-1" style={{ background: 'var(--surface-muted)' }}>
-            <p className="text-xs" style={{ color: 'var(--muted)' }}>At {maxUnits || '?'} units sold</p>
+          <div className="rounded-xl p-3 space-y-1"
+            style={{ background: 'var(--surface-muted)' }}>
+            <p className="text-xs" style={{ color: 'var(--muted)' }}>At {effectiveMaxUnitsNum || '?'} units sold</p>
             <p className="text-sm" style={{ color: 'var(--ink-2)' }}>
               Clearing price:{' '}
               <span className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>
@@ -616,17 +693,31 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       </div>
 
       {/* ── Parameters ──────────────────────────────────────────────────── */}
-      <div className="rounded-3xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>Parameters</span>
+      <div className="rounded-3xl p-5 space-y-4"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <span className="text-xs font-semibold tracking-wide uppercase"
+          style={{ color: 'var(--muted)' }}>Parameters</span>
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1">
             <span className="text-xs" style={{ color: 'var(--subtle)' }}>Stock (max units)</span>
-            <input type="number" min="1" value={maxUnits} onChange={e => setMaxUnits(e.target.value)}
+            <input type="number" min="1"
+              value={stockEdited ? maxUnits : String(effectiveMaxUnitsNum)}
+              onChange={e => { setStockEdited(true); setMaxUnits(e.target.value) }}
               className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
               style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
-            {symbol && stockTokens > 0 && (
+            {/* Deposit line — computed from same tokensPerUnit sent on chain */}
+            {stockDisplay !== null && symbol && (
               <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                = {stockTokens.toLocaleString()} {symbol} deposited
+                = {stockDisplay} {symbol} deposited
+              </span>
+            )}
+            {/* Over-budget note — calm, next to the field, not a red banner at the top */}
+            {overBudget && !balanceIsZero && tokensPerUnit !== null && (
+              <span className="flex items-start gap-1 text-xs mt-0.5"
+                style={{ color: 'var(--warn, #b45309)' }}>
+                <Info className="size-3 shrink-0 mt-0.5" />
+                Your balance covers up to {maxAffordable} unit{maxAffordable === 1 ? '' : 's'} at{' '}
+                {formatTokenAmount(tokensPerUnit, decimals)} {symbol} each.
               </span>
             )}
           </label>
@@ -650,23 +741,31 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
               style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
           </label>
           <label className="flex flex-col gap-1 col-span-2">
-            <span className="text-xs" style={{ color: 'var(--subtle)' }}>Duration (hours)</span>
-            <input type="number" min="1" value={durationHours} onChange={e => setDurationHours(e.target.value)}
+            <span className="text-xs" style={{ color: 'var(--subtle)' }}>Duration</span>
+            <input type="number" min="0.0001" step="any"
+              value={durationHours}
+              onChange={e => setDurationHours(e.target.value)}
+              placeholder="72"
               className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
               style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+            {durationLabel && (
+              <span className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{durationLabel}</span>
+            )}
           </label>
         </div>
       </div>
 
       {/* ── Errors ─────────────────────────────────────────────────────── */}
       {validationErr && (
-        <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(186,43,76,0.08)' }}>
+        <div className="rounded-2xl p-3 flex items-start gap-2.5"
+          style={{ background: 'rgba(186,43,76,0.08)' }}>
           <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
           <p className="text-sm" style={{ color: 'var(--danger)' }}>{validationErr}</p>
         </div>
       )}
       {postReverted && (
-        <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(186,43,76,0.08)' }}>
+        <div className="rounded-2xl p-3 flex items-start gap-2.5"
+          style={{ background: 'rgba(186,43,76,0.08)' }}>
           <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
           <p className="text-sm" style={{ color: 'var(--danger)' }}>
             The post transaction was mined but failed, so no deal was created and your tokens did not move.{' '}
@@ -675,7 +774,8 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         </div>
       )}
       {postSlow && !postReceiptArrived && (
-        <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(255,160,0,0.08)' }}>
+        <div className="rounded-2xl p-3 flex items-start gap-2.5"
+          style={{ background: 'rgba(255,160,0,0.08)' }}>
           <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--warn, #b45309)' }} />
           <p className="text-sm" style={{ color: 'var(--warn, #b45309)' }}>
             Still not confirmed after a minute. Check the transaction in your wallet — if it shows as dropped or failed, press Post deal again.
@@ -683,7 +783,8 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         </div>
       )}
       {errMsg && (
-        <div className="rounded-2xl p-3 flex items-start gap-2.5" style={{ background: 'rgba(186,43,76,0.08)' }}>
+        <div className="rounded-2xl p-3 flex items-start gap-2.5"
+          style={{ background: 'rgba(186,43,76,0.08)' }}>
           <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
           <p className="text-sm" style={{ color: 'var(--danger)' }}>{errMsg}</p>
         </div>
@@ -723,10 +824,8 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
               </a>
             )}
             {parsedDealId !== null && (
-              <button
-                onClick={() => onDealPosted(parsedDealId)}
-                className="text-xs font-semibold ml-auto"
-                style={{ color: 'var(--accent)' }}>
+              <button onClick={() => onDealPosted(parsedDealId)}
+                className="text-xs font-semibold ml-auto" style={{ color: 'var(--accent)' }}>
                 Open deal room →
               </button>
             )}
@@ -740,9 +839,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
             <span className="mx-1">·</span>
             <span style={{ color: 'var(--ink)' }}>Step 2: post deal</span>
           </div>
-          <button
-            onClick={handlePost}
-            disabled={postBusy}
+          <button onClick={handlePost} disabled={postBusy}
             className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100"
             style={{ background: 'var(--accent)' }}>
             {postConfirming
@@ -769,9 +866,8 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
               style={{ borderColor: 'var(--muted)', color: 'var(--muted)' }}>2</span>
             <span>Post deal</span>
           </div>
-          <button
-            onClick={handleApprove}
-            disabled={busy}
+          <button onClick={handleApprove}
+            disabled={busy || !!tokensPerUnitErr || overBudget || balanceIsZero}
             className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100"
             style={{ background: 'var(--accent)' }}>
             {approveConfirming

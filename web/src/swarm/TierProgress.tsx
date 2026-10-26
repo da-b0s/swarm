@@ -77,7 +77,7 @@ export function TierProgress({ buyerCount, tiers, minBuyers, progress, nextTier 
       {/* Minimum threshold status */}
       {!metMinimum && (
         <p className="text-xs" style={{ color: 'var(--muted)' }}>
-          {minBuyers - buyerCount} more units needed to meet the deal minimum of {minBuyers}
+          {minBuyers - buyerCount === 1 ? '1 more unit' : `${minBuyers - buyerCount} more units`} needed to reach the minimum of {minBuyers} {minBuyers === 1 ? 'unit' : 'units'}
         </p>
       )}
     </div>

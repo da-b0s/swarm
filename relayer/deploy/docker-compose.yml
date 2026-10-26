@@ -1,0 +1,26 @@
+# Swarm relayer on a VPS: the relayer plus Caddy for automatic HTTPS.
+#   cp relayer.env.example relayer.env   # fill it in; it holds the hot-wallet key
+#   docker compose up -d --build
+# Run exactly ONE relayer per key: it tracks its nonce in memory.
+services:
+  relayer:
+    build: ..
+    env_file: relayer.env
+    environment:
+      PORT: "8787"
+      LOG_FILE: /tmp/relay-log.jsonl   # also visible with: docker compose logs relayer
+    restart: unless-stopped
+    expose: ["8787"]
+
+  caddy:
+    image: caddy:2.8
+    env_file: relayer.env
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [relayer]
+    restart: unless-stopped
+
+volumes:
+  caddy_data:

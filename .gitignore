@@ -30,3 +30,4 @@ relayer/relay-log*.jsonl
 
 # local test harness, never committed
 web/dev-mock-wallet.html
+relayer/deploy/relayer.env

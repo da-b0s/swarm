@@ -1,0 +1,379 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading all files I need to understand before writing anything. Now read DealRoom.tsx to find \"min 1 units\" and the goods display, plus CommitFlow for the units display: Good. I now have a complete picture of all the files. Let me plan the exact changes:\n\n**SupplierView changes:**\n1. `unitsPerToken` state → `tokensPerUnitStr` (string, allows decimals)\n2. Parse with `parseUnits(value, decimals)` — wrap in try/catch to catch invalid precision\n3. `tokensPerUnit` derived from parsed value (or `null` if invalid)\n4. Validation: reject empty/zero/negative/too many decimals; error message; button disabled\n5. \"1 unit = X SYMBOL\" computed from same parsed value via `formatTokenAmount`\n6. Stock deposit line uses same `tokensPerUnit`; all `BigInt(maxUnitsNum) * tokensPerUnit` unchanged\n7. Remove `|| 1` fallback from validate — `tokensPerUnit` is pre-validated\n8. Duration: `step=\"any\"`, `min` attr as string just above 0; closing-time display\n9. No-balance flow: default stock = `min(50, floor(balance / tokensPerUnit))` until first edit; zero-balance vs. over-budget notice split\n10. Subtitle copy fix\n11. Title/desc counters: \"62 left\" instead of \"0/80 bytes\"\n\n**TierProgress:** singular/plural fix on minimum line\n\n**DealRoom:** \"min N units\" → \"minimum N unit(s)\"Now writing the updated `SupplierView.tsx` in full: Now fix `TierProgress.tsx` — singular/plural on minimum line: Now fix `DealRoom.tsx` — \"min N units\" → \"minimum N unit(s)\": Now run the check: The linter rejects `setState` inside a `useEffect`. The right fix: derive the effective max units during render — don't use state for it at all. Replace the `useEffect` with a derived `effectiveMaxUnits` computed during render: Now remove the `useEffect` that sets `maxUnits` and replace `maxUnitsNum` derivation with an \"effective\" value that respects the affordable default when unedited: The old `maxUnitsNum` and `stockAmount` vars are now `effectiveMaxUnitsNum` and recomputed. But the old `stockDisplay` still references `tokensPerUnit !== null && maxUnitsNum > 0` — fix that too: Now add `stockDisplay` after `stockAmount` in the balance section, and fix `clearingAtFull` to use `effectiveMaxUnitsNum`: Now fix `clearingAtFull` and `chartMax` — they use `maxUnitsNum` which no longer exists; replace with `effectiveMaxUnitsNum`: Now fix `handleApprove` and `handlePost` which pass `maxUnits` string into `PostInputs` — but `validate()` calls `parseInt(inp.maxUnits)` so it reads from the string field. I need to pass the effective value as the string. The cleanest fix: update `handleApprove` to pass `String(effectiveMaxUnitsNum)` as `maxUnits`: Now also update the revenue-preview line in the render that shows `maxUnits || '?'` — replace with `effectiveMaxUnitsNum || '?'`: Also add `effectiveMaxUnitsNum` to `handleApprove`'s dependency array (it was computed inside the callback but isn't in the deps): Now the stock input still shows `maxUnits` (the raw state string) in its `value`, but when unedited the effective value diverges from it. I need the input to show the effective value when unedited. The cleanest fix: use `effectiveMaxUnitsNum` as the displayed value too: Now run the check: The linter also rejects `ref.current` during render. The correct pattern: use a plain `boolean` state for \"has been edited\" instead of a ref. A state variable is fine to read during render: Now replace all `stockEditedRef.current` with `stockEdited` and `stockEditedRef.current = false/true` with `setStockEdited(false/true)`: Now fix the two `onSelect` calls that reset `stockEditedRef.current = false` to `setStockEdited(false)`: Now remove the `useRef` import since it's no longer used, and fix the `useEffect` that references `selectedToken` and `refetchBalance` — it still calls `stockEditedRef.current = false`: Now fix the `useEffect` for refetchBalance — it no longer sets `stockEditedRef.current`: Zero warnings, zero errors. Dev server check: **Actual output:**\n\n```\noxlint: Found 0 warnings and 0 errors\ntsc --noEmit:  exit 0\n```\n\n---\n\nHere is what changed and why:\n\n**`src/swarm/SupplierView.tsx`** — rewritten:\n\n- **Bug fix: `tokensPerUnit` now uses `parseUnits`**. The old `parseInt('0.5') || 1` silently posted 1 EURC per unit when the seller typed 0.5. Replaced with `parseTokenAmount(str, decimals)` which calls viem's `parseUnits` and rejects values with more decimal places than the token has. A red inline error under the field blocks Post until it is valid. \"1 unit = X SYMBOL\" is computed from the same parsed `bigint` passed to the contract. `stockAmount`, the deposit line, and the approval amount all use the same value.\n\n- **Duration: `step=\"any\"`, `min=\"0.0001\"`**. No more browser \"must be ≥ 1\" pop-up for sub-hour durations. Closing time shown under the field as plain words: \"Closes in 30 minutes\", \"Closes in 3 days 2 hours\".\n\n- **No red banner on page open**. The \"You need EURC to sell\" notice is shown only when `tokenBalance === 0n` (the wallet has loaded and has nothing). The over-budget case shows a calm amber note directly under the stock field: \"Your balance covers up to N units at X EURC each.\" Post is disabled in both cases but no red top banner fires until the seller has actually done something.\n\n- **Stock defaults to what the seller can afford** (up to 50), derived purely during render using a `stockEdited` state boolean — no `setState` in an effect, no `ref.current` read during render, both of which the linter rejects.\n\n- **Title/desc counters** show \"62 left\" / \"3 over\" instead of \"62/80 bytes\".\n\n- **Subtitle copy** updated.\n\n**`src/swarm/TierProgress.tsx`** — minimum line: \"1 more unit needed to reach the minimum of 1 unit\" (singular/plural correct for both sides).\n\n**`src/swarm/DealRoom.tsx`** — \"min 1 units\" → \"minimum 1 unit\" (singular) / \"minimum N units\" (plural).",
+  "todos": null,
+  "filesChanged": [
+    "src/swarm/DealRoom.tsx",
+    "src/swarm/SupplierView.tsx",
+    "src/swarm/TierProgress.tsx"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           <span className=\"text-xs\" style={{ color: 'var(--subtle)' }}>\n-            min {deal.minUnits} units\n+            minimum {deal.minUnits} {deal.minUnits === 1 ? 'unit' : 'units'}\n           </span>"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "write",
+      "addedLines": 884,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * SupplierView v2 — post a Swarm deal with an ERC-20 goods token.\n+ *\n+ * Two-step flow:\n+ *   1. Approve the factory to spend exactly (maxUnits × tokensPerUnit) of the\n+ *      goods token.\n+ *   2. Call postDeal(PostParams, Tier[]) — the factory pulls the stock in the\n+ *      same transaction."
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // Track whether the seller has manually edited the stock field\n-  const stockEditedRef = useRef(false)\n+  // Track whether the seller has manually edited the stock field yet\n+  const stockEditedRef = useRef(false)\n+  // When unedited, we'll override display/calc with the affordable default (derived during render)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 21,
+      "removedLines": 17,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── Balance checks ───────────────────────────────────────────────────────\n   const balanceIsZero = tokenBalance !== undefined && tokenBalance === 0n\n-  const overBudget    = tokenBalance !== undefined && stockAmount > 0n && tokenBalance < stockAmount\n   const maxAffordable = tokenBalance !== undefined && tokensPerUnit !== null && tokensPerUnit > 0n\n     ? Number(tokenBalance / tokensPerUnit)\n     : 0\n \n-  // Default stock = min(50, floor(balance / tokensPerUnit)) once balance loads,\n+  // Default stock = min(50, floor(balance/tokensPerUnit)) until the seller edits the field.\n+  // Derived during render — no setState in an effect."
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const maxUnitsNum  = parseInt(maxUnits) || 0\n-  const stockAmount  = tokensPerUnit !== null && maxUnitsNum > 0\n-    ? BigInt(maxUnitsNum) * tokensPerUnit\n-    : 0n\n-  // Display the deposit in whole tokens\n-  const stockDisplay = tokensPerUnit !== null && maxUnitsNum > 0\n-    ? formatTokenAmount(stockAmount, decimals)\n-    : null\n+  // stockAmount and effectiveMaxUnitsNum are derived below after balance check.\n+  // stockDisplay is also derived below."
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const stockAmount  = tokensPerUnit !== null && effectiveMaxUnitsNum > 0\n     ? BigInt(effectiveMaxUnitsNum) * tokensPerUnit\n     : 0n\n-  const overBudget   = tokenBalance !== undefined && stockAmount > 0n && tokenBalance < stockAmount\n+  const overBudget   = tokenBalance !== undefined && stockAmount > 0n && tokenBalance < stockAmount\n+  // Display the deposit in whole tokens — same computation as what is posted\n+  const stockDisplay = tokensPerUnit !== null && effectiveMaxUnitsNum > 0\n+    ? formatTokenAmount(stockAmount, decimals)\n+    : null"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const chartMax    = Math.max(...parsedTiers.map(t => t.minUnits), parseInt(maxUnits) || 0, 1)\n+  const chartMax    = Math.max(...parsedTiers.map(t => t.minUnits), effectiveMaxUnitsNum, 1)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const clearingAtFull = parsedTiers.length ? computePriceAt(parsedTiers, maxUnitsNum) : 0n\n-  const revenueAtFull  = clearingAtFull * BigInt(maxUnitsNum)\n+  const clearingAtFull = parsedTiers.length ? computePriceAt(parsedTiers, effectiveMaxUnitsNum) : 0n\n+  const revenueAtFull  = clearingAtFull * BigInt(effectiveMaxUnitsNum)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     const inp: PostInputs = {\n       goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,\n-      tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,\n+      tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,\n       durationHours, title, description,\n     }\n     const result = validate(inp, chainNow)\n     if (typeof result === 'string') { setValidationErr(result); return }"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     if (tokensPerUnit === null) { setValidationErr(tokensPerUnitErr ?? 'Invalid EURC per unit.'); return }\n     const inp: PostInputs = {\n       goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,\n-      tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,\n+      tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,\n       durationHours, title, description,\n     }"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-            <p className=\"text-xs\" style={{ color: 'var(--muted)' }}>At {maxUnits || '?'} units sold</p>\n+            <p className=\"text-xs\" style={{ color: 'var(--muted)' }}>At {effectiveMaxUnitsNum || '?'} units sold</p>"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   }, [\n     goodsAddr, tokensPerUnit, tokensPerUnitErr, tokensPerUnitStr, decimals,\n-    tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,\n+    tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,\n     durationHours, title, description, chainNow,\n     overBudget, maxAffordable, symbol, writeContract,\n   ])"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   }, [\n     goodsAddr, tokensPerUnit, tokensPerUnitErr, decimals,\n-    tiers, minUnits, maxUnits, maxUnitsPerBuyer, maxBuyers,\n+    tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,\n     durationHours, title, description, chainNow, writeContract,\n   ])"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "             <input type=\"number\" min=\"1\"\n-              value={maxUnits}\n+              value={stockEditedRef.current ? maxUnits : String(effectiveMaxUnitsNum)}\n               onChange={e => { stockEditedRef.current = true; setMaxUnits(e.target.value) }}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // Track whether the seller has manually edited the stock field yet\n-  const stockEditedRef = useRef(false)\n-  // When unedited, we'll override display/calc with the affordable default (derived during render)\n+  const [stockEdited, setStockEdited] = useState(false)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const effectiveMaxUnitsNum: number = (() => {\n-    if (stockEditedRef.current) return parseInt(maxUnits) || 0\n+    if (stockEdited) return parseInt(maxUnits) || 0"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-              value={stockEditedRef.current ? maxUnits : String(effectiveMaxUnitsNum)}\n-              onChange={e => { stockEditedRef.current = true; setMaxUnits(e.target.value) }}\n+              value={stockEdited ? maxUnits : String(effectiveMaxUnitsNum)}\n+              onChange={e => { setStockEdited(true); setMaxUnits(e.target.value) }}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        onSelect={t => { setSelectedToken(t); stockEditedRef.current = false }}\n+        onSelect={t => { setSelectedToken(t); setStockEdited(false) }}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'\n+import { useState, useCallback, useMemo, useEffect } from 'react'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // Reset balance and stock default when token changes\n-  useEffect(() => {\n-    stockEditedRef.current = false\n-    void refetchBalance()\n-  }, [selectedToken, refetchBalance])\n+  // Reset balance when token changes (stockEdited reset happens in onSelect)\n+  useEffect(() => { void refetchBalance() }, [selectedToken, refetchBalance])"
+    },
+    {
+      "path": "src/swarm/TierProgress.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-      {minBuyers - buyerCount} more units needed to meet the deal minimum of {minBuyers}\n+      {minBuyers - buyerCount === 1 ? '1 more unit' : `${minBuyers - buyerCount} more units`} needed to reach the minimum of {minBuyers} {minBuyers === 1 ? 'unit' : 'units'}"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

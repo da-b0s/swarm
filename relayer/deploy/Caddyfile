@@ -1,0 +1,4 @@
+# Caddy fetches a free HTTPS certificate for RELAYER_HOST automatically.
+{$RELAYER_HOST} {
+	reverse_proxy relayer:8787
+}
