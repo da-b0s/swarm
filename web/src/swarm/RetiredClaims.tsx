@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
 import { Loader2, Archive } from 'lucide-react'
-import { ARC_NETWORK, ARC_TX_FEES, RETIRED_SETTLERS } from './config'
+import { ARC_NETWORK, ARC_TX_FEES, RETIRED_SETTLERS, POLL_LIST } from './config'
 import { formatUsdcPrice } from './utils'
 
 const CLAIM_ABI = [
@@ -22,7 +22,7 @@ export function RetiredClaims() {
       address: s, abi: CLAIM_ABI, functionName: 'claimable' as const,
       args: [address ?? '0x0000000000000000000000000000000000000000'] as const, chainId: ARC_NETWORK.chainId,
     })),
-    query: { enabled: !!address && RETIRED_SETTLERS.length > 0, refetchInterval: 15_000 },
+    query: { enabled: !!address && RETIRED_SETTLERS.length > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false },
   })
   const owed = RETIRED_SETTLERS.map((s, i) => ({ settler: s, amount: data?.[i]?.result ?? 0n })).filter((x) => x.amount > 0n)
 

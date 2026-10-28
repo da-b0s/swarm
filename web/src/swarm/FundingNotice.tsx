@@ -1,6 +1,6 @@
 import { useReadContract } from 'wagmi'
 import { Wallet, ExternalLink } from 'lucide-react'
-import { ARC_NETWORK, ACTIVE_NETWORK } from './config'
+import { ARC_NETWORK, ACTIVE_NETWORK, POLL_MY_ORDER } from './config'
 import { ERC20_ABI } from './abis'
 import { formatUsdcPrice } from './utils'
 
@@ -12,7 +12,7 @@ export function useUsdcBalance(address: `0x${string}` | undefined) {
     functionName: 'balanceOf',
     args: [address ?? '0x0000000000000000000000000000000000000000'],
     chainId: ARC_NETWORK.chainId,
-    query: { enabled: !!address, refetchInterval: 5000 },
+    query: { enabled: !!address, refetchInterval: POLL_MY_ORDER, refetchIntervalInBackground: false },
   })
   return data
 }

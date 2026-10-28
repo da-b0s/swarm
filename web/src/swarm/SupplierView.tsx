@@ -20,7 +20,7 @@ import { ConnectKitButton } from 'connectkit'
 import { motion } from 'framer-motion'
 import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown, CheckCircle2, Info } from 'lucide-react'
 import { DEAL_FACTORY_ABI, ERC20_ABI } from './abis'
-import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS } from './config'
+import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS, POLL_MY_ORDER } from './config'
 import type { GoodsToken } from './config'
 import { useChainNow } from './hooks'
 import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount } from './utils'
@@ -280,7 +280,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   const { data: tokenBalanceRaw, refetch: refetchBalance } = useReadContract({
     address: goodsAddr, abi: ERC20_ABI, functionName: 'balanceOf',
     args: address ? [address] : undefined,
-    chainId: CHAIN_ID, query: { enabled: !!address, refetchInterval: 6000 },
+    chainId: CHAIN_ID, query: { enabled: !!address, refetchInterval: POLL_MY_ORDER, refetchIntervalInBackground: false },
   })
 
   const tokenBalance = tokenBalanceRaw !== undefined ? BigInt(String(tokenBalanceRaw)) : undefined

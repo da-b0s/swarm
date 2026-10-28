@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useReadContracts } from 'wagmi'
-import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'
+import { CONTRACTS_ACTIVE, ARC_NETWORK, POLL_LIST } from './config'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'
 import { useDealCount } from './hooks'
 import { computePriceAt } from './utils'
@@ -19,7 +19,7 @@ export function useSwarmStats(): SwarmStats | undefined {
   const count = countRaw !== undefined ? Number(countRaw) : 0
   const ids = useMemo(() => Array.from({ length: count }, (_, i) => BigInt(i + 1)), [count])
   const chainId = ARC_NETWORK.chainId
-  const q = { enabled: count > 0, refetchInterval: 15_000 }
+  const q = { enabled: count > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false }
 
   const { data: deals } = useReadContracts({ query: q, contracts: ids.map((id) => ({
     address: CONTRACTS_ACTIVE.DealFactory, abi: DEAL_FACTORY_ABI, functionName: 'getDeal' as const, args: [id] as const, chainId })) })

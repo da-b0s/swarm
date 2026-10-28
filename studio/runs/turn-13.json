@@ -1,0 +1,340 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading all files I need before writing anything. Now read the hooks file and every file with polling intervals: Now read the remaining files with polling: I now have a complete picture. Let me also check CommitFlow for `refetchInterval` values and also check what `arc`/`arcTestnet` look like from viem to know if they already include Multicall3: Good. Now I have the complete inventory. Both `arc` and `arcTestnet` viem chain definitions already include `multicall3` at the canonical address. Now I know exactly what needs to change:\n\n**Changes:**\n1. `src/swarm/config.ts` — add poll-cadence constants `POLL_DEAL_ROOM`, `POLL_MY_ORDER`, `POLL_LIST`, `POLL_CHAIN_CLOCK_MS`\n2. `src/config.ts` — enable `batch: { multicall: true }` in `createConfig`, add `retryCount: 4` + exponential backoff to http transports, `refetchOnWindowFocus: false` for tab-hidden\n3. `src/swarm/hooks.ts` — replace all hardcoded `refetchInterval` with the constants; fix `useChainNow` to poll at `POLL_CHAIN_CLOCK_MS` (once per 60s instead of `watch:true`); add `refetchIntervalInBackground: false` everywhere\n4. `src/swarm/DealList.tsx` — replace hardcoded intervals\n5. `src/swarm/useSwarmStats.ts` — replace hardcoded interval\n6. `src/swarm/GlobalClaimsBanner.tsx` — replace hardcoded interval\n7. `src/swarm/FundingNotice.tsx` — replace hardcoded interval\n8. `src/swarm/SupplierView.tsx` — replace hardcoded interval\n9. `src/swarm/RetiredClaims.tsx` — replace hardcoded interval\n\nThe `useDealHistory.ts` `setInterval` is for the proof page event log scan — left alone per spec.\n\nLet me now make all the changes: Now update `src/config.ts` — enable multicall batching, add retry with backoff: Now rewrite `hooks.ts` with all polling constants and the new `useChainNow` that polls at `POLL_CHAIN_CLOCK_MS` instead of `watch: true`: Now update all the remaining files. Starting with `DealList.tsx`, `useSwarmStats.ts`, `GlobalClaimsBanner.tsx`, `FundingNotice.tsx`, `SupplierView.tsx`, and `RetiredClaims.tsx` in parallel: Now update the actual interval values in those files: Now fix `FundingNotice.tsx` and `SupplierView.tsx` and `RetiredClaims.tsx`: Now fix `SupplierView.tsx` balance read interval: Now run the check: `retryDelay` on viem's `http` transport doesn't accept a function — it's a fixed number. Fix by computing the delay statically or just removing the custom delay (the default backoff already uses exponential delays internally): Zero warnings, zero errors. Dev server still running: **Actual output:**\n\n```\noxlint: Found 0 warnings and 0 errors\ntsc --noEmit:  exit 0\n```\n\n---\n\nHere is exactly what changed:\n\n**`src/swarm/config.ts`** — four new exported constants: `POLL_DEAL_ROOM = 10_000`, `POLL_MY_ORDER = 15_000`, `POLL_LIST = 30_000`, `POLL_CHAIN_CLOCK_MS = 60_000`. Every `refetchInterval` in the app now reads from these.\n\n**`src/config.ts`** — three changes. (1) Multicall3 batching enabled: `batch: { multicall: true }` in `createConfig` — wagmi now aggregates concurrent `useReadContract` / `useReadContracts` calls into a single `eth_call` through Multicall3 (already at `0xcA11bde…` on both arc and arcTestnet per their viem chain definitions). (2) `retryCount: 4, retryDelay: 500` on both Arc transports — up to 4 retries at 500 ms intervals before an error surfaces. (3) Both Arc transports share one `arcTransport` constant to keep them in sync.\n\n**`src/swarm/hooks.ts`** — all hardcoded intervals replaced with the named constants. `useBlock({ watch: true })` replaced with `useBlock({ query: { refetchInterval: POLL_CHAIN_CLOCK_MS, refetchIntervalInBackground: false } })` — one block fetch per minute instead of every block (~2/s). Between fetches the local clock advances the timestamp smoothly so countdowns remain accurate. Every query gains `refetchIntervalInBackground: false` so polling stops when the tab is hidden. Poll assignment: `useDeal`, `useBuyerCount`, `useTotalUnits`, `useClearingPrice` → `POLL_DEAL_ROOM` (10 s); `useUnitsOf`, `usePaidPerUnit`, `useEscrowed`, `useTierCounts`, `useClaimable`, `useGoodsClaimable` → `POLL_MY_ORDER` (15 s); `useDealCount` → `POLL_LIST` (30 s).\n\n**`src/swarm/DealList.tsx`** — deal structure reads use `POLL_LIST`; units sold (live fill bar) uses `POLL_DEAL_ROOM`; both add `refetchIntervalInBackground: false`.\n\n**`src/swarm/useSwarmStats.ts`** — uses `POLL_LIST` with `refetchIntervalInBackground: false`.\n\n**`src/swarm/GlobalClaimsBanner.tsx`** — `goodsClaimables` read uses `POLL_LIST`.\n\n**`src/swarm/FundingNotice.tsx`** — USDC balance uses `POLL_MY_ORDER`.\n\n**`src/swarm/SupplierView.tsx`** — goods token balance uses `POLL_MY_ORDER`.\n\n**`src/swarm/RetiredClaims.tsx`** — retired-settler claimable reads use `POLL_LIST`.",
+  "todos": null,
+  "filesChanged": [
+    "src/config.ts",
+    "src/swarm/DealList.tsx",
+    "src/swarm/FundingNotice.tsx",
+    "src/swarm/GlobalClaimsBanner.tsx",
+    "src/swarm/RetiredClaims.tsx",
+    "src/swarm/SupplierView.tsx",
+    "src/swarm/config.ts",
+    "src/swarm/hooks.ts",
+    "src/swarm/useSwarmStats.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/config.ts",
+      "action": "write",
+      "addedLines": 49,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * wagmi configuration\n+ * Built with Arc Studio — https://studio.arc.io\n+ */\n+\n+import { http, createConfig } from 'wagmi'\n+import { mainnet } from 'wagmi/chains'\n+import { arc, arcTestnet } from 'viem/chains'"
+    },
+    {
+      "path": "src/config.ts",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " const arcTransport = http(undefined, {\n   // Batch multiple eth_calls into one HTTP request (JSON-RPC batching)\n   batch: { wait: 50 },\n-  // Retry 429s and transient errors with exponential backoff before surfacing an error\n+  // Retry 429s and transient errors before surfacing an error.\n+  // retryDelay is the base interval between retries in ms (default 150).\n   retryCount: 4,\n-  retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 10_000),\n+  retryDelay: 500,\n })"
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 19,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-/** Max USDC price per unit: 5_000_000 micro-USDC = $5.00 */\n-export const MAX_PRICE_USDC = 5_000_000n\n+// ── Polling cadences ──────────────────────────────────────────────────────────\n+// All refetchInterval values in the app come from here so the cadence is tuned\n+// in one place. Every query also sets refetchIntervalInBackground: false so\n+// polling stops when the tab is hidden.\n+\n+/** Deal room live state: price, units sold, buyer count. */\n+export const POLL_DEAL_ROOM = 10_000"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { useDealCount, useChainNow } from './hooks'\n+import { useDealCount, useChainNow } from './hooks'\n+import { POLL_DEAL_ROOM, POLL_LIST } from './config'"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const { data: dealResults } = useReadContracts({\n     contracts: dealCalls,\n-    query: { enabled: dealCount > 0, refetchInterval: 8000 },\n+    query: { enabled: dealCount > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false },\n   })\n \n   const { data: unitResults } = useReadContracts({\n     contracts: totalUnitsCalls,\n-    query: { enabled: dealCount > 0, refetchInterval: 6000 },\n+    query: { enabled: dealCount > 0, refetchInterval: POLL_DEAL_ROOM, refetchIntervalInBackground: false },"
+    },
+    {
+      "path": "src/swarm/FundingNotice.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { ARC_NETWORK, ACTIVE_NETWORK } from './config'\n+import { ARC_NETWORK, ACTIVE_NETWORK, POLL_MY_ORDER } from './config'"
+    },
+    {
+      "path": "src/swarm/FundingNotice.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    query: { enabled: !!address, refetchInterval: 5000 },\n+    query: { enabled: !!address, refetchInterval: POLL_MY_ORDER, refetchIntervalInBackground: false },"
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { CONTRACTS_ACTIVE, ARC_NETWORK, ARC_TX_FEES } from './config'\n+import { CONTRACTS_ACTIVE, ARC_NETWORK, ARC_TX_FEES, POLL_LIST } from './config'"
+    },
+    {
+      "path": "src/swarm/GlobalClaimsBanner.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    query: { enabled: !!who && tokens.length > 0, refetchInterval: 6000 },\n+    query: { enabled: !!who && tokens.length > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false },"
+    },
+    {
+      "path": "src/swarm/hooks.ts",
+      "action": "write",
+      "addedLines": 370,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/** Swarm v2 contract hooks — thin wrappers around wagmi useReadContract */\n+\n+import { useReadContract, useReadContracts, useBlock } from 'wagmi'\n+import { useState, useEffect, useMemo, useRef } from 'react'\n+import {\n+  CONTRACTS_ACTIVE, ARC_NETWORK,\n+  POLL_DEAL_ROOM, POLL_MY_ORDER, POLL_LIST, POLL_CHAIN_CLOCK_MS,\n+} from './config'"
+    },
+    {
+      "path": "src/swarm/RetiredClaims.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { ARC_NETWORK, ARC_TX_FEES, RETIRED_SETTLERS } from './config'\n+import { ARC_NETWORK, ARC_TX_FEES, RETIRED_SETTLERS, POLL_LIST } from './config'"
+    },
+    {
+      "path": "src/swarm/RetiredClaims.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    query: { enabled: !!address && RETIRED_SETTLERS.length > 0, refetchInterval: 15_000 },\n+    query: { enabled: !!address && RETIRED_SETTLERS.length > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false },"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS } from './config'\n+import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS, POLL_MY_ORDER } from './config'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    chainId: CHAIN_ID, query: { enabled: !!address, refetchInterval: 6000 },\n+    chainId: CHAIN_ID, query: { enabled: !!address, refetchInterval: POLL_MY_ORDER, refetchIntervalInBackground: false },"
+    },
+    {
+      "path": "src/swarm/useSwarmStats.ts",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'\n+import { CONTRACTS_ACTIVE, ARC_NETWORK, POLL_LIST } from './config'"
+    },
+    {
+      "path": "src/swarm/useSwarmStats.ts",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const q = { enabled: count > 0, refetchInterval: 15_000 }\n+  const q = { enabled: count > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false }"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

@@ -671,7 +671,7 @@ verify as the other.
 `via_ir`; mainnet will be compiled from this source. Behaviour is the same, and
 the suite proves it, but the bytecode is not identical.
 
-## Turns 6–12
+## Turns 6–13
 
 | Turn | Intent | Prompt · result | Outcome |
 |---|---|---|---|
@@ -688,6 +688,8 @@ the suite proves it, but the bytecode is not identical.
 | 10 | EURC replaces Swarm Pass as the good sold on mainnet; token amounts shown in whole tokens; EURC picker on the Sell page | [turn-10-eurc.md](studio/prompts/turn-10-eurc.md) · [turn-10](studio/runs/turn-10.json) | tsc and oxlint clean (its own output). Pulled and reviewed; formatter checked in the running app (1000000 at 6 decimals shows as "1"). Contracts unchanged: they already sell any ERC-20. Rehearsed on a local mainnet fork with real EURC: lifecycle 42/42, gasless 33/33, top-up 32/32, keeper 3/3, and a frozen-buyer case where settlement still succeeds for everyone. |
 | 11 | Repoint the app at the mainnet deployment and make mainnet the default | [turn-11-repoint-mainnet.md](studio/prompts/turn-11-repoint-mainnet.md) · [turn-11](studio/runs/turn-11.json) | Exactly two files changed; the three addresses match the deployment. Deployed from our own deployer with tools/deploy-mainnet.sh (Studio cannot deploy to mainnet); runtime bytecode on chain identical to the tested build. Mainnet build checked in the browser: chain 5042, EURC, live stats from chain, no testnet wording. |
 | 12 | Sell-page fixes from mainnet testing: EURC per unit accepts decimals, short durations, no premature balance warning, copy | [turn-12-sell-page-fixes.md](studio/prompts/turn-12-sell-page-fixes.md) · [turn-12](studio/runs/turn-12.json) | The real bug: parseInt("0.5") || 1 posted 1 EURC per unit while the page showed 0.5. Now parseUnits, one value for display, deposit, approval and postDeal. Checked in the running mainnet build: 0.5 per unit x 4 units = 2 EURC deposit, 0.5 h accepted ("Closes in 30 minutes"), no warning on open. |
+| 13 | RPC load: the live site hit HTTP 429 from the public Arc RPC (85 requests in 20 s from one tab) | [turn-13-rpc-load.md](studio/prompts/turn-13-rpc-load.md) · [turn-13](studio/runs/turn-13.json) | Root cause it found: the chain clock fetched every block (~2/s). Now one block a minute plus a local tick; Multicall3 batching on; polling from named constants (10 s / 15 s / 30 s); nothing polls in a hidden tab; retries with backoff. |
+| 13b | Spread reads across all four official Arc RPC endpoints | [turn-13b-rpc-fallback.md](studio/prompts/turn-13b-rpc-fallback.md) · [turn-13b](studio/runs/turn-13b.json) | viem fallback() over the endpoints in viem's own Arc chain definition; all four checked from here to answer chain 5042 and allow the site's origin. Measured on a deal page: 19 JSON-RPC requests in 30 s (0.63/s), every contract read in one multicall. |
 
 ## What Studio did well / badly
 

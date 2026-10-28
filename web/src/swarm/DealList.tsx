@@ -15,6 +15,7 @@ import { Clock, Layers, ChevronRight, PlusCircle, Package } from 'lucide-react'
 import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'
 import { useDealCount, useChainNow } from './hooks'
+import { POLL_DEAL_ROOM, POLL_LIST } from './config'
 import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'
 
 const CHAIN_ID = ARC_NETWORK.chainId
@@ -70,12 +71,12 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
 
   const { data: dealResults } = useReadContracts({
     contracts: dealCalls,
-    query: { enabled: dealCount > 0, refetchInterval: 8000 },
+    query: { enabled: dealCount > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false },
   })
 
   const { data: unitResults } = useReadContracts({
     contracts: totalUnitsCalls,
-    query: { enabled: dealCount > 0, refetchInterval: 6000 },
+    query: { enabled: dealCount > 0, refetchInterval: POLL_DEAL_ROOM, refetchIntervalInBackground: false },
   })
 
   const deals: DealSummary[] = useMemo(() => {

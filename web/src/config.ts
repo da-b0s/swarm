@@ -3,7 +3,7 @@
  * Built with Arc Studio — https://studio.arc.io
  */
 
-import { http, createConfig } from 'wagmi'
+import { http, fallback, createConfig } from 'wagmi'
 import { mainnet } from 'wagmi/chains'
 import { arc, arcTestnet } from 'viem/chains'
 import { injected } from 'wagmi/connectors'
@@ -22,15 +22,37 @@ registerChain(arcTestnet.id, arcTestnet.rpcUrls.default.http[0])
 const activeChain = ACTIVE_NETWORK === 'mainnet' ? arc : arcTestnet
 const otherArc = ACTIVE_NETWORK === 'mainnet' ? arcTestnet : arc
 
+// Arc and arcTestnet already include Multicall3 at 0xcA11bde05977b3631167028862bE2a173976CA11
+// in their viem chain definitions, so batch.multicall works without any extra config.
+
+// Per-endpoint options: JSON-RPC batching + retry on transient errors / 429s.
+const endpointOpts = {
+  batch: { wait: 50 },
+  retryCount: 4,
+  retryDelay: 500,
+} as const
+
+// Build a fallback transport from every RPC URL the viem chain definition lists,
+// preserving the order (primary endpoint first). rank: false means the transport
+// cycles to the next endpoint on failure rather than re-ranking by latency.
+function arcFallback(urls: readonly string[]) {
+  return fallback(
+    urls.map(url => http(url, endpointOpts)),
+    { rank: false },
+  )
+}
+
 export const config = createConfig({
   chains: [activeChain, otherArc, mainnet], // mainnet needed for ENS resolution
   connectors: [injected()],
+  batch: {
+    // Aggregate concurrent readContract / useReadContracts calls through Multicall3
+    // so a page with N reads issues one eth_call instead of N.
+    multicall: true,
+  },
   transports: {
-    // Batch the many small reads a page makes at once into one HTTP request:
-    // the public Arc RPC rate-limits per IP, and unbatched polling from a single
-    // open tab was enough, alongside a second tab and the relayer, to draw 429s.
-    [arc.id]: http(undefined, { batch: { wait: 50 } }),
-    [arcTestnet.id]: http(undefined, { batch: { wait: 50 } }),
-    [mainnet.id]: http(), // ENS resolution uses mainnet
+    [arc.id]:        arcFallback(arc.rpcUrls.default.http),
+    [arcTestnet.id]: arcFallback(arcTestnet.rpcUrls.default.http),
+    [mainnet.id]:    http(), // ENS resolution uses mainnet
   },
 })

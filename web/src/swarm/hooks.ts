@@ -2,10 +2,16 @@
 
 import { useReadContract, useReadContracts, useBlock } from 'wagmi'
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'
+import {
+  CONTRACTS_ACTIVE, ARC_NETWORK,
+  POLL_DEAL_ROOM, POLL_MY_ORDER, POLL_LIST, POLL_CHAIN_CLOCK_MS,
+} from './config'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI, SETTLER_ABI, ERC20_ABI } from './abis'
 
 const CHAIN_ID = ARC_NETWORK.chainId
+
+// Shared query option: stop polling when the tab is hidden
+const BG_OFF = { refetchIntervalInBackground: false } as const
 
 // ─── Deal types ───────────────────────────────────────────────────────────────
 
@@ -38,7 +44,7 @@ export function useDeal(dealId: bigint | undefined) {
     functionName: 'getDeal',
     args: dealId !== undefined ? [dealId] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: dealId !== undefined, refetchInterval: 4000 },
+    query: { enabled: dealId !== undefined, refetchInterval: POLL_DEAL_ROOM, ...BG_OFF },
   })
 
   const deal = useMemo<DealData | undefined>(() => {
@@ -71,7 +77,7 @@ export function useDealCount() {
     abi: DEAL_FACTORY_ABI,
     functionName: 'dealCount',
     chainId: CHAIN_ID,
-    query: { refetchInterval: 5000 },
+    query: { refetchInterval: POLL_LIST, ...BG_OFF },
   })
 }
 
@@ -84,7 +90,7 @@ export function useBuyerCount(dealId: bigint | undefined) {
     functionName: 'getBuyerCount',
     args: dealId !== undefined ? [dealId] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: dealId !== undefined, refetchInterval: 3000 },
+    query: { enabled: dealId !== undefined, refetchInterval: POLL_DEAL_ROOM, ...BG_OFF },
   })
 }
 
@@ -95,7 +101,7 @@ export function useTotalUnits(dealId: bigint | undefined) {
     functionName: 'totalUnits',
     args: dealId !== undefined ? [dealId] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: dealId !== undefined, refetchInterval: 3000 },
+    query: { enabled: dealId !== undefined, refetchInterval: POLL_DEAL_ROOM, ...BG_OFF },
   })
 }
 
@@ -106,7 +112,7 @@ export function useClearingPrice(dealId: bigint | undefined) {
     functionName: 'clearingPrice',
     args: dealId !== undefined ? [dealId] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: dealId !== undefined, refetchInterval: 3000 },
+    query: { enabled: dealId !== undefined, refetchInterval: POLL_DEAL_ROOM, ...BG_OFF },
   })
 }
 
@@ -118,7 +124,7 @@ export function useUnitsOf(dealId: bigint | undefined, buyer: `0x${string}` | un
     functionName: 'unitsOf',
     args: dealId !== undefined && buyer ? [dealId, buyer] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: dealId !== undefined && !!buyer, refetchInterval: 4000 },
+    query: { enabled: dealId !== undefined && !!buyer, refetchInterval: POLL_MY_ORDER, ...BG_OFF },
   })
 }
 
@@ -130,7 +136,7 @@ export function usePaidPerUnit(dealId: bigint | undefined, buyer: `0x${string}` 
     functionName: 'paidPerUnit',
     args: dealId !== undefined && buyer ? [dealId, buyer] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: dealId !== undefined && !!buyer, refetchInterval: 4000 },
+    query: { enabled: dealId !== undefined && !!buyer, refetchInterval: POLL_MY_ORDER, ...BG_OFF },
   })
 }
 
@@ -142,7 +148,7 @@ export function useEscrowed(dealId: bigint | undefined, buyer: `0x${string}` | u
     functionName: 'escrowed',
     args: dealId !== undefined && buyer ? [dealId, buyer] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: dealId !== undefined && !!buyer, refetchInterval: 4000 },
+    query: { enabled: dealId !== undefined && !!buyer, refetchInterval: POLL_MY_ORDER, ...BG_OFF },
   })
 }
 
@@ -165,7 +171,7 @@ export function useTierCounts(dealId: bigint | undefined, tiers: DealTier[]) {
 
   const { data, refetch } = useReadContracts({
     contracts,
-    query: { enabled: dealId !== undefined && tiers.length > 0, refetchInterval: 4000 },
+    query: { enabled: dealId !== undefined && tiers.length > 0, refetchInterval: POLL_MY_ORDER, ...BG_OFF },
   })
 
   const tierCountMap = new Map<bigint, number>()
@@ -188,7 +194,7 @@ export function useClaimable(who: `0x${string}` | undefined) {
     functionName: 'claimable',
     args: who ? [who] : undefined,
     chainId: CHAIN_ID,
-    query: { enabled: !!who, refetchInterval: 6000 },
+    query: { enabled: !!who, refetchInterval: POLL_MY_ORDER, ...BG_OFF },
   })
 }
 
@@ -206,7 +212,8 @@ export function useGoodsClaimable(
     chainId: CHAIN_ID,
     query: {
       enabled: !!goodsToken && goodsToken !== ZERO && !!who,
-      refetchInterval: 6000,
+      refetchInterval: POLL_MY_ORDER,
+      ...BG_OFF,
     },
   })
 }
@@ -246,20 +253,31 @@ export function useGoodsTokenMeta(
  * Returns the current chain timestamp in seconds, anchored on the latest block
  * and ticked locally from measured elapsed time. Returns 0 until the first
  * block arrives — callers must not treat 0 as a valid timestamp.
+ *
+ * Fetches a fresh block at most once per POLL_CHAIN_CLOCK_MS (60 s) and stops
+ * fetching when the tab is hidden, keeping background RPC usage near zero.
+ * Between fetches the timestamp advances via the browser clock so countdowns
+ * remain smooth.
  */
 export function useChainNow(): number {
-  const { data: block } = useBlock({ chainId: CHAIN_ID, watch: true })
+  const { data: block } = useBlock({
+    chainId: CHAIN_ID,
+    // Poll once per minute; do not watch every new block.
+    query: { refetchInterval: POLL_CHAIN_CLOCK_MS, ...BG_OFF },
+  })
 
   const anchorRef = useRef<{ chainTs: number; localMs: number } | null>(null)
   const [nowSec, setNowSec] = useState(0)
 
   const blockTs = block?.timestamp !== undefined ? Number(block.timestamp) : undefined
 
+  // Re-anchor whenever a fresh block timestamp arrives
   useEffect(() => {
     if (blockTs === undefined) return
     anchorRef.current = { chainTs: blockTs, localMs: Date.now() }
   }, [blockTs])
 
+  // Advance locally every 500 ms — smooth countdowns, no extra RPC
   useEffect(() => {
     const tick = () => {
       const a = anchorRef.current

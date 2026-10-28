@@ -77,6 +77,23 @@ const CONTRACTS = {
 
 export const CONTRACTS_ACTIVE = CONTRACTS[ACTIVE_NETWORK]
 
+// ── Polling cadences ──────────────────────────────────────────────────────────
+// All refetchInterval values in the app come from here so the cadence is tuned
+// in one place. Every query also sets refetchIntervalInBackground: false so
+// polling stops when the tab is hidden.
+
+/** Deal room live state: price, units sold, buyer count. */
+export const POLL_DEAL_ROOM = 10_000
+
+/** Connected wallet's own order, balances and claimables. */
+export const POLL_MY_ORDER = 15_000
+
+/** Deal list, homepage stats, global claims banner. */
+export const POLL_LIST = 30_000
+
+/** How often useChainNow re-anchors from a block fetch (ms). */
+export const POLL_CHAIN_CLOCK_MS = 60_000
+
 /** Max USDC price per unit: 5_000_000 micro-USDC = $5.00 */
 export const MAX_PRICE_USDC = 5_000_000n
 /** Max buyer cap */

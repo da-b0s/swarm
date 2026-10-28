@@ -14,7 +14,7 @@ import { useMemo } from 'react'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContracts } from 'wagmi'
 import { useState, useEffect } from 'react'
 import { Gift, Loader2 } from 'lucide-react'
-import { CONTRACTS_ACTIVE, ARC_NETWORK, ARC_TX_FEES } from './config'
+import { CONTRACTS_ACTIVE, ARC_NETWORK, ARC_TX_FEES, POLL_LIST } from './config'
 import { DEAL_FACTORY_ABI, SETTLER_ABI } from './abis'
 import { useDealCount, useClaimable } from './hooks'
 import { formatUsdcPrice, formatTokenAmount } from './utils'
@@ -77,7 +77,7 @@ function useGoodsClaimables(
 
   const { data } = useReadContracts({
     contracts: calls,
-    query: { enabled: !!who && tokens.length > 0, refetchInterval: 6000 },
+    query: { enabled: !!who && tokens.length > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false },
   })
 
   return useMemo(() => {
