@@ -1,0 +1,4 @@
+# For the server owner, if Caddy already serves 80/443. Add to the Caddyfile and reload.
+HOSTNAME {
+	reverse_proxy 127.0.0.1:8787
+}

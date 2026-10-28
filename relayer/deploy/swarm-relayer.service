@@ -1,0 +1,24 @@
+# systemd USER service for the Swarm relayer. Runs as the unprivileged `swarm`
+# user; no root, no Docker. Install:
+#   mkdir -p ~/.config/systemd/user && cp swarm-relayer.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now swarm-relayer
+# Needs the server owner to have run once: sudo loginctl enable-linger swarm
+[Unit]
+Description=Swarm relayer (Arc mainnet)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/swarm/relayer
+EnvironmentFile=%h/swarm/relayer/deploy/relayer.env
+Environment=PORT=8787
+Environment=HOST=127.0.0.1
+Environment=LOG_FILE=%h/swarm-relay-log.jsonl
+ExecStart=%h/.local/node/bin/node --experimental-strip-types server.ts
+Restart=always
+RestartSec=5
+# Keep the relayer to itself
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

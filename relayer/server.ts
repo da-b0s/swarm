@@ -11,6 +11,7 @@
  *   POOL_ADDRESS    — deployed DemandPool address
  *   ALLOWED_ORIGIN  — CORS origin allowed (default: refuse all cross-origin requests)
  *   PORT            — HTTP port (default 3100)
+ *   HOST            — interface to listen on (default 0.0.0.0; use 127.0.0.1 behind a proxy)
  *   KEEPER_INTERVAL_MS — settle/refund expired deals this often (default 30000; 0 = off)
  */
 
@@ -48,6 +49,7 @@ const POOL_ADDRESS  = required('POOL_ADDRESS') as Hex
 // for any deployment that accepts browser requests.
 const ALLOWED_ORIGIN = process.env['ALLOWED_ORIGIN'] ?? ''
 const PORT          = parseInt(process.env['PORT'] ?? '3100', 10)
+const HOST          = process.env['HOST'] ?? '0.0.0.0'   // 127.0.0.1 behind a reverse proxy
 const LOG_FILE      = process.env['LOG_FILE'] ?? 'relay-log.jsonl'
 
 // Safety: never log the key itself, not even partially.
@@ -648,7 +650,7 @@ if (liveChainId !== CHAIN_ID) {
   process.exit(1)
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   const originLabel = ALLOWED_ORIGIN || '(none — cross-origin requests refused)'
   console.log(`Swarm relayer listening on port ${PORT}`)
   console.log(`  chain    ${CHAIN_ID}`)
