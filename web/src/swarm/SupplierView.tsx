@@ -19,7 +19,6 @@ import { parseUnits, isAddress } from 'viem'
 import { ConnectKitButton } from 'connectkit'
 import { motion } from 'framer-motion'
 import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, CheckCircle2, Info, ChevronDown, Check } from 'lucide-react'
-import { TierCurveEditor } from './TierCurveEditor'
 import { DEAL_FACTORY_ABI, ERC20_ABI } from './abis'
 import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS, POLL_MY_ORDER } from './config'
 import type { GoodsToken } from './config'
@@ -1092,17 +1091,6 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
             )
           })}
         </div>
-
-        {/* Interactive curve editor */}
-        <TierCurveEditor
-          tiers={tiers}
-          onChange={setTiers}
-          maxUnits={effectiveMaxUnitsNum || 1}
-          tokensPerUnit={tokensPerUnit}
-          tokenDecimals={decimals}
-          tokenSymbol={symbol}
-          marketPricePerUnit={marketPricePerUnit}
-        />
 
         {/* Revenue preview */}
         {parsedTiers.length > 0 && (
