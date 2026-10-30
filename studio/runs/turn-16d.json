@@ -1,0 +1,260 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the current file in full first. I can see exactly what needs changing. The drag/keyboard logic is intact. I'll make only the visual fixes: domain headroom, height, axis label density, fill, stroke, handle ring, caption text, and tooltip clamping. No logic changes.\n\nThe root cause of the \"almost flat line\" is `priceMax = rawMax * 1.15` and `priceMin = rawMin * 0.88` — for $1.15–$1.20 the spread is $0.05, so `rawMin * 0.88 = $1.012` and `rawMax * 1.15 = $1.38`. That's a $0.37 domain for a $0.05 spread — the data occupies only 14% of the chart height. The fix is ±25% of the spread, not ±15% of the absolute price. Now fix `computeDomain` — spread-based headroom instead of percentage of absolute price: Now update the `toY` / `microPerPx` functions to use a height parameter instead of the old `H` constant (since height is now variable): Now I need to store the frozen `h` in the drag ref too, and compute h dynamically. Update the component to track width and height, add the frozen h to dragRef, and update all call sites: Now add `frozenH` to the drag ref and update `dragRef` type: Update `onPointerDown` to store `frozenH`: Update `onMove` to use `frozenH`: Now update the rendering section — SVG height, fill area, thicker stroke, y-axis labels with no-overlap filtering, handles with ring, caption: Zero warnings, zero errors. Summary of every change made, in the rendering and layout sections only — drag/keyboard logic is byte-for-byte identical to the previous version:\n\n**Domain (`computeDomain`):** Headroom is now ±25% of the price *spread* (not of the absolute price). For $1.15–$1.20 the spread is $0.05, so pad = $0.0125, giving a domain of roughly $1.137–$1.212 — the data fills ~60% of the chart instead of ~14%.\n\n**Height:** `H = 140` replaced by `H_DESK = 220` / `H_MOB = 180`. A `ResizeObserver` now also writes `h` state alongside `w`, switching to `H_MOB` when the container is narrower than 480px. Every `toY` / `microPerPx` call now takes `h` as an argument. The drag ref stores `frozenH` so the frozen-scale invariant is maintained for the height dimension too.\n\n**Y-axis labels:** Tick candidates are domain endpoints plus each tier's exact price (not a fixed grid). Labels within 12px of a previously placed one are dropped, so there are no overlapping ticks even when two tiers are very close in price.\n\n**Fill:** A filled area path is computed by closing the stroke path to the bottom edge of the chart, filled with `var(--accent)` at 7% opacity.\n\n**Stroke:** `strokeWidth` raised from 2 to 2.5.\n\n**Handles:** Dot radius raised from 5/7 to 6/8 (rest/active). A faint `opacity=0.3` ring appears behind the dot when the handle is active or focused. The tooltip height increased to 20px and font to 8px; vertical position prefers above the dot but falls back to below when it would clip the top padding.\n\n**Caption:** Changed from `\"Price curve — drag handles to edit\"` (em dash) to `\"Price curve - drag the points to edit\"` (plain hyphen).",
+  "todos": null,
+  "filesChanged": [
+    "src/swarm/TierCurveEditor.tsx"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/swarm/TierCurveEditor.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-const PAD_L = 40   // left  (y-axis labels)\n-const PAD_R = 12   // right\n-const PAD_T = 12   // top\n-const PAD_B = 24   // bottom (x-axis labels)\n-const H     = 140  // fixed SVG height\n+const PAD_L  = 44   // left  (y-axis labels)\n+const PAD_R  = 14   // right\n+const PAD_T  = 16   // top\n+const PAD_B  = 26   // bottom (x-axis labels)\n+const H_DESK = 220  // SVG height — desktop\n+const H_MOB  = 180  // SVG height — phones (≤ 480px wide)"
+    },
+    {
+      "path": "src/swarm/TierCurveEditor.tsx",
+      "action": "edit",
+      "addedLines": 37,
+      "removedLines": 28,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-/** Derive the chart domain from the current tiers with headroom. */\n-function computeDomain(\n-  tiers:             TierRow[],\n-  maxUnits:          number,\n-  marketPricePerUnit?: string | null,\n-): Domain {\n-  const prices: number[] = []\n-  const units: number[]  = []\n+/** Derive the chart domain from the current tiers with headroom.\n+ *\n+ * Headroom is ±25% of the spread (not of the absolute price), so a tight\n+ * cluster like $1.15–$1.20 uses 37.5% of the chart for the actual data and\n+ * the rest as breathing room, rather than a vanishingly thin band.\n+ * When the spread is zero, ±5% of the price is used.\n+ */\n+function computeDomain("
+    },
+    {
+      "path": "src/swarm/TierCurveEditor.tsx",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-function toY(micro: number, dom: Domain): number {\n+function toY(micro: number, dom: Domain, h: number): number {\n   const range = dom.priceMax - dom.priceMin || 1\n-  return PAD_T + ((dom.priceMax - micro) / range) * (H - PAD_T - PAD_B)\n+  return PAD_T + ((dom.priceMax - micro) / range) * (h - PAD_T - PAD_B)\n }\n \n /** Price per pixel — positive means up = higher price. */\n-function microPerPx(dom: Domain): number {\n+function microPerPx(dom: Domain, h: number): number {\n   const range = dom.priceMax - dom.priceMin || 1"
+    },
+    {
+      "path": "src/swarm/TierCurveEditor.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 13,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const svgRef  = useRef<SVGSVGElement>(null)\n   const [w, setW] = useState(320)\n+  const [h, setH] = useState(H_DESK)\n \n-  // Observe container width.\n+  // Observe container width and set responsive height.\n   useEffect(() => {\n     const el = svgRef.current\n-    if (!el) return\n-    const ro = new ResizeObserver(entries => {\n+    if (!el) return"
+    },
+    {
+      "path": "src/swarm/TierCurveEditor.tsx",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const dragRef = useRef<{\n     idx:        number\n     startX:     number   // pointer px at drag start\n     startY:     number\n     origMicro:  number   // tier price at drag start (micro-USDC)\n     origUnits:  number   // tier minUnits at drag start\n     frozenDom:  Domain   // domain snapshot — never changes during this drag\n     frozenW:    number   // SVG width snapshot"
+    },
+    {
+      "path": "src/swarm/TierCurveEditor.tsx",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     dragRef.current = {\n       idx,\n       startX:    pt.x,\n       startY:    pt.y,\n       origMicro: parseMicro(tiers[idx].pricePerUnit),\n       origUnits: parseInt(tiers[idx].minUnits) || 0,\n       frozenDom: { ...domain },   // snapshot — immutable for the whole drag\n       frozenW:   w,"
+    },
+    {
+      "path": "src/swarm/TierCurveEditor.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-      const { idx, startX, startY, origMicro, origUnits, frozenDom, frozenW } = drag\n+      const { idx, startX, startY, origMicro, origUnits, frozenDom, frozenW, frozenH } = drag\n \n       // ── Price (y axis) ────────────────────────────────────────────────────\n       // Dragging UP (smaller y) = higher price.\n-      const dyPx      = pt.y - startY                              // positive = downward\n-      const deltaMicro = -dyPx * microPerPx(frozenDom)             // negative dy = price rises\n+      const dyPx      = pt.y - startY                                    // positive = downward\n+      const deltaMicro = -dyPx * microPerPx(frozenDom, frozenH)          // negative dy = price rises"
+    },
+    {
+      "path": "src/swarm/TierCurveEditor.tsx",
+      "action": "edit",
+      "addedLines": 205,
+      "removedLines": 165,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── SVG rendering ─────────────────────────────────────────────────────────────\n \n   const validTiers = tiers\n     .map(t => ({ minUnits: parseInt(t.minUnits) || 0, priceMicro: parseMicro(t.pricePerUnit) }))\n     .filter(t => t.minUnits > 0 && t.priceMicro > 0)\n \n-  // Step path\n-  const pathD = (() => {\n+  // Step path + fill area (close down to bottom edge)\n+  const { strokeD, fillD } = (() => {"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

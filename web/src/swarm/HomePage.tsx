@@ -23,7 +23,7 @@ const PROMISES = [
 
 const FAQ = [
   { q: 'What can I buy?',
-    a: "Deals sell stablecoins and tokens including EURC, GBPA, MXNB, cirBTC, and WETH, paid for in USDC. Every buyer pays the same final price." },
+    a: "Deals sell assets on Arc — including EURC, GBPA, MXNB, cirBTC, and WETH — paid for in USDC. Every buyer pays the same final price." },
   { q: 'How is the final price decided?',
     a: 'Each deal has price levels set by the seller, for example $1.20 each, then $1.17 once 25 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },
   { q: 'What do I need to order?',
@@ -44,64 +44,69 @@ export function HomePage({ onBrowse, onSell }: Props) {
   const [open, setOpen] = useState<number | null>(0)
   const stats = useSwarmStats()
   const STATS = [
-    { label: 'Volume',            value: stats && formatUsdcPrice(stats.volume) },
-    { label: 'Saved by buyers',   value: stats && formatUsdcPrice(stats.saved) },
-    { label: 'Units sold',        value: stats && stats.units.toLocaleString('en-US') },
-    { label: 'Buyers',            value: stats && stats.buyers.toLocaleString('en-US') },
-    { label: 'Deals',             value: stats && stats.deals.toLocaleString('en-US') },
+    { label: 'Volume',          value: stats ? formatUsdcPrice(stats.volume) : null },
+    { label: 'Units sold',      value: stats ? stats.units.toLocaleString('en-US') : null },
+    { label: 'Buyers',          value: stats ? stats.buyers.toLocaleString('en-US') : null },
+    { label: 'Deals',           value: stats ? stats.deals.toLocaleString('en-US') : null },
+    { label: 'Saved by buyers', value: stats ? formatUsdcPrice(stats.saved) : null },
   ]
 
   return (
     <div className="px-4 pb-16">
-      {/* Hero — left-aligned on desktop, centred on mobile */}
-      <section className="pt-12 pb-10 sm:pt-16">
-        <div className="lg:grid lg:grid-cols-[1fr_auto] lg:gap-12 lg:items-center">
-          {/* Left: headline + CTAs */}
-          <div>
-            <motion.h1 {...fade}
-              className="display text-4xl sm:text-5xl font-bold leading-tight text-center lg:text-left"
-              style={{ color: 'var(--ink)' }}>
-              Buy together.<br />Pay less.
-            </motion.h1>
-            <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}
-              className="mt-4 text-base sm:text-lg max-w-md mx-auto lg:mx-0 text-center lg:text-left"
-              style={{ color: 'var(--muted)' }}>
-              Group deals on stablecoins and tokens on Arc. The more people buy, the better everyone&apos;s rate.
-            </motion.p>
-            <motion.div {...fade} transition={{ duration: 0.35, delay: 0.1 }}
-              className="mt-7 flex flex-col sm:flex-row gap-3 justify-center lg:justify-start">
-              <button onClick={onBrowse}
-                className="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-90"
-                style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
-                Browse deals <ArrowRight className="size-4" />
-              </button>
-              <button onClick={onSell}
-                className="rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-80"
-                style={{ color: 'var(--ink)', border: '1px solid var(--border)', background: 'var(--surface)' }}>
-                Sell on Swarm
-              </button>
-            </motion.div>
-          </div>
+      {/* Hero — full width, one column */}
+      <section className="pt-12 pb-6 sm:pt-16">
+        <motion.h1 {...fade}
+          className="display text-4xl sm:text-5xl font-bold leading-tight text-center lg:text-left"
+          style={{ color: 'var(--ink)' }}>
+          Buy together.<br />Pay less.
+        </motion.h1>
+        <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}
+          className="mt-4 text-base sm:text-lg max-w-xl text-center lg:text-left"
+          style={{ color: 'var(--muted)' }}>
+          Group deals on assets on Arc. The more people buy, the better everyone&apos;s rate.
+        </motion.p>
+        <motion.div {...fade} transition={{ duration: 0.35, delay: 0.1 }}
+          className="mt-7 flex flex-col sm:flex-row gap-3 justify-center lg:justify-start">
+          <button onClick={onBrowse}
+            className="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-90"
+            style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
+            Browse deals <ArrowRight className="size-4" />
+          </button>
+          <button onClick={onSell}
+            className="rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-80"
+            style={{ color: 'var(--ink)', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+            Sell on Swarm
+          </button>
+        </motion.div>
+      </section>
 
-          {/* Right: live stats */}
-          <motion.div {...fade} transition={{ duration: 0.35, delay: 0.12 }}
-            aria-label="Swarm in numbers"
-            className="mt-10 lg:mt-0 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 gap-2 lg:w-56">
-            {STATS.map(({ label, value }) => (
-              <div key={label} className="rounded-2xl px-4 py-3"
-                style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                <p className="display text-xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
-                  {value ?? <span className="inline-block w-12 h-5 rounded-md animate-pulse align-middle" style={{ background: 'var(--surface-muted)' }} />}
-                </p>
-                <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{label}</p>
-              </div>
-            ))}
-          </motion.div>
+      {/* Stats band — full width, all five in one row on desktop */}
+      <motion.section {...fade} transition={{ duration: 0.35, delay: 0.12 }}
+        aria-label="Swarm in numbers"
+        className="rounded-2xl overflow-hidden"
+        style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}>
+        {/* gap-px + surface-muted wrapper = 1px grid lines at any breakpoint */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-px"
+          style={{ background: 'var(--border)' }}>
+          {STATS.map(({ label, value }, i) => (
+            <div key={label}
+              className={`px-5 py-5 flex flex-col gap-1${i === 4 ? ' col-span-2 sm:col-span-1' : ''}`}
+              style={{ background: 'var(--surface)' }}>
+              <p className="display text-4xl font-bold tabular-nums leading-none"
+                style={{ color: 'var(--ink)' }}>
+                {value ?? (
+                  <span className="inline-block w-20 h-9 rounded-lg animate-pulse align-middle"
+                    style={{ background: 'var(--surface-muted)' }} />
+                )}
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>{label}</p>
+            </div>
+          ))}
         </div>
-        <p className="text-xs text-center lg:text-left mt-3" style={{ color: 'var(--subtle)' }}>
+        <p className="px-5 py-2.5 text-xs border-t" style={{ color: 'var(--subtle)', borderColor: 'var(--border)' }}>
           Live from the blockchain, updated every few seconds.
         </p>
-      </section>
+      </motion.section>
 
       {/* How it works */}
       <section className="py-8">

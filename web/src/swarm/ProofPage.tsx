@@ -16,6 +16,7 @@ import { Play, Square, ExternalLink, CheckCircle, XCircle } from 'lucide-react'
 import { useEventLog } from './useEventLog'
 import { formatUsdcPrice, txUrl, shortAddr, formatTokenAmount } from './utils'
 import { ARC_NETWORK, GOODS_TOKENS } from './config'
+import { useGoodsTokenMeta } from './hooks'
 
 const fadeUp = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.22 } }
 
@@ -325,18 +326,32 @@ function EventSummary({ ev }: { ev: import('./useEventLog').SwarmEvent }) {
           {shortAddr(String(a.claimant))} claimed {formatUsdcPrice(BigInt(String(a.amount)))} USDC
         </p>
       )
-    case 'GoodsClaimed': {
-      const tok = GOODS_TOKENS.find(t => t.address.toLowerCase() === ((a.token as string | undefined) ?? '').toLowerCase())
-      const amtStr = tok
-        ? `${formatTokenAmount(BigInt(String(a.amount)), tok.decimals)} ${tok.symbol}`
-        : `${String(a.amount)} tokens`
+    case 'GoodsClaimed':
       return (
-        <p className="text-xs" style={{ color: 'var(--ink-2)' }}>
-          {shortAddr(String(a.claimant))} claimed {amtStr}
-        </p>
+        <GoodsClaimedSummary
+          claimant={String(a.claimant)}
+          amount={BigInt(String(a.amount))}
+          token={(a.token as string | undefined) ?? ''}
+        />
       )
-    }
     default:
       return <p className="text-xs" style={{ color: 'var(--muted)' }}>Unknown event</p>
   }
+}
+
+// ── GoodsClaimed summary — resolves unlisted token metadata on-chain ──────────
+
+function GoodsClaimedSummary({ claimant, amount, token }: { claimant: string; amount: bigint; token: string }) {
+  const listed = GOODS_TOKENS.find(t => t.address.toLowerCase() === token.toLowerCase())
+  const onChain = useGoodsTokenMeta(listed ? undefined : token as `0x${string}`)
+  const sym = listed?.symbol ?? onChain?.symbol
+  const dec = listed?.decimals ?? onChain?.decimals
+  const amtStr = sym !== undefined && dec !== undefined
+    ? `${formatTokenAmount(amount, dec)} ${sym}`
+    : `${amount.toString()} (unlisted token)`
+  return (
+    <p className="text-xs" style={{ color: 'var(--ink-2)' }}>
+      {shortAddr(claimant)} claimed {amtStr}
+    </p>
+  )
 }

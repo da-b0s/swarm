@@ -15,10 +15,11 @@ import {
   useAccount, useWriteContract, useWaitForTransactionReceipt,
   useSwitchChain, useReadContracts,
 } from 'wagmi'
-import { parseUnits } from 'viem'
+import { parseUnits, isAddress } from 'viem'
 import { ConnectKitButton } from 'connectkit'
 import { motion } from 'framer-motion'
-import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, TrendingDown, CheckCircle2, Info, ChevronDown, Check } from 'lucide-react'
+import { Plus, Trash2, Loader2, ExternalLink, AlertCircle, CheckCircle2, Info, ChevronDown, Check } from 'lucide-react'
+import { TierCurveEditor } from './TierCurveEditor'
 import { DEAL_FACTORY_ABI, ERC20_ABI } from './abis'
 import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS, POLL_MY_ORDER } from './config'
 import type { GoodsToken } from './config'
@@ -30,6 +31,17 @@ const CHAIN_ID = ARC_NETWORK.chainId
 const USDC     = ARC_NETWORK.usdc.address
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+/** A token the seller entered by address that is not in GOODS_TOKENS. */
+interface CustomToken extends GoodsToken {
+  unverified: true
+}
+
+type AnyToken = GoodsToken | CustomToken
+
+function isCustomToken(t: AnyToken): t is CustomToken {
+  return (t as CustomToken).unverified === true
+}
 
 interface TierInput { minUnits: string; pricePerUnit: string }
 
@@ -198,14 +210,19 @@ function validate(inp: PostInputs, chainNow: number): ValidatedInputs | string {
 // ── Token picker dropdown ─────────────────────────────────────────────────────
 
 interface TokenPickerProps {
-  selected:  GoodsToken
-  onSelect:  (t: GoodsToken) => void
+  selected:   AnyToken
+  onSelect:   (t: AnyToken) => void
   /** balances keyed by token address (lower-cased), raw base units */
-  balances:  Map<string, bigint>
+  balances:   Map<string, bigint>
+  walletAddr: `0x${string}` | undefined
 }
 
-function TokenPickerDropdown({ selected, onSelect, balances }: TokenPickerProps) {
-  const [open, setOpen] = useState(false)
+type CustomState = 'idle' | 'loading' | 'error' | 'ok'
+
+function TokenPickerDropdown({ selected, onSelect, balances, walletAddr }: TokenPickerProps) {
+  const [open,        setOpen]        = useState(false)
+  const [showOther,   setShowOther]   = useState(() => isCustomToken(selected))
+  const [addrInput,   setAddrInput]   = useState(() => isCustomToken(selected) ? selected.address : '')
   const ref = useRef<HTMLDivElement>(null)
 
   // Close on outside click
@@ -218,12 +235,12 @@ function TokenPickerDropdown({ selected, onSelect, balances }: TokenPickerProps)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  // Keyboard nav
+  // Keyboard nav (listed tokens only; Other is separate)
   const onKeyDown = (e: React.KeyboardEvent) => {
-    const idx = GOODS_TOKENS.findIndex(t => t.address === selected.address)
+    const idx = GOODS_TOKENS.findIndex(t => t.address.toLowerCase() === selected.address.toLowerCase())
     if (e.key === 'Escape') { setOpen(false); return }
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o); return }
-    if (!open) return
+    if (!open || showOther) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       onSelect(GOODS_TOKENS[(idx + 1) % GOODS_TOKENS.length])
@@ -232,6 +249,64 @@ function TokenPickerDropdown({ selected, onSelect, balances }: TokenPickerProps)
       onSelect(GOODS_TOKENS[(idx - 1 + GOODS_TOKENS.length) % GOODS_TOKENS.length])
     }
   }
+
+  // Validate the entered address and read token metadata
+  const normalAddr = isAddress(addrInput) ? addrInput : undefined
+  const customCalls = useMemo(() => {
+    if (!normalAddr) return []
+    const zero = '0x0000000000000000000000000000000000000000' as `0x${string}`
+    return [
+      { address: normalAddr, abi: ERC20_ABI, functionName: 'symbol'   as const, chainId: CHAIN_ID },
+      { address: normalAddr, abi: ERC20_ABI, functionName: 'name'     as const, chainId: CHAIN_ID },
+      { address: normalAddr, abi: ERC20_ABI, functionName: 'decimals' as const, chainId: CHAIN_ID },
+      { address: normalAddr, abi: ERC20_ABI, functionName: 'balanceOf' as const,
+        args: [walletAddr ?? zero] as [`0x${string}`], chainId: CHAIN_ID },
+    ]
+  }, [normalAddr, walletAddr])
+
+  const { data: customData, isLoading: customLoading } = useReadContracts({
+    contracts: customCalls,
+    query: { enabled: customCalls.length > 0 && showOther, staleTime: 30_000 },
+  })
+
+  // Derive custom token state
+  const customState: CustomState = useMemo(() => {
+    if (!showOther || !normalAddr) return 'idle'
+    if (customLoading || !customData) return 'loading'
+    const [sym, , dec] = customData
+    if (sym?.status !== 'success' || dec?.status !== 'success') return 'error'
+    const d = Number(dec.result)
+    if (!Number.isFinite(d) || d > 36) return 'error'
+    return 'ok'
+  }, [showOther, normalAddr, customLoading, customData])
+
+  // Build resolved custom token
+  const resolvedCustom: AnyToken | null = useMemo(() => {
+    if (customState !== 'ok' || !normalAddr || !customData) return null
+    const [symR, nameR, decR, _balR] = customData
+    const sym = symR?.status === 'success' ? String(symR.result) : '?'
+    const name = nameR?.status === 'success' ? String(nameR.result) : sym
+    const dec  = decR?.status  === 'success' ? Number(decR.result)  : 18
+    // If address matches a listed token, return that instead
+    const listed = GOODS_TOKENS.find(t => t.address.toLowerCase() === normalAddr.toLowerCase())
+    if (listed) return listed
+    // Custom unverified token
+    const custom: CustomToken = {
+      address: normalAddr, symbol: sym, name, decimals: dec, unverified: true,
+    }
+    return custom
+  }, [customState, normalAddr, customData])
+
+  // When the resolved token changes, propagate to parent
+  useEffect(() => {
+    if (resolvedCustom !== null) {
+      onSelect(resolvedCustom)
+      // If it turned out to be a listed token, exit "other" mode
+      if (!isCustomToken(resolvedCustom)) setShowOther(false)
+    }
+  // onSelect is stable via useCallback in parent
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedCustom])
 
   const selBal = balances.get(selected.address.toLowerCase())
   const selBalDisplay = selBal !== undefined ? formatTokenAmount(selBal, selected.decimals) : undefined
@@ -253,7 +328,9 @@ function TokenPickerDropdown({ selected, onSelect, balances }: TokenPickerProps)
         style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}
       >
         <div className="flex items-center gap-3 min-w-0">
-          <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>{selected.symbol}</span>
+          <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>
+            {isCustomToken(selected) ? `${selected.symbol} (custom)` : selected.symbol}
+          </span>
           <span className="text-xs truncate" style={{ color: 'var(--muted)' }}>{selected.name}</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -271,14 +348,14 @@ function TokenPickerDropdown({ selected, onSelect, balances }: TokenPickerProps)
       {open && (
         <ul role="listbox" aria-label="Select token" className="space-y-1">
           {GOODS_TOKENS.map(tok => {
-            const isSelected = tok.address.toLowerCase() === selected.address.toLowerCase()
+            const isSelected = !isCustomToken(selected) && tok.address.toLowerCase() === selected.address.toLowerCase()
             const bal = balances.get(tok.address.toLowerCase())
             const balDisplay = bal !== undefined ? formatTokenAmount(bal, tok.decimals) : undefined
             return (
               <li key={tok.address} role="option" aria-selected={isSelected}>
                 <button
                   type="button"
-                  onClick={() => { onSelect(tok); setOpen(false) }}
+                  onClick={() => { onSelect(tok); setShowOther(false); setOpen(false) }}
                   className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 text-left transition-all hover:scale-[1.005]"
                   style={{
                     background: isSelected ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : 'var(--surface-muted)',
@@ -301,7 +378,63 @@ function TokenPickerDropdown({ selected, onSelect, balances }: TokenPickerProps)
               </li>
             )
           })}
+
+          {/* Other token option */}
+          <li role="option" aria-selected={showOther}>
+            <button
+              type="button"
+              onClick={() => { setShowOther(true); setOpen(false) }}
+              className="w-full flex items-center gap-3 rounded-xl px-4 py-2.5 text-left transition-all hover:scale-[1.005]"
+              style={{
+                background: showOther ? 'color-mix(in srgb, var(--warn, #b45309) 8%, transparent)' : 'var(--surface-muted)',
+                border: `1px solid ${showOther ? 'var(--warn, #b45309)' : 'var(--border)'}`,
+              }}
+            >
+              <span className="size-3.5 shrink-0" />
+              <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Other token…</span>
+            </button>
+          </li>
         </ul>
+      )}
+
+      {/* Address input for custom token */}
+      {showOther && (
+        <div className="space-y-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs" style={{ color: 'var(--subtle)' }}>Token contract address</span>
+            <input
+              type="text"
+              value={addrInput}
+              onChange={e => setAddrInput(e.target.value.trim())}
+              placeholder="0x…"
+              spellCheck={false}
+              className="rounded-xl px-3 py-2 text-sm mono outline-none transition-colors"
+              style={{
+                background: 'var(--surface-muted)',
+                border: `1px solid ${addrInput && !normalAddr ? 'var(--danger)' : 'var(--border)'}`,
+                color: 'var(--ink)',
+              }}
+            />
+          </label>
+          {addrInput && !normalAddr && (
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>Enter a valid 0x address.</p>
+          )}
+          {customState === 'loading' && (
+            <p className="text-xs flex items-center gap-1.5" style={{ color: 'var(--muted)' }}>
+              <Loader2 className="size-3 animate-spin" /> Reading token…
+            </p>
+          )}
+          {customState === 'error' && (
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>
+              This address isn&apos;t a standard token on Arc.
+            </p>
+          )}
+          {customState === 'ok' && resolvedCustom && isCustomToken(resolvedCustom) && (
+            <p className="text-xs" style={{ color: 'var(--success)' }}>
+              Resolved: {resolvedCustom.symbol} · {resolvedCustom.decimals} decimals
+            </p>
+          )}
+        </div>
       )}
 
       <p className="text-xs" style={{ color: 'var(--subtle)' }}>More tokens are coming soon.</p>
@@ -340,7 +473,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   }, [])
 
   // ── Form state ───────────────────────────────────────────────────────────
-  const [selectedToken,    setSelectedToken]    = useState<GoodsToken>(GOODS_TOKENS[0])
+  const [selectedToken,    setSelectedToken]    = useState<AnyToken>(GOODS_TOKENS[0])
   const [tokensPerUnitStr, setTokensPerUnitStr] = useState('1')
   const [tiers,            setTiers]            = useState<TierInput[]>(defaultTiers)
   const [minUnits,         setMinUnits]         = useState('1')
@@ -393,7 +526,34 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     return m
   }, [allBalancesRaw])
 
-  const tokenBalance = allBalances.get(goodsAddr.toLowerCase())
+  // For a custom (unlisted) token, read its balance separately.
+  const customTokenAddr = isCustomToken(selectedToken) ? selectedToken.address : undefined
+  const { data: customBalRaw } = useReadContracts({
+    contracts: customTokenAddr && address ? [{
+      address: customTokenAddr,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf' as const,
+      args: [address] as [`0x${string}`],
+      chainId: CHAIN_ID,
+    }] : [],
+    query: { enabled: !!(customTokenAddr && address), refetchInterval: POLL_MY_ORDER, refetchIntervalInBackground: false },
+  })
+  const customBalance: bigint | undefined = customBalRaw?.[0]?.status === 'success'
+    ? BigInt(String(customBalRaw[0].result))
+    : undefined
+
+  // Merge custom balance into the map passed to the picker.
+  const allBalancesWithCustom: Map<string, bigint> = useMemo(() => {
+    const m = new Map(allBalances)
+    if (customTokenAddr && customBalance !== undefined) {
+      m.set(customTokenAddr.toLowerCase(), customBalance)
+    }
+    return m
+  }, [allBalances, customTokenAddr, customBalance])
+
+  const tokenBalance = customTokenAddr
+    ? customBalance
+    : allBalances.get(goodsAddr.toLowerCase())
 
   // ── Parse tokensPerUnit ──────────────────────────────────────────────────
   // Uses parseUnits so any precision the token allows works correctly.
@@ -751,8 +911,21 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       <TokenPickerDropdown
         selected={selectedToken}
         onSelect={t => { setSelectedToken(t); setStockEdited(false) }}
-        balances={allBalances}
+        balances={allBalancesWithCustom}
+        walletAddr={address}
       />
+
+      {/* Unverified custom token warning */}
+      {isCustomToken(selectedToken) && (
+        <div className="rounded-2xl px-3 py-2.5 flex items-start gap-2.5"
+          style={{ background: 'rgba(180,83,9,0.07)', border: '1px solid rgba(180,83,9,0.2)' }}>
+          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--warn, #b45309)' }} />
+          <p className="text-xs" style={{ color: 'var(--warn, #b45309)' }}>
+            Unverified token. Check the address is the one you mean.
+            Tokens that take a fee on transfer or change balances on their own will not work with Swarm.
+          </p>
+        </div>
+      )}
 
       {/* Zero-balance notice — only when balance is exactly zero */}
       {balanceIsZero && (
@@ -918,40 +1091,16 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
           })}
         </div>
 
-        {/* Curve chart */}
-        {chartPoints.length >= 2 && (
-          <div className="mt-3 rounded-xl overflow-hidden"
-            style={{ background: 'var(--surface-muted)' }}>
-            <div className="px-3 pt-2 pb-1 flex items-center gap-1.5">
-              <TrendingDown className="size-3.5" style={{ color: 'var(--muted)' }} />
-              <span className="text-xs" style={{ color: 'var(--muted)' }}>Price curve (units → $/unit)</span>
-            </div>
-            <svg viewBox="0 0 280 96" className="w-full" style={{ height: 96 }}>
-              {[0.25, 0.5, 0.75].map(t => (
-                <line key={t} x1={10} x2={270} y1={8 + t * 72} y2={8 + t * 72}
-                  stroke="var(--border)" strokeWidth={0.5} />
-              ))}
-              <path
-                d={chartPoints.map((pt, i) => {
-                  const x = 10 + toSvgX(pt.x)
-                  const y = 8 + toSvgY(pt.y)
-                  if (i === 0) return `M ${x} ${y}`
-                  const prev = chartPoints[i - 1]
-                  return `L ${x} ${8 + toSvgY(prev.y)} L ${x} ${y}`
-                }).join(' ')}
-                fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinecap="round"
-              />
-              {parsedTiers.map((t, i) => (
-                <text key={i} x={10 + toSvgX(t.minUnits)}
-                  y={8 + toSvgY(Number(t.pricePerUnit) / 1_000_000) - 4}
-                  fontSize={7} fill="var(--muted)" textAnchor="middle"
-                  fontFamily="JetBrains Mono, monospace">
-                  ${(Number(t.pricePerUnit) / 1_000_000).toFixed(2)}
-                </text>
-              ))}
-            </svg>
-          </div>
-        )}
+        {/* Interactive curve editor */}
+        <TierCurveEditor
+          tiers={tiers}
+          onChange={setTiers}
+          maxUnits={effectiveMaxUnitsNum || 1}
+          tokensPerUnit={tokensPerUnit}
+          tokenDecimals={decimals}
+          tokenSymbol={symbol}
+          marketPricePerUnit={marketPricePerUnit}
+        />
 
         {/* Revenue preview */}
         {parsedTiers.length > 0 && (

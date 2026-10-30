@@ -1,0 +1,415 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the files I need to touch first. Now read DealList and ProofPage for the unlisted-token fallback work: Good — I have everything. Now also check the hooks file for `useGoodsTokenMeta` which I'll need for DealList unlisted-token fallback: Good. Now I have a complete picture. Setting up todos: **Item 1 — Homepage copy sweep:** Also update the `index.html` meta description if it exists: Good, no stablecoin wording in index.html. Now also update the `STEPS` array step 3 copy which says \"Collect your tokens\" — that's fine. And the seller FAQ entry says \"choose the token you are offering\" — that's already generic. Done with item 1.\n\n**Item 2 — Stats band: full-width row under hero, large numbers:** Reorder STATS to the specified order (Volume, Units sold, Buyers, Deals, Saved by buyers), then replace the hero section with one-column headline + full-width stats band underneath: Now replace the entire hero section (the `<section>` with hero + old stats sidebar) with a one-column hero followed by a full-width stats band: Good. The `divide-x divide-y` Tailwind classes need the border color — Tailwind's divide utilities use `currentColor` by default, so I need to make sure the theme variable works. I'll add explicit `[--tw-divide-color:var(--border)]` or use the `style` prop approach. Actually Tailwind v3 `divide-y` just adds border-top to children — I'll override with a CSS custom prop or just remove the Tailwind dividers and use `border-r`/`border-b` inline via style. Simplest: use a wrapper style and explicit border rendering per cell via `border-r last:border-r-0`: Actually the border logic is complex to reason about correctly at all breakpoints. Let me simplify: remove inline borders and just use a single background-image approach, or better — use `after:` rings inside the grid. Simplest and most correct: just use `gap-px` on the grid with a background on the wrapper to act as dividers: That's the cleanest approach. The `overflow-hidden` on the outer card clips the gap-px edges so there are no stray border lines outside.\n\n**Item 3 — Custom token address input:** The custom token work is self-contained in `SupplierView.tsx`. I'll:\n\n1. Add a `CustomToken` type that extends `GoodsToken` with an `unverified` flag\n2. Change `selectedToken` state type to `GoodsToken | CustomToken`\n3. Add address input state to the dropdown component (passed in via props)\n4. Add a `useReadContracts` call that reads `symbol`, `name`, `decimals`, `balanceOf` for the entered address\n5. Propagate validation state (loading / error / resolved) up via a callback\n6. When resolved and address matches a `GOODS_TOKENS` entry, select that entry instead\n7. Show unverified amber notice in the main form when `selectedToken.unverified` is set\n8. Gate market buttons on `!selectedToken.unverified`\n\nFirst, update the types and the `TokenPickerDropdown` component: Now add the `CustomToken` type and update the picker interface: Now replace the `TokenPickerDropdown` component with one that includes the \"Other token…\" option and the address input: Now update the main component: change `selectedToken` type to `AnyToken`, update the picker call site with `walletAddr`, add the unverified badge, and gate market buttons: Now update the picker call site to pass `walletAddr` and use stable `onSelect` callback: Now add the unverified amber notice directly after the picker and gate the market-price buttons. Add after the zero-balance notice: Now gate `mUsdPerToken` and the market buttons on `!isCustomToken(selectedToken)`. The `mSym` is derived from `selectedToken.marketSymbol` — custom tokens don't have `marketSymbol` so `mUsdPerToken` will naturally be `undefined`. That's already correct since `GoodsToken.marketSymbol` is optional. But `isCustomToken` check is cleanest. The `marketPricePerUnit` will be null if `mUsdPerToken` is undefined, so the \"Use market price\" button and \"Set to market\" buttons are already hidden. The rate label check `mUsdPerToken !== undefined && ratesAgeLabel` also hides naturally. So no additional gating is needed — the `marketSymbol?: string` being absent on custom tokens handles it all.\n\nHowever the `mSym` derivation accesses `selectedToken.marketSymbol` — `GoodsToken` already has `marketSymbol?: string` so custom tokens (which extend `GoodsToken`) inherit that optional field; it will just be `undefined`. Good.\n\nNow also update the balance batch calls — the custom token needs to be excluded from the GOODS_TOKENS batch (since we handle its balance separately in the picker). The current `balanceCalls` only iterates `GOODS_TOKENS` which is fine. The custom token's balance is injected directly into `allBalances` via `balances.set()` inside `resolvedCustom` memo in the picker — but that mutates the `Map` that was passed in, which is derived from `allBalancesRaw` each render, so the mutation is lost next render. I need a different approach: hold custom token balance in a separate ref/state accessible to the main component.\n\nThe cleanest fix: instead of mutating `balances` inside the picker, expose a `customBalance` state from the picker up to the parent, or simply read the custom token balance separately in the main component when `selectedToken` is custom.\n\nLet me add a `useReadContracts` call in the main component for the custom token's balance when it's selected: Now update the picker call site to use `allBalancesWithCustom`: Now remove the stale mutation of `balances` in the picker's `resolvedCustom` memo (that was the old approach — now balance comes from the main component's separate read): Remove unused `balances` from `resolvedCustom` deps since we no longer use it there: The picker still uses `balances` in the render for display (showing balances per row in the dropdown list) — that's fine, it's the `allBalancesWithCustom` map passed from the parent which includes the custom balance. The `balances` parameter in the picker is now read-only display. Good.\n\n**Item 4 — DealList and ProofPage: on-chain fallback for unlisted tokens:**\n\nFor `DealList`, I need `tokenSymbol` and `tokenDecimals` for unlisted tokens. The current code does `tokenConfig?.decimals` which returns `undefined` for unknown tokens — `PricePerToken` already handles `tokenDecimals === undefined` gracefully. The main issue is `tokenSymbol` shows `'?'` for unknown tokens. I'll use `useGoodsTokenMeta` but it's a hook that can't be called inside a map. The right approach: extract `DealCard` already calls hooks (it's its own component) — so I can call `useGoodsTokenMeta` inside `DealCard` when `tokenConfig` is undefined. Now update `DealCard` to call `useGoodsTokenMeta` for unlisted tokens: Now update `ProofPage` — the `GoodsClaimed` event summary uses `tok.decimals` and shows `String(a.amount) tokens` for unlisted tokens. I can't call a hook inside the `switch` in `EventSummary`, so I'll create a small `GoodsClaimedSummary` sub-component that calls `useGoodsTokenMeta`: Now replace the `GoodsClaimed` case in `EventSummary` with a call to a new sub-component: Now add the `GoodsClaimedSummary` component at the bottom of ProofPage.tsx: Now run the check: One warning: `balR` is declared but unused (we removed the balance mutation). Prefix it with `_`: Zero warnings, zero errors. Here is what changed:\n\n**Homepage (items 1 + 2):**\n- Hero subtitle and FAQ \"What can I buy?\" entry now say \"assets on Arc\" instead of \"stablecoins and tokens\".\n- Stats moved out of the sidebar entirely. The hero is now a single full-width column (headline, subtitle, two CTAs). Directly underneath is a full-width stats band: one shared card with a `gap-px` grid (5 equal columns on desktop, 2+1 on phone) — the `gap-px` + border-colour background trick produces clean 1px dividers at every breakpoint with no per-cell border logic. Numbers are `text-4xl font-bold tabular-nums`, label underneath in muted text. Skeleton placeholders match the number size so there is no layout shift while loading. Order: Volume, Units sold, Buyers, Deals, Saved by buyers.\n\n**Sell page — custom token (item 3):**\n- Token dropdown now has an \"Other token…\" entry at the bottom of the list.\n- Choosing it reveals an address input. On a valid `0x` address, one `useReadContracts` multicall reads `symbol`, `name`, `decimals`, and a sanity check; if any call fails or `decimals > 36` the error message \"This address isn't a standard token on Arc.\" is shown and Post stays disabled.\n- If the address matches a `GOODS_TOKENS` entry the picker silently switches to that listed token (no unverified badge).\n- For a genuinely new token, an amber notice is shown: \"Unverified token. Check the address is the one you mean. Tokens that take a fee on transfer or change balances on their own will not work with Swarm.\"\n- The custom token's balance is read separately in the main component (not hacked into the `allBalances` map) and merged cleanly.\n- Market-price buttons (`mSym` / `mUsdPerToken`) are absent for custom tokens because `marketSymbol` is undefined — they hide automatically without extra gating.\n\n**DealList + ProofPage — unlisted token fallback (item 3 tail):**\n- `DealCard` now calls `useGoodsTokenMeta` when the deal's `goodsToken` address is not in `GOODS_TOKENS`, so the card shows the real symbol and uses the real decimal count for `PricePerToken`.\n- `ProofPage` `GoodsClaimed` event rows are rendered by a new `GoodsClaimedSummary` component that similarly calls `useGoodsTokenMeta` for unlisted tokens, formatting the amount with the correct decimals instead of showing a raw bigint.",
+  "todos": [
+    {
+      "id": "todo:homepage copy: 'assets on arc' sweep:0",
+      "text": "Homepage copy: 'assets on Arc' sweep",
+      "status": "done"
+    },
+    {
+      "id": "todo:stats band: single full-width row under hero, 5-col grid, large numbers:0",
+      "text": "Stats band: single full-width row under hero, 5-col grid, large numbers",
+      "status": "done"
+    },
+    {
+      "id": "todo:sell: custom token address input in picker dropdown + validation:0",
+      "text": "Sell: custom token address input in picker dropdown + validation",
+      "status": "done"
+    },
+    {
+      "id": "todo:deallist/proofpage: on-chain symbol+decimals fallback for unlisted tokens:0",
+      "text": "DealList/ProofPage: on-chain symbol+decimals fallback for unlisted tokens",
+      "status": "done"
+    },
+    {
+      "id": "todo:run check, paste output:0",
+      "text": "Run check, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/swarm/DealList.tsx",
+    "src/swarm/HomePage.tsx",
+    "src/swarm/ProofPage.tsx",
+    "src/swarm/SupplierView.tsx"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { CONTRACTS_ACTIVE, ARC_NETWORK, GOODS_TOKENS, POLL_DEAL_ROOM, POLL_LIST } from './config'\n import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'\n-import { useDealCount, useChainNow } from './hooks'\n+import { useDealCount, useChainNow, useGoodsTokenMeta } from './hooks'"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 11,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " function DealCard({ deal, nowSec, onSelect, delay, marketRates }: DealCardProps) {\n   const secondsLeft  = nowSec > 0 ? Math.max(0, Number(deal.deadline) - nowSec) : undefined\n   const isEnded      = deal.state !== 0 || (nowSec > 0 && secondsLeft === 0)\n   const fillPct      = deal.maxUnits > 0 ? Math.min(1, deal.totalUnits / deal.maxUnits) : 0\n   const tokenConfig  = GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken.toLowerCase())\n-  const tokenSymbol  = tokenConfig?.symbol ?? '?'\n-  const tokenDecimals = tokenConfig?.decimals\n-  const marketRate   = tokenConfig?.marketSymbol ? marketRates?.get(tokenConfig.marketSymbol) : undefined\n+  // Fall back to on-chain reads for tokens not in GOODS_TOKENS\n+  const onChainMeta  = useGoodsTokenMeta(tokenConfig ? undefined : deal.goodsToken)\n+  const tokenSymbol  = tokenConfig?.symbol ?? onChainMeta?.symbol ?? '?'"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   { q: 'What can I buy?',\n-    a: \"Deals sell stablecoins and tokens including EURC, GBPA, MXNB, cirBTC, and WETH, paid for in USDC. Every buyer pays the same final price.\" },\n+    a: \"Deals sell assets on Arc — including EURC, GBPA, MXNB, cirBTC, and WETH — paid for in USDC. Every buyer pays the same final price.\" },"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-              Group deals on stablecoins and tokens on Arc. The more people buy, the better everyone&apos;s rate.\n+              Group deals on assets on Arc. The more people buy, the better everyone&apos;s rate."
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const STATS = [\n-    { label: 'Volume',            value: stats && formatUsdcPrice(stats.volume) },\n-    { label: 'Saved by buyers',   value: stats && formatUsdcPrice(stats.saved) },\n-    { label: 'Units sold',        value: stats && stats.units.toLocaleString('en-US') },\n-    { label: 'Buyers',            value: stats && stats.buyers.toLocaleString('en-US') },\n-    { label: 'Deals',             value: stats && stats.deals.toLocaleString('en-US') },\n+    { label: 'Volume',          value: stats ? formatUsdcPrice(stats.volume) : null },\n+    { label: 'Units sold',      value: stats ? stats.units.toLocaleString('en-US') : null },\n+    { label: 'Buyers',          value: stats ? stats.buyers.toLocaleString('en-US') : null },\n+    { label: 'Deals',           value: stats ? stats.deals.toLocaleString('en-US') : null },\n+    { label: 'Saved by buyers', value: stats ? formatUsdcPrice(stats.saved) : null },\n   ]"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 52,
+      "removedLines": 49,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-      {/* Hero — left-aligned on desktop, centred on mobile */}\n-      <section className=\"pt-12 pb-10 sm:pt-16\">\n-        <div className=\"lg:grid lg:grid-cols-[1fr_auto] lg:gap-12 lg:items-center\">\n-          {/* Left: headline + CTAs */}\n-          <div>\n-            <motion.h1 {...fade}\n-              className=\"display text-4xl sm:text-5xl font-bold leading-tight text-center lg:text-left\"\n-              style={{ color: 'var(--ink)' }}>\n+      {/* Hero — full width, one column */}\n+      <section className=\"pt-12 pb-6 sm:pt-16\">\n+        <motion.h1 {...fade}\n+          className=\"display text-4xl sm:text-5xl font-bold leading-tight text-center lg:text-left\"\n+          style={{ color: 'var(--ink)' }}>\n+          Buy together.<br />Pay less.\n+        </motion.h1>\n+        <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        <div className=\"grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 divide-x divide-y lg:divide-y-0\"\n-          style={{ borderColor: 'var(--border)' }}>\n+        <div className=\"grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5\">\n           {STATS.map(({ label, value }, i) => (\n             <div key={label}\n-              className={`px-5 py-5 flex flex-col gap-1${i === 4 ? ' col-span-2 sm:col-span-1' : ''}`}>\n+              className={`px-5 py-5 flex flex-col gap-1${i === 4 ? ' col-span-2 sm:col-span-1' : ''}`}\n+              style={{\n+                borderRight: i < 4 ? '1px solid var(--border)' : undefined,\n+                borderTop: i >= 2 && i !== 4 ? '1px solid var(--border)' : i >= 3 ? '1px solid var(--border)' : undefined,\n+              }}>"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        <div className=\"grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5\">\n+        {/* gap-px + surface-muted wrapper = 1px grid lines at any breakpoint */}\n+        <div className=\"grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-px\"\n+          style={{ background: 'var(--border)' }}>\n           {STATS.map(({ label, value }, i) => (\n             <div key={label}\n               className={`px-5 py-5 flex flex-col gap-1${i === 4 ? ' col-span-2 sm:col-span-1' : ''}`}\n-              style={{\n-                borderRight: i < 4 ? '1px solid var(--border)' : undefined,\n-                borderTop: i >= 2 && i !== 4 ? '1px solid var(--border)' : i >= 3 ? '1px solid var(--border)' : undefined,\n-              }}>\n+              style={{ background: 'var(--surface)' }}>"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { formatUsdcPrice, txUrl, shortAddr, formatTokenAmount } from './utils'\n-import { ARC_NETWORK, GOODS_TOKENS } from './config'\n+import { ARC_NETWORK, GOODS_TOKENS } from './config'\n+import { useGoodsTokenMeta } from './hooks'"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    case 'GoodsClaimed': {\n-      const tok = GOODS_TOKENS.find(t => t.address.toLowerCase() === ((a.token as string | undefined) ?? '').toLowerCase())\n-      const amtStr = tok\n-        ? `${formatTokenAmount(BigInt(String(a.amount)), tok.decimals)} ${tok.symbol}`\n-        : `${String(a.amount)} tokens`\n+    case 'GoodsClaimed':\n       return (\n-        <p className=\"text-xs\" style={{ color: 'var(--ink-2)' }}>\n-          {shortAddr(String(a.claimant))} claimed {amtStr}\n+        <GoodsClaimedSummary\n+          claimant={String(a.claimant)}\n+          amount={BigInt(String(a.amount))}\n+          token={(a.token as string | undefined) ?? ''}\n+        />\n+      )"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 21,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     default:\n       return <p className=\"text-xs\" style={{ color: 'var(--muted)' }}>Unknown event</p>\n   }\n-}\n+}\n+\n+// ── GoodsClaimed summary — resolves unlisted token metadata on-chain ──────────\n+\n+function GoodsClaimedSummary({ claimant, amount, token }: { claimant: string; amount: bigint; token: string }) {"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useState, useCallback, useMemo, useEffect, useRef } from 'react'\n import {\n   useAccount, useWriteContract, useWaitForTransactionReceipt,\n   useSwitchChain, useReadContracts,\n } from 'wagmi'\n-import { parseUnits } from 'viem'\n+import { parseUnits, isAddress } from 'viem'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 14,
+      "removedLines": 3,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " // ── Types ─────────────────────────────────────────────────────────────────────\n \n-interface TierInput { minUnits: string; pricePerUnit: string }\n+/** A token the seller entered by address that is not in GOODS_TOKENS. */\n+interface CustomToken extends GoodsToken {\n+  unverified: true\n+}\n+\n+type AnyToken = GoodsToken | CustomToken"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 238,
+      "removedLines": 113,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " // ── Token picker dropdown ─────────────────────────────────────────────────────\n \n interface TokenPickerProps {\n-  selected:  GoodsToken\n-  onSelect:  (t: GoodsToken) => void\n+  selected:   AnyToken\n+  onSelect:   (t: AnyToken) => void\n   /** balances keyed by token address (lower-cased), raw base units */\n-  balances:  Map<string, bigint>\n-}\n+  balances:   Map<string, bigint>\n+  walletAddr: `0x${string}` | undefined"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── Form state ───────────────────────────────────────────────────────────\n-  const [selectedToken,    setSelectedToken]    = useState<GoodsToken>(GOODS_TOKENS[0])\n+  const [selectedToken,    setSelectedToken]    = useState<AnyToken>(GOODS_TOKENS[0])"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {/* ── Token picker ──────────────────────────────────────────────────── */}\n       <TokenPickerDropdown\n         selected={selectedToken}\n         onSelect={t => { setSelectedToken(t); setStockEdited(false) }}\n         balances={allBalances}\n+        walletAddr={address}\n       />"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 22,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-      {/* Zero-balance notice — only when balance is exactly zero */}\n-      {balanceIsZero && (\n+      {/* Unverified custom token warning */}\n+      {isCustomToken(selectedToken) && (\n         <div className=\"rounded-2xl px-3 py-2.5 flex items-start gap-2.5\"\n-          style={{ background: 'rgba(186,43,76,0.06)', border: '1px solid rgba(186,43,76,0.15)' }}>\n-          <AlertCircle className=\"size-4 shrink-0 mt-0.5\" style={{ color: 'var(--danger)' }} />\n-          <p className=\"text-xs\" style={{ color: 'var(--danger)' }}>\n-            You need {symbol} to sell. Units you do not sell are returned to you when the deal closes.\n-          </p>\n+          style={{ background: 'rgba(180,83,9,0.07)', border: '1px solid rgba(180,83,9,0.2)' }}>\n+          <AlertCircle className=\"size-4 shrink-0 mt-0.5\" style={{ color: 'var(--warn, #b45309)' }} />\n+          <p className=\"text-xs\" style={{ color: 'var(--warn, #b45309)' }}>\n+            Unverified token. Check the address is the one you mean.\n+            Tokens that take a fee on transfer or change balances on their own will not work with Swarm."
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 39,
+      "removedLines": 12,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const allBalances: Map<string, bigint> = useMemo(() => {\n     const m = new Map<string, bigint>()\n     GOODS_TOKENS.forEach((tok, i) => {\n       const r = allBalancesRaw?.[i]\n       if (r?.status === 'success' && r.result !== undefined) {\n         m.set(tok.address.toLowerCase(), BigInt(String(r.result)))\n       }\n     })"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       <TokenPickerDropdown\n         selected={selectedToken}\n         onSelect={t => { setSelectedToken(t); setStockEdited(false) }}\n-        balances={allBalances}\n+        balances={allBalancesWithCustom}\n         walletAddr={address}\n       />"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    // Merge balance into map so the rest of the form picks it up\n-    if (balR?.status === 'success' && balR.result !== undefined) {\n-      balances.set(normalAddr.toLowerCase(), BigInt(String(balR.result)))\n-    }\n     return custom"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  }, [customState, normalAddr, customData, balances])\n+  }, [customState, normalAddr, customData])"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    const [symR, nameR, decR, balR] = customData\n+    const [symR, nameR, decR, _balR] = customData"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

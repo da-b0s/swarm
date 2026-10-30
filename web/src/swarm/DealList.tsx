@@ -14,7 +14,7 @@ import { motion } from 'framer-motion'
 import { Clock, ChevronRight, PlusCircle, Package } from 'lucide-react'
 import { CONTRACTS_ACTIVE, ARC_NETWORK, GOODS_TOKENS, POLL_DEAL_ROOM, POLL_LIST } from './config'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'
-import { useDealCount, useChainNow } from './hooks'
+import { useDealCount, useChainNow, useGoodsTokenMeta } from './hooks'
 import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'
 import { PricePerToken } from './PricePerToken'
 import { useMarketRates } from './useMarketRates'
@@ -259,8 +259,10 @@ function DealCard({ deal, nowSec, onSelect, delay, marketRates }: DealCardProps)
   const isEnded      = deal.state !== 0 || (nowSec > 0 && secondsLeft === 0)
   const fillPct      = deal.maxUnits > 0 ? Math.min(1, deal.totalUnits / deal.maxUnits) : 0
   const tokenConfig  = GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken.toLowerCase())
-  const tokenSymbol  = tokenConfig?.symbol ?? '?'
-  const tokenDecimals = tokenConfig?.decimals
+  // Fall back to on-chain reads for tokens not in GOODS_TOKENS
+  const onChainMeta  = useGoodsTokenMeta(tokenConfig ? undefined : deal.goodsToken)
+  const tokenSymbol  = tokenConfig?.symbol ?? onChainMeta?.symbol ?? '?'
+  const tokenDecimals = tokenConfig?.decimals ?? onChainMeta?.decimals
   const marketRate   = tokenConfig?.marketSymbol ? marketRates?.get(tokenConfig.marketSymbol) : undefined
   const urgent       = secondsLeft !== undefined && secondsLeft < 3600 && !isEnded
 
