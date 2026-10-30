@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSwarmStats } from './useSwarmStats'
 import { formatUsdcPrice } from './utils'
-import { Users, TrendingDown, PackageCheck, ShieldCheck, Undo2, Zap, ChevronDown, ArrowRight } from 'lucide-react'
+import { ChevronDown, ArrowRight } from 'lucide-react'
 
 interface Props {
   onBrowse: () => void
@@ -10,15 +10,15 @@ interface Props {
 }
 
 const STEPS = [
-  { Icon: Users,        title: 'Join a deal',          body: 'Pick how many you want and place your order in USDC. One signature, no network fee.' },
-  { Icon: TrendingDown, title: 'The price drops',      body: 'Every order brings the price down for everyone in the deal, including the people who joined first.' },
-  { Icon: PackageCheck, title: 'Collect when it closes', body: 'When the timer ends, everyone pays the same final price. Collect your tokens and any difference you overpaid.' },
+  { num: '1', title: 'Join a deal',            body: 'Pick how many you want and place your order in USDC. One signature, no network fee.' },
+  { num: '2', title: 'The price drops',        body: 'Every order brings the price down for everyone in the deal, including the people who joined first.' },
+  { num: '3', title: 'Collect when it closes', body: 'When the timer ends, everyone pays the same final price. Collect your tokens and any difference you overpaid.' },
 ]
 
 const PROMISES = [
-  { Icon: ShieldCheck, title: 'Your money is never held by us', body: 'Payments sit in a public smart contract until the deal closes. Anyone can check every deal on the Proof page.' },
-  { Icon: Undo2,       title: 'Full refund if a deal falls short', body: 'If a deal doesn’t reach its minimum, everyone gets all of their money back.' },
-  { Icon: Zap,         title: 'Nothing to babysit', body: 'Deals close by themselves when the timer ends. You just come back and collect.' },
+  { title: 'Your money is never held by us',    body: 'Payments sit in a public smart contract until the deal closes. Anyone can check every deal on the Proof page.' },
+  { title: 'Full refund if a deal falls short', body: 'If a deal doesn’t reach its minimum, everyone gets all of their money back.' },
+  { title: 'Nothing to babysit',                body: 'Deals close by themselves when the timer ends. You just come back and collect.' },
 ]
 
 const FAQ = [
@@ -53,58 +53,65 @@ export function HomePage({ onBrowse, onSell }: Props) {
 
   return (
     <div className="px-4 pb-16">
-      {/* Hero */}
-      <section className="pt-12 pb-10 sm:pt-16 text-center">
-        <motion.h1 {...fade} className="display text-4xl sm:text-5xl font-bold leading-tight" style={{ color: 'var(--ink)' }}>
-          Buy together.<br />Pay less.
-        </motion.h1>
-        <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}
-          className="mt-4 text-base sm:text-lg max-w-md mx-auto" style={{ color: 'var(--muted)' }}>
-          Group deals on stablecoins and tokens on Arc. The more people buy, the better everyone&apos;s rate.
-        </motion.p>
-        <motion.div {...fade} transition={{ duration: 0.35, delay: 0.1 }}
-          className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">
-          <button onClick={onBrowse}
-            className="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-90"
-            style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
-            Browse deals <ArrowRight className="size-4" />
-          </button>
-          <button onClick={onSell}
-            className="rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-80"
-            style={{ color: 'var(--ink)', border: '1px solid var(--border)', background: 'var(--surface)' }}>
-            Sell on Swarm
-          </button>
-        </motion.div>
-      </section>
-
-      {/* Live stats */}
-      <motion.section {...fade} aria-label="Swarm in numbers"
-        className="rounded-2xl grid grid-cols-2 sm:grid-cols-5 overflow-hidden"
-        style={{ background: 'var(--border)', gap: 1, border: '1px solid var(--border)' }}>
-        {STATS.map(({ label, value }, i) => (
-          <div key={label} className={"px-3 py-4 text-center" + (i === 0 ? ' col-span-2 sm:col-span-1' : '')}
-            style={{ background: 'var(--surface-strong)' }}>
-            <p className="display text-xl sm:text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
-              {value ?? <span className="inline-block w-14 h-6 rounded-md animate-pulse align-middle" style={{ background: 'var(--surface-muted)' }} />}
-            </p>
-            <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>{label}</p>
+      {/* Hero — left-aligned on desktop, centred on mobile */}
+      <section className="pt-12 pb-10 sm:pt-16">
+        <div className="lg:grid lg:grid-cols-[1fr_auto] lg:gap-12 lg:items-center">
+          {/* Left: headline + CTAs */}
+          <div>
+            <motion.h1 {...fade}
+              className="display text-4xl sm:text-5xl font-bold leading-tight text-center lg:text-left"
+              style={{ color: 'var(--ink)' }}>
+              Buy together.<br />Pay less.
+            </motion.h1>
+            <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}
+              className="mt-4 text-base sm:text-lg max-w-md mx-auto lg:mx-0 text-center lg:text-left"
+              style={{ color: 'var(--muted)' }}>
+              Group deals on stablecoins and tokens on Arc. The more people buy, the better everyone&apos;s rate.
+            </motion.p>
+            <motion.div {...fade} transition={{ duration: 0.35, delay: 0.1 }}
+              className="mt-7 flex flex-col sm:flex-row gap-3 justify-center lg:justify-start">
+              <button onClick={onBrowse}
+                className="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-90"
+                style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
+                Browse deals <ArrowRight className="size-4" />
+              </button>
+              <button onClick={onSell}
+                className="rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-80"
+                style={{ color: 'var(--ink)', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                Sell on Swarm
+              </button>
+            </motion.div>
           </div>
-        ))}
-      </motion.section>
-      <p className="text-xs text-center mt-2" style={{ color: 'var(--subtle)' }}>Live from the blockchain, updated every few seconds.</p>
+
+          {/* Right: live stats */}
+          <motion.div {...fade} transition={{ duration: 0.35, delay: 0.12 }}
+            aria-label="Swarm in numbers"
+            className="mt-10 lg:mt-0 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 gap-2 lg:w-56">
+            {STATS.map(({ label, value }) => (
+              <div key={label} className="rounded-2xl px-4 py-3"
+                style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                <p className="display text-xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
+                  {value ?? <span className="inline-block w-12 h-5 rounded-md animate-pulse align-middle" style={{ background: 'var(--surface-muted)' }} />}
+                </p>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{label}</p>
+              </div>
+            ))}
+          </motion.div>
+        </div>
+        <p className="text-xs text-center lg:text-left mt-3" style={{ color: 'var(--subtle)' }}>
+          Live from the blockchain, updated every few seconds.
+        </p>
+      </section>
 
       {/* How it works */}
       <section className="py-8">
-        <h2 className="display text-xl font-bold mb-4" style={{ color: 'var(--ink)' }}>How it works</h2>
-        <div className="grid gap-3 sm:grid-cols-3">
-          {STEPS.map(({ Icon, title, body }, i) => (
-            <motion.div key={title} {...fade} transition={{ duration: 0.35, delay: i * 0.06 }}
-              className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-              <div className="flex items-center gap-2 mb-2">
-                <span className="size-7 rounded-lg flex items-center justify-center text-xs font-bold"
-                  style={{ background: 'var(--surface-muted)', color: 'var(--ink)' }}>{i + 1}</span>
-                <Icon className="size-4" style={{ color: 'var(--accent-hover)' }} />
-              </div>
+        <h2 className="display text-xl font-bold mb-5" style={{ color: 'var(--ink)' }}>How it works</h2>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {STEPS.map(({ num, title, body }) => (
+            <motion.div key={title} {...fade}
+              className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+              <span className="display text-3xl font-bold tabular-nums block mb-2"
+                style={{ color: 'var(--accent)', opacity: 0.4 }}>{num}</span>
               <p className="font-semibold text-sm" style={{ color: 'var(--ink)' }}>{title}</p>
               <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>{body}</p>
             </motion.div>
@@ -112,18 +119,15 @@ export function HomePage({ onBrowse, onSell }: Props) {
         </div>
       </section>
 
-      {/* Promises */}
+      {/* Built to be fair */}
       <section className="py-8">
-        <h2 className="display text-xl font-bold mb-4" style={{ color: 'var(--ink)' }}>Built to be fair</h2>
-        <div className="space-y-3">
-          {PROMISES.map(({ Icon, title, body }) => (
-            <motion.div key={title} {...fade} className="flex gap-3 rounded-2xl p-4"
-              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-              <Icon className="size-5 shrink-0 mt-0.5" style={{ color: 'var(--success)' }} />
-              <div>
-                <p className="font-semibold text-sm" style={{ color: 'var(--ink)' }}>{title}</p>
-                <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>{body}</p>
-              </div>
+        <h2 className="display text-xl font-bold mb-5" style={{ color: 'var(--ink)' }}>Built to be fair</h2>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {PROMISES.map(({ title, body }) => (
+            <motion.div key={title} {...fade}
+              className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+              <p className="font-semibold text-sm mb-1" style={{ color: 'var(--ink)' }}>{title}</p>
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>{body}</p>
             </motion.div>
           ))}
         </div>
@@ -131,7 +135,7 @@ export function HomePage({ onBrowse, onSell }: Props) {
 
       {/* FAQ */}
       <section className="py-8">
-        <h2 className="display text-xl font-bold mb-4" style={{ color: 'var(--ink)' }}>Questions</h2>
+        <h2 className="display text-xl font-bold mb-5" style={{ color: 'var(--ink)' }}>Questions</h2>
         <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}>
           {FAQ.map(({ q, a }, i) => (
             <div key={q} style={{ borderTop: i ? '1px solid var(--border)' : undefined }}>
@@ -156,11 +160,11 @@ export function HomePage({ onBrowse, onSell }: Props) {
       </section>
 
       {/* Closing CTA */}
-      <section className="pt-6 text-center">
+      <section className="pt-4 pb-4">
         <button onClick={onBrowse}
           className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-all hover:opacity-90"
           style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
-          See what’s live <ArrowRight className="size-4" />
+          See what&apos;s live <ArrowRight className="size-4" />
         </button>
       </section>
     </div>

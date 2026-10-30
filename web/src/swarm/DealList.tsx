@@ -8,18 +8,16 @@
  * Logged-out users see the list but not the order actions.
  */
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useReadContracts } from 'wagmi'
 import { motion } from 'framer-motion'
-import { Clock, Layers, ChevronRight, PlusCircle, Package } from 'lucide-react'
-import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'
+import { Clock, ChevronRight, PlusCircle, Package } from 'lucide-react'
+import { CONTRACTS_ACTIVE, ARC_NETWORK, GOODS_TOKENS, POLL_DEAL_ROOM, POLL_LIST } from './config'
 import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'
 import { useDealCount, useChainNow } from './hooks'
-import { POLL_DEAL_ROOM, POLL_LIST } from './config'
 import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'
 import { PricePerToken } from './PricePerToken'
 import { useMarketRates } from './useMarketRates'
-import { GOODS_TOKENS } from './config'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 
@@ -46,9 +44,10 @@ interface DealSummary {
 
 export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props) {
   const { data: dealCountRaw } = useDealCount()
-  const dealCount  = dealCountRaw !== undefined ? Number(dealCountRaw) : 0
-  const nowSec     = useChainNow()
+  const dealCount   = dealCountRaw !== undefined ? Number(dealCountRaw) : 0
+  const nowSec      = useChainNow()
   const marketRates = useMarketRates()
+  const [tokenFilter, setTokenFilter] = useState<string>('all')
 
   // Build batched getDeal calls for IDs 1..dealCount
   const dealCalls = useMemo(() =>
@@ -124,7 +123,10 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
     [deals, nowSec]
   )
 
-  const shown = activeTab === 'active' ? active : ended
+  const allShown = activeTab === 'active' ? active : ended
+  const shown = tokenFilter === 'all'
+    ? allShown
+    : allShown.filter(d => d.goodsToken.toLowerCase() === tokenFilter.toLowerCase())
 
   if (dealCount === 0 && dealResults === undefined) {
     return (
@@ -137,41 +139,75 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
   }
 
   return (
-    <div className="px-4 pt-4 pb-8 space-y-4">
-      {/* Tab bar */}
-      <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--surface-muted)' }}>
-        {(['active', 'ended'] as const).map(t => (
-          <button key={t}
-            onClick={() => onTabChange(t)}
-            className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
-            style={{
-              background: activeTab === t ? 'var(--surface)' : 'transparent',
-              color: activeTab === t ? 'var(--ink)' : 'var(--muted)',
-              boxShadow: activeTab === t ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
-            }}>
-            {t.charAt(0).toUpperCase() + t.slice(1)}
-            {t === 'active' && active.length > 0 && (
-              <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold"
-                style={{ background: 'var(--accent)', color: '#fff' }}>
-                {active.length}
-              </span>
-            )}
-          </button>
-        ))}
+    <div className="px-4 pt-5 pb-10 space-y-4">
+
+      {/* Controls row: tabs + Post button */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--surface-muted)' }}>
+          {(['active', 'ended'] as const).map(t => (
+            <button key={t}
+              onClick={() => onTabChange(t)}
+              className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
+              style={{
+                background: activeTab === t ? 'var(--surface)' : 'transparent',
+                color: activeTab === t ? 'var(--ink)' : 'var(--muted)',
+                boxShadow: activeTab === t ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+              }}>
+              {t.charAt(0).toUpperCase() + t.slice(1)}
+              {t === 'active' && active.length > 0 && (
+                <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold"
+                  style={{ background: 'var(--accent)', color: '#fff' }}>
+                  {active.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        <button onClick={onPost}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-all hover:scale-[1.01]"
+          style={{ background: 'var(--accent)', color: '#fff' }}>
+          <PlusCircle className="size-4" /> Post a deal
+        </button>
       </div>
+
+      {/* Token filter pills */}
+      {GOODS_TOKENS.length > 1 && (
+        <div className="flex gap-1.5 flex-wrap">
+          {['all', ...GOODS_TOKENS.map(t => t.address)].map((addr) => {
+            const tok = GOODS_TOKENS.find(t => t.address === addr)
+            const label = tok ? tok.symbol : 'All'
+            const isActive = tokenFilter === addr
+            return (
+              <button key={addr}
+                onClick={() => setTokenFilter(addr)}
+                className="px-3 py-1 rounded-full text-xs font-medium transition-all"
+                style={{
+                  background: isActive ? 'var(--accent)' : 'var(--surface-muted)',
+                  color: isActive ? '#fff' : 'var(--muted)',
+                  border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`,
+                }}>
+                {label}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* Empty state */}
       {shown.length === 0 && (
         <motion.div
-          className="rounded-2xl p-8 text-center"
+          className="rounded-2xl p-10 text-center"
           style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
         >
           {activeTab === 'active' ? (
             <>
-              <Layers className="size-8 mx-auto mb-3" style={{ color: 'var(--muted)' }} />
               <p className="font-semibold" style={{ color: 'var(--ink)' }}>No active deals</p>
-              <p className="text-sm mt-1 mb-4" style={{ color: 'var(--muted)' }}>
+              <p className="text-sm mt-1 mb-5" style={{ color: 'var(--muted)' }}>
                 Post the first deal and watch the price fall as buyers join.
               </p>
               <button onClick={onPost}
@@ -191,15 +227,15 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
         </motion.div>
       )}
 
-      {/* Deal cards */}
-      <div className="space-y-2">
+      {/* Deal cards — responsive grid */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {shown.map((deal, idx) => (
           <DealCard
             key={deal.dealId.toString()}
             deal={deal}
             nowSec={nowSec}
             onSelect={onSelectDeal}
-            delay={idx * 0.04}
+            delay={idx * 0.03}
             marketRates={marketRates}
           />
         ))}

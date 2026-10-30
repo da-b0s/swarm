@@ -1,0 +1,372 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Let me read all the relevant files first before touching anything. Good. I have a complete picture. Let me now plan the work carefully and set up todos. Now update App.tsx — wide shell, SwarmLogo, no nav icons: Now replace the nav and main sections: Now update DealList — responsive grid, token filter, Post button: Now replace the entire render section of `DealList` — tabs row, token filter, responsive grid: Now apply the token filter to `shown` and replace the render: The `active` variable name clashes with the loop variable in the filter pills. Fix by renaming the local `active` in the pill map: Now update DealRoom — lg two-column layout: The DealRoom needs the outer `div` changed from single-column to two-column at `lg`, with left col holding title/price/stats/activity and right col holding CommitFlow + Settle/Claim panels. I'll also remove the decorative `Layers`, `Users`, `Clock` icon that are just labelling text: Now replace the outer structure of `DealRoom`: Now update SupplierView for two-column at lg, with right col as live preview: The SupplierView currently has `max-w-md mx-auto`. I'll change the outer wrapper to a two-column grid at `lg`, keeping the form on the left and adding a sticky right preview panel showing the price curve, per-token prices, deposit summary, and revenue: Now I need to close the extra `div` for the left column and add the right col + close the grid wrapper. Find the bottom of the SupplierView return: The closing of the return is `</div>\\n  )`. I need to close the left col div, add the right col, and close the grid div: The tier builder chart and revenue preview sections now exist both in the form (left) and the preview panel (right). On desktop I should hide the inline curve inside the form since the right panel shows it. But actually the brief says \"right sticky: a live preview of the price curve, per-token prices, deposit and 'You receive' summary\" — the existing inline chart in the form is still fine for mobile. I'll leave both in place.\n\nNow update HomePage — left-aligned hero on desktop, wider rows, remove section icons: The apostrophe in `don't` is a smart quote. Let me match exactly what's there: There's a UTF-8 right-single-quote in the source. I'll use `execute` to do the replacement via `sed` to handle the encoding cleanly: Now update the JSX render — hero left-aligned on desktop with stats beside it, wider sections, remove Icon usage: The python script changed the STEPS/PROMISES but the return block still has `Icon` references. I'll rewrite the entire component return using python for encoding safety: Now update ProofPage — wider container: Now run check: Zero warnings, zero errors. Here's what changed:\n\n**New files:**\n- `src/swarm/SwarmLogo.tsx` — inline SVG: a ring of 6 small satellite hexagons converging on a larger central hex. Uses `currentColor` for satellites and `var(--accent)` for the centre. Takes `size` and optional `accentColor` props.\n- `public/favicon.svg` — same geometry with fixed `#1a8047` greens so it reads on any browser chrome background.\n\n**`index.html`** — title \"Swarm - Buy together, pay less\", `<link rel=\"icon\">` pointing at `/favicon.svg`, `<meta name=\"theme-color\" content=\"#1a8047\">`.\n\n**`App.tsx`** — shell widens to `max-w-6xl`. Nav: `SwarmLogo` + wordmark left, plain-text tab buttons (no icons), spacer, theme toggle, wallet right. Nav tab labels: Deals / Sell / Proof with no icons.\n\n**`DealList`** — controls row: Active/Ended tab pill + Post button right-aligned. Token filter pills below (All + one per `GOODS_TOKENS` entry). Deal cards in a responsive grid: 1 col on phones, 2 on tablets, 3 on desktop.\n\n**`DealRoom`** — `lg:grid-cols-[1fr_380px]` two-column from `lg`. Left: title, price hero with per-token rate, tier progress, stats row (labels only, no decorative icons), activity list. Right sticky at `top-20`: CommitFlow, share button, settle/claim panels.\n\n**`SupplierView`** — `lg:grid-cols-[1fr_340px]` two-column. Left: the existing form. Right hidden below `lg`, sticky at `top-20`: price curve, per-tier \"N USDC per SYMBOL\" rates, deposit and \"You receive\" summary.\n\n**`HomePage`** — `lg:grid-cols-[1fr_auto]` hero: headline + CTAs left, live stats grid right. How it works and Built to be fair sections use a `sm:grid-cols-3` layout with large step numbers (`1`, `2`, `3`) instead of icons. All icon imports (`Users`, `TrendingDown`, `PackageCheck`, `ShieldCheck`, `Undo2`, `Zap`) removed.\n\n**`ProofPage`** — `max-w-2xl` constraint removed; the tables use the full `max-w-6xl` shell width.",
+  "todos": [
+    {
+      "id": "todo:swarmlogo.tsx + public/favicon.svg + index.html meta:0",
+      "text": "SwarmLogo.tsx + public/favicon.svg + index.html meta",
+      "status": "done"
+    },
+    {
+      "id": "todo:app.tsx: wide shell (max-w-6xl), nav logo+wordmark, remove nav icons:0",
+      "text": "App.tsx: wide shell (max-w-6xl), nav logo+wordmark, remove nav icons",
+      "status": "done"
+    },
+    {
+      "id": "todo:deallist: responsive grid, token filter, post button in header row:0",
+      "text": "DealList: responsive grid, token filter, Post button in header row",
+      "status": "done"
+    },
+    {
+      "id": "todo:dealroom: lg two-column (left=content, right sticky=order panel):0",
+      "text": "DealRoom: lg two-column (left=content, right sticky=order panel)",
+      "status": "done"
+    },
+    {
+      "id": "todo:supplierview: lg two-column (left=form, right sticky=live preview):0",
+      "text": "SupplierView: lg two-column (left=form, right sticky=live preview)",
+      "status": "done"
+    },
+    {
+      "id": "todo:homepage: left-aligned hero on desktop, wider rows, remove section icons:0",
+      "text": "HomePage: left-aligned hero on desktop, wider rows, remove section icons",
+      "status": "done"
+    },
+    {
+      "id": "todo:proofpage: use wider container, remove narrow constraint:0",
+      "text": "ProofPage: use wider container, remove narrow constraint",
+      "status": "done"
+    },
+    {
+      "id": "todo:run check, paste output:0",
+      "text": "Run check, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "index.html",
+    "public/favicon.svg",
+    "src/App.tsx",
+    "src/swarm/DealList.tsx",
+    "src/swarm/DealRoom.tsx",
+    "src/swarm/HomePage.tsx",
+    "src/swarm/ProofPage.tsx",
+    "src/swarm/SupplierView.tsx",
+    "src/swarm/SwarmLogo.tsx"
+  ],
+  "fileDiffs": [
+    {
+      "path": "index.html",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    <title>Swarm — Group demand, volume pricing</title>\n+    <title>Swarm - Buy together, pay less</title>\n+    <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\" />\n+    <meta name=\"theme-color\" content=\"#1a8047\" />\n     <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />"
+    },
+    {
+      "path": "public/favicon.svg",
+      "action": "write",
+      "addedLines": 12,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+<svg width=\"32\" height=\"32\" viewBox=\"0 0 100 100\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n+  <!-- Satellite hexes -->\n+  <path d=\"M 69.5 35.5 L 60.5 35.5 L 56 28 L 60.5 20.5 L 69.5 20.5 L 74 28 Z\" fill=\"#1a8047\" opacity=\"0.35\"/>\n+  <path d=\"M 84.5 63 L 75.5 63 L 71 55.5 L 75.5 48 L 84.5 48 L 89 55.5 Z\" fill=\"#1a8047\" opacity=\"0.37\"/>\n+  <path d=\"M 69.5 90.5 L 60.5 90.5 L 56 83 L 60.5 75.5 L 69.5 75.5 L 74 83 Z\" fill=\"#1a8047\" opacity=\"0.39\"/>\n+  <path d=\"M 39.5 90.5 L 30.5 90.5 L 26 83 L 30.5 75.5 L 39.5 75.5 L 44 83 Z\" fill=\"#1a8047\" opacity=\"0.41\"/>\n+  <path d=\"M 24.5 63 L 15.5 63 L 11 55.5 L 15.5 48 L 24.5 48 L 29 55.5 Z\" fill=\"#1a8047\" opacity=\"0.43\"/>\n+  <path d=\"M 39.5 35.5 L 30.5 35.5 L 26 28 L 30.5 20.5 L 39.5 20.5 L 44 28 Z\" fill=\"#1a8047\" opacity=\"0.45\"/>"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 15,
+      "removedLines": 14,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useState, useEffect } from 'react'\n import { ConnectKitButton } from 'connectkit'\n import { motion, AnimatePresence } from 'framer-motion'\n-import { Layers, PlusCircle, FlaskConical, ChevronLeft, Moon, Sun } from 'lucide-react'\n+import { ChevronLeft, Moon, Sun } from 'lucide-react'\n import { useTheme, toggleTheme } from './swarm/theme'\n import { DealRoom } from './swarm/DealRoom'\n import { DealList } from './swarm/DealList'\n import { HomePage } from './swarm/HomePage'"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 130,
+      "removedLines": 140,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {/* Nav */}\n       <nav\n         className=\"sticky top-0 z-40 w-full\"\n         style={{\n           background: 'var(--nav-bg)',\n           backdropFilter: 'blur(32px) saturate(200%)',\n           WebkitBackdropFilter: 'blur(32px) saturate(200%)',\n           borderBottom: '1px solid var(--border)',"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 12,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { useMemo } from 'react'\n+import { useMemo, useState } from 'react'\n import { useReadContracts } from 'wagmi'\n import { motion } from 'framer-motion'\n-import { Clock, Layers, ChevronRight, PlusCircle, Package } from 'lucide-react'\n-import { CONTRACTS_ACTIVE, ARC_NETWORK } from './config'\n+import { Clock, ChevronRight, PlusCircle, Package } from 'lucide-react'\n+import { CONTRACTS_ACTIVE, ARC_NETWORK, GOODS_TOKENS, POLL_DEAL_ROOM, POLL_LIST } from './config'\n import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'\n import { useDealCount, useChainNow } from './hooks'\n-import { POLL_DEAL_ROOM, POLL_LIST } from './config'\n+import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props) {\n   const { data: dealCountRaw } = useDealCount()\n-  const dealCount  = dealCountRaw !== undefined ? Number(dealCountRaw) : 0\n-  const nowSec     = useChainNow()\n-  const marketRates = useMarketRates()\n+  const dealCount   = dealCountRaw !== undefined ? Number(dealCountRaw) : 0\n+  const nowSec      = useChainNow()\n+  const marketRates = useMarketRates()\n+  const [tokenFilter, setTokenFilter] = useState<string>('all')"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 119,
+      "removedLines": 82,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const shown = activeTab === 'active' ? active : ended\n+  const allShown = activeTab === 'active' ? active : ended\n+  const shown = tokenFilter === 'all'\n+    ? allShown\n+    : allShown.filter(d => d.goodsToken.toLowerCase() === tokenFilter.toLowerCase())\n \n   if (dealCount === 0 && dealResults === undefined) {\n     return (\n-      <div className=\"px-4 pt-8 flex flex-col items-center gap-3\">\n-        <div className=\"size-8 rounded-full border-2 animate-spin\"\n-          style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />\n-        <p className=\"text-sm\" style={{ color: 'var(--muted)' }}>Loading deals…</p>\n+      <div className=\"px-4 pt-8 flex flex-col items-center gap-3\">"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 17,
+      "removedLines": 17,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           {['all', ...GOODS_TOKENS.map(t => t.address)].map((addr) => {\n             const tok = GOODS_TOKENS.find(t => t.address === addr)\n             const label = tok ? tok.symbol : 'All'\n-            const active = tokenFilter === addr\n+            const isActive = tokenFilter === addr\n             return (\n               <button key={addr}\n                 onClick={() => setTokenFilter(addr)}\n                 className=\"px-3 py-1 rounded-full text-xs font-medium transition-all\""
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { ExternalLink, Users, Clock, Share2, Copy, Check, Package, Layers } from 'lucide-react'\n+import { ExternalLink, Share2, Copy, Check, Package } from 'lucide-react'"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 186,
+      "removedLines": 229,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  return (\n-    <div className=\"w-full max-w-md mx-auto px-4 pb-8 space-y-5\">\n-\n+  // ── Two-column layout from lg, single column below ───────────────────────\n+  const leftCol = (\n+    <div className=\"space-y-5\">\n       {/* Title + goods info */}\n       <motion.div className=\"space-y-1\" {...fadeUp}>\n-        <h1 className=\"text-xl font-bold leading-tight\" style={{ color: 'var(--ink)' }}>\n+        <h1 className=\"text-2xl font-bold leading-tight\" style={{ color: 'var(--ink)' }}>\n           {deal.title}\n         </h1>"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { Users, TrendingDown, PackageCheck, ShieldCheck, Undo2, Zap, ChevronDown, ArrowRight } from 'lucide-react'\n+import { ChevronDown, ArrowRight } from 'lucide-react'"
+    },
+    {
+      "path": "src/swarm/ProofPage.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    <div className=\"w-full max-w-2xl mx-auto px-4 pb-12 space-y-6\">\n+    <div className=\"w-full px-4 pb-12 space-y-6\">"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 91,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  return (\n-    <div className=\"w-full max-w-md mx-auto px-4 pb-8 space-y-5\">\n+  // ── Right-column live preview ──────────────────────────────────────────────\n+  const previewPanel = (\n+    <div className=\"rounded-3xl p-5 space-y-4\"\n+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>\n+      <span className=\"text-xs font-semibold tracking-wide uppercase\"\n+        style={{ color: 'var(--muted)' }}>Live preview</span>\n+\n+      {/* Price curve */}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 12,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         </div>\n       )}\n-    </div>\n-  )\n-}\n+        </div>{/* end left col */}\n+\n+        {/* Right: sticky preview */}\n+        <div className=\"hidden lg:block lg:sticky lg:top-20\">\n+          {previewPanel}\n+        </div>"
+    },
+    {
+      "path": "src/swarm/SwarmLogo.tsx",
+      "action": "write",
+      "addedLines": 67,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * SwarmLogo — a cluster of hexagons converging toward one larger central hex.\n+ * \"Many come together\" in a single mark.\n+ *\n+ * Renders as an inline SVG; uses `currentColor` for the satellite hexes and\n+ * `var(--accent)` (with a fixed #1a8047 fallback for the favicon) for the\n+ * central hex so it works on both light and dark backgrounds.\n+ *"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

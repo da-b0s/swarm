@@ -32,7 +32,7 @@ export function ProofPage() {
   const scanning = scanState === 'scanning'
 
   return (
-    <div className="w-full max-w-2xl mx-auto px-4 pb-12 space-y-6">
+    <div className="w-full px-4 pb-12 space-y-6">
       <motion.div {...fadeUp} className="pt-6">
         <h1 className="display text-2xl font-bold" style={{ color: 'var(--ink)', letterSpacing: '-0.03em' }}>
           Every deal, accounted for

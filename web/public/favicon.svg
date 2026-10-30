@@ -1,0 +1,11 @@
+<svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Satellite hexes: medium blue, progressively more opaque -->
+  <path d="M 69.5 35.5 L 60.5 35.5 L 56 28 L 60.5 20.5 L 69.5 20.5 L 74 28 Z" fill="#122d45" opacity="0.30"/>
+  <path d="M 84.5 63 L 75.5 63 L 71 55.5 L 75.5 48 L 84.5 48 L 89 55.5 Z" fill="#122d45" opacity="0.34"/>
+  <path d="M 69.5 90.5 L 60.5 90.5 L 56 83 L 60.5 75.5 L 69.5 75.5 L 74 83 Z" fill="#122d45" opacity="0.38"/>
+  <path d="M 39.5 90.5 L 30.5 90.5 L 26 83 L 30.5 75.5 L 39.5 75.5 L 44 83 Z" fill="#122d45" opacity="0.42"/>
+  <path d="M 24.5 63 L 15.5 63 L 11 55.5 L 15.5 48 L 24.5 48 L 29 55.5 Z" fill="#122d45" opacity="0.46"/>
+  <path d="M 39.5 35.5 L 30.5 35.5 L 26 28 L 30.5 20.5 L 39.5 20.5 L 44 28 Z" fill="#122d45" opacity="0.50"/>
+  <!-- Centre hex: solid accent blue -->
+  <path d="M 68 50 L 59 65.59 L 41 65.59 L 32 50 L 41 34.41 L 59 34.41 Z" fill="#122d45"/>
+</svg>
