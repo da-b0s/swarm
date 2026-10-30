@@ -49,12 +49,12 @@ type PostStep = 'idle' | 'approving' | 'approved' | 'posting' | 'done'
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
-/** Default tiers suited to EURC: $1.20 → $1.17 → $1.15 */
+/** Default tiers: unit thresholds pre-filled, prices left blank for the seller to choose. */
 function defaultTiers(): TierInput[] {
   return [
-    { minUnits: '1',  pricePerUnit: '1.20' },
-    { minUnits: '25', pricePerUnit: '1.17' },
-    { minUnits: '50', pricePerUnit: '1.15' },
+    { minUnits: '1',  pricePerUnit: '' },
+    { minUnits: '25', pricePerUnit: '' },
+    { minUnits: '50', pricePerUnit: '' },
   ]
 }
 
@@ -174,7 +174,9 @@ function validate(inp: PostInputs, chainNow: number): ValidatedInputs | string {
     const mu = parseInt(tiers[i].minUnits)
     const pr = parseFloat(tiers[i].pricePerUnit)
     if (!Number.isFinite(mu) || mu < 1) return `Tier ${i + 1}: min units must be at least 1.`
-    if (!Number.isFinite(pr) || pr <= 0) return `Tier ${i + 1}: price must be greater than zero.`
+    if (!Number.isFinite(pr) || pr <= 0) return tiers[i].pricePerUnit === ''
+      ? 'Set a price for every tier.'
+      : `Tier ${i + 1}: price must be greater than zero.`
     if (BigInt(Math.round(pr * 1_000_000)) > MAX_PRICE_USDC) return `Tier ${i + 1}: price exceeds the $5 cap.`
     if (i > 0 && mu <= prevMin)  return `Tier ${i + 1}: min units must be strictly ascending.`
     if (i > 0 && pr >= prevPrice) return `Tier ${i + 1}: price must be strictly descending.`
@@ -1056,7 +1058,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
                 <input type="number" min="0.000001" max="5" step="0.01"
                   value={tier.pricePerUnit}
                   onChange={e => updateTier(i, 'pricePerUnit', e.target.value)}
-                  placeholder="1.00"
+                  placeholder="e.g. 1.12"
                   className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
                   style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
                 />

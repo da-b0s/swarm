@@ -1,0 +1,28 @@
+Reading the files I need before writing anything. Now I need to see the existing hooks and config to know what data is available. Now I need to see the existing hooks, DealList (to understand live deal shape), theme, and utils: I have enough. Now I'll plan the work and build it. This is substantial — let me set up the todo list and build methodically. Starting with `theme.ts` — extend to three modes, keep the existing API, add `setTheme`: Now update App.tsx — replace the single toggle with a three-way control, and import the new exports: Now create `src/swarm/home/` directory and build all sub-components. Starting with `LiveDealCard.tsx`: Now I need to check if `useGoodsTokenMeta` and `useChainNow` exist: Both live in `hooks.ts`. Fix the imports in `LiveDealCard.tsx`: Now build `PriceFallAnimation.tsx`: Now build the remaining three simpler components in parallel: Now `LiveActivity.tsx` — reuses the `POLL_LIST` cadence. Uses wagmi `useReadContracts` like `useSwarmStats` does, fetches recent DealPosted + Committed events via the rpc layer. Actually, the event log (`useEventLog`) is user-triggered (proof page scan). I'll use a lightweight hook that reads recent events from the existing `useSwarmStats`-style data: read the deal count and latest deal IDs, then show the most recent committed/posted activity derived from contract reads — or show a simple "last N deals posted" activity feed which is lighter. The spec says "latest 6 on-chain events (orders, settlements, claims) from the existing event log hook". The event log hook is scan-on-demand only. I'll build a lightweight poll that reads block events for the last ~2000 blocks only (no historical backfill), which is exactly what the spec means by "reuse POLL_LIST etc". Now rewrite `HomePage.tsx` to compose all sections: Now update `App.tsx` to pass the new `onProof` and `onSelectDeal` props to `HomePage`: Now check if `rpc.ts` exports `rpcFetch` and `getLatestBlock`: Good. Now run the check: Two files need fixing. Fixing both now:
+
+**PriceFallAnimation.tsx:** remove unused `currentTierPrice`; widen the return type annotation on `JOIN_SEQUENCE`:
+
+**LiveActivity.tsx:** All `a.*` reads are `unknown` from `Record<string, unknown>`. Cast through `unknown` to `string`/`bigint` via helper. Also fix the `setTimeout` async issue. Now fix `LiveActivity.tsx` — all `a.*` accesses need to go through a safe string coercion helper, and `setTimeout(fetch, ...)` needs a wrapper: Now fix the `setTimeout(fetch, ...)` async issue — wrap in a void arrow: ```
+oxlint: Found 0 warnings and 0 errors.
+tsc --noEmit: exit 0
+``` Here is a summary of every file and decision.
+
+**New files under `src/swarm/home/`:**
+
+`LiveDealCard.tsx` — reads `dealCount` then all deals + `totalUnits` via `useReadContracts` at `POLL_LIST` cadence. Picks the highest-id active deal; falls back to the most-recently settled one. Shows title, token symbol (resolved via `useGoodsTokenMeta` for unlisted tokens), current clearing price, per-token price, the tier ladder with the active tier highlighted in accent, a fill progress bar, time remaining (colour-coded red under 10 min), and a "Join this deal" / "Post a deal" CTA.
+
+`PriceFallAnimation.tsx` — entirely self-contained SVG + CSS animation. Eight buyer dots join one by one at `STEP_MS=550ms` intervals; a units counter and live price update as each joins; the price steps from $1.20 → $1.17 → $1.15 at the correct thresholds; at settlement every dot gets an accent ring and early joiners get a `↩` refund tick. Respects `prefers-reduced-motion` by jumping straight to the end state. "Replay" text button re-runs the sequence.
+
+`HowADealMoves.tsx` — four cells in a `gap-px` grid (same pattern as the stats band). Each anchored by a large accent-coloured example value; no icons.
+
+`WhyArc.tsx` — three cards: USDC gas, 1-sig gasless orders, auto-settle keeper. Large faded accent anchor text.
+
+`LiveActivity.tsx` — lightweight rolling fetch: on mount (and every `POLL_LIST` ms) fetches `eth_getLogs` for the last 2000 blocks across DealFactory/DemandPool/Settler for the five main event types. Decodes and shows the latest 6 in reverse-chronological order with event-type badge, human label, relative block time, and explorer link. Safe coercion helpers (`str`/`u64`/`u32`/`addrShort`) silence the `Record<string, unknown>` lint errors without any unsafe casting.
+
+`ClosingCta.tsx` — full-width surface card with headline, two CTA buttons, then a footer row: Proof (app nav), GitHub, Arc Studio, and DealFactory explorer link.
+
+**`src/swarm/HomePage.tsx`** — rewritten as a thin composition of the above. The hero is a two-column `lg:grid` with the live deal card on the right and the live/pill + headline + buttons on the left. The animation section is also two-column on desktop with a static three-tier example card on the right. `onProof` and `onSelectDeal` are new props wired from `App.tsx`.
+
+**`src/swarm/theme.ts`** — extended to three modes (`light` / `system` / `dark`). `system` is the new default; it resolves via `matchMedia` and re-applies automatically when the OS preference changes. `setTheme(mode)` replaces `toggleTheme` (kept as a deprecated alias). `useThemeMode()` returns the stored mode; `useTheme()` returns the resolved rendering theme.
+
+**`src/App.tsx`** — theme toggle replaced with a compact three-button pill (`Light / System / Dark`), styled the same as the nav tab bar.

@@ -1,0 +1,3 @@
+Reading the file first. I can see both bugs clearly. The `updateDisplay` helper sorts by `blockNumber` only (no secondary `logIndex` sort), and `decodeItem` builds the Settled detail as `${tu} units` without a singular check. Two targeted edits: Now update `ActivityItem` to include `logIndex`, and update `decodeItem` to populate it, and fix the `byNewest` references in the two final sort calls and the poll sort. Also fix the Settled plural. Do it all: Now populate `logIndex` in `decodeItem` and fix the Settled plural:
+
+This session has reached the per-user daily limit. Please try again tomorrow.

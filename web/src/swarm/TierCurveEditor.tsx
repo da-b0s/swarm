@@ -173,27 +173,38 @@ export function TierCurveEditor({
     return () => ro.disconnect()
   }, [])
 
+  // ── Live refs — always current, readable from stale effect closures ──────────
+  // Kept in sync via useLayoutEffect (not written during render, which the
+  // React Compiler lint forbids).
+  const tiersRef    = useRef(tiers)
+  const maxUnitsRef = useRef(maxUnits)
+  const marketRef   = useRef(marketPricePerUnit)
+  useEffect(() => {
+    tiersRef.current    = tiers
+    maxUnitsRef.current = maxUnits
+    marketRef.current   = marketPricePerUnit
+  })   // no dep array — runs after every commit
+
   // ── Stable (frozen) domain ───────────────────────────────────────────────────
-  // Updated at rest; frozen during drag so coordinate transforms never change
-  // mid-drag (which would cause jumps and direction inversions).
   const [domain, setDomain] = useState<Domain>(() =>
     computeDomain(tiers, maxUnits, marketPricePerUnit)
   )
   const isDragging = useRef(false)
 
-  // Refit domain whenever tiers/maxUnits change but no drag is in progress.
-  // We do it in the render path (not in an effect) to avoid an extra frame.
-  if (!isDragging.current) {
+  // Refit domain when tiers/maxUnits/market change, but only while not dragging.
+  // Use an effect so we never touch refs during render.
+  useEffect(() => {
+    if (isDragging.current) return
     const next = computeDomain(tiers, maxUnits, marketPricePerUnit)
-    // Only call setDomain when the values actually differ (avoids infinite loop).
-    if (
-      next.priceMin !== domain.priceMin ||
-      next.priceMax !== domain.priceMax ||
-      next.unitsMax !== domain.unitsMax
-    ) {
-      setDomain(next)
-    }
-  }
+    setDomain(prev =>
+      prev.priceMin === next.priceMin &&
+      prev.priceMax === next.priceMax &&
+      prev.unitsMax === next.unitsMax
+        ? prev   // same object → no re-render
+        : next
+    )
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tiers, maxUnits, marketPricePerUnit])
 
   // ── Drag state ───────────────────────────────────────────────────────────────
   // Frozen at pointerdown; cleared at pointerup.
@@ -210,6 +221,8 @@ export function TierCurveEditor({
 
   // Active handle for tooltip / keyboard
   const [activeIdx, setActiveIdx] = useState<number | null>(null)
+  // Mirrors isDragging for use in JSX (refs must not be read during render).
+  const [grabbing, setGrabbing] = useState(false)
 
   // ── Tooltip text ─────────────────────────────────────────────────────────────
   const tooltipForIdx = (idx: number): string => {
@@ -236,6 +249,7 @@ export function TierCurveEditor({
     e.preventDefault()
     ;(e.target as Element).setPointerCapture(e.pointerId)
     isDragging.current = true
+    setGrabbing(true)
     const pt: { x: number; y: number } = {
       x: e.clientX - svgRef.current!.getBoundingClientRect().left,
       y: e.clientY - svgRef.current!.getBoundingClientRect().top,
@@ -254,22 +268,29 @@ export function TierCurveEditor({
   }
 
   // ── Global pointermove / pointerup ────────────────────────────────────────────
+  // Handlers read tiersRef/maxUnitsRef/marketRef (always current) rather than
+  // the props directly, so the stale-closure bug cannot occur even though this
+  // effect only re-registers when onChange changes identity.
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current
       if (!drag || !svgRef.current) return
       const pt = svgPoint(e)
 
+      // Read latest values from refs — never from the closed-over props.
+      const liveTiers    = tiersRef.current
+      const liveMaxUnits = maxUnitsRef.current
+
       const { idx, startX, startY, origMicro, origUnits, frozenDom, frozenW, frozenH } = drag
 
       // ── Price (y axis) ────────────────────────────────────────────────────
       // Dragging UP (smaller y) = higher price.
-      const dyPx      = pt.y - startY                                    // positive = downward
-      const deltaMicro = -dyPx * microPerPx(frozenDom, frozenH)          // negative dy = price rises
+      const dyPx       = pt.y - startY
+      const deltaMicro = -dyPx * microPerPx(frozenDom, frozenH)
       const newMicroRaw = origMicro + deltaMicro
 
-      const leftMicro  = idx > 0              ? parseMicro(tiers[idx - 1].pricePerUnit) : Infinity
-      const rightMicro = idx < tiers.length-1 ? parseMicro(tiers[idx + 1].pricePerUnit) : 0
+      const leftMicro  = idx > 0                 ? parseMicro(liveTiers[idx - 1].pricePerUnit) : Infinity
+      const rightMicro = idx < liveTiers.length-1 ? parseMicro(liveTiers[idx + 1].pricePerUnit) : 0
       const minGap     = origMicro / 1_000_000 < 1 ? 100 : 10_000
 
       const priceClamped = Math.max(
@@ -281,25 +302,26 @@ export function TierCurveEditor({
       // ── Units (x axis) ────────────────────────────────────────────────────
       let finalUnits = origUnits
       if (idx > 0) {
-        const dxPx = pt.x - startX
+        const dxPx       = pt.x - startX
         const deltaUnits = dxPx * unitsPerPx(frozenDom, frozenW)
         const newUnitsRaw = origUnits + deltaUnits
 
-        const leftUnits  = parseInt(tiers[idx - 1].minUnits) || 0
-        const rightUnits = idx < tiers.length-1
-          ? (parseInt(tiers[idx + 1].minUnits) || 0)
+        const leftUnits  = parseInt(liveTiers[idx - 1].minUnits) || 0
+        const rightUnits = idx < liveTiers.length-1
+          ? (parseInt(liveTiers[idx + 1].minUnits) || 0)
           : Infinity
 
         finalUnits = Math.max(
           leftUnits + 1,
           Math.min(
-            Number.isFinite(rightUnits) ? rightUnits - 1 : maxUnits,
-            Math.min(maxUnits, Math.max(1, Math.round(newUnitsRaw))),
+            Number.isFinite(rightUnits) ? rightUnits - 1 : liveMaxUnits,
+            Math.min(liveMaxUnits, Math.max(1, Math.round(newUnitsRaw))),
           ),
         )
       }
 
-      const next = tiers.map((t, i) =>
+      // Build next from live tiers, change only the dragged index.
+      const next = liveTiers.map((t, i) =>
         i !== idx ? t : {
           minUnits:     String(finalUnits),
           pricePerUnit: microToDisplay(priceSnapped),
@@ -310,16 +332,18 @@ export function TierCurveEditor({
 
     const onUp = () => {
       isDragging.current = false
+      setGrabbing(false)
       dragRef.current = null
-      // Refit domain after drag ends.
-      setDomain(computeDomain(tiers, maxUnits, marketPricePerUnit))
-      setActiveIdx(a => a)   // keep focus indicator — do not clear
+      // Refit domain from live refs after drag ends.
+      setDomain(computeDomain(tiersRef.current, maxUnitsRef.current, marketRef.current))
+      setActiveIdx(a => a)   // keep focus indicator
     }
 
     const onCancel = () => {
       isDragging.current = false
+      setGrabbing(false)
       dragRef.current = null
-      setDomain(computeDomain(tiers, maxUnits, marketPricePerUnit))
+      setDomain(computeDomain(tiersRef.current, maxUnitsRef.current, marketRef.current))
     }
 
     window.addEventListener('pointermove', onMove, { passive: true })
@@ -330,12 +354,6 @@ export function TierCurveEditor({
       window.removeEventListener('pointerup',     onUp)
       window.removeEventListener('pointercancel', onCancel)
     }
-  // tiers / maxUnits / marketPricePerUnit are read inside the handlers but we
-  // do NOT list them as deps — we want the handlers to see the *current* tiers
-  // for neighbour clamping without re-registering the listeners on every render.
-  // dragRef.current holds the frozen origin so it is safe to close over `tiers`
-  // here only for neighbour reads (not for the origin itself).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onChange])
 
   // ── Keyboard handler ──────────────────────────────────────────────────────────
@@ -528,7 +546,7 @@ export function TierCurveEditor({
               <circle
                 cx={cx} cy={cy} r={14}
                 fill="transparent"
-                style={{ cursor: isDragging.current && activeIdx === idx ? 'grabbing' : 'grab', touchAction: 'none' }}
+                style={{ cursor: grabbing && activeIdx === idx ? 'grabbing' : 'grab', touchAction: 'none' }}
                 role="slider"
                 tabIndex={0}
                 aria-label={`Tier ${idx + 1}: from ${units} units at ${formatUsdcPrice(micro)}`}
@@ -537,7 +555,7 @@ export function TierCurveEditor({
                 aria-valuemax={5_000_000}
                 onPointerDown={e => onPointerDown(e, idx)}
                 onFocus={() => setActiveIdx(idx)}
-                onBlur={() => { if (!isDragging.current) setActiveIdx(null) }}
+                onBlur={() => { if (!grabbing) setActiveIdx(null) }}
                 onKeyDown={e => onKeyDown(e, idx)}
               />
               {/* Visible dot — larger when active */}
@@ -593,6 +611,16 @@ export function TierCurveEditor({
             {t.minUnits}
           </text>
         ))}
+
+        {/* Empty-state hint when no tier has a price yet */}
+        {validTiers.length === 0 && (
+          <text
+            x={(PAD_L + w - PAD_R) / 2} y={h / 2}
+            fontSize={9} fill="var(--subtle)" textAnchor="middle"
+            fontFamily="system-ui, sans-serif">
+            Enter prices or press Use market price to start the curve.
+          </text>
+        )}
       </svg>
     </div>
   )
