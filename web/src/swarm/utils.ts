@@ -173,26 +173,88 @@ export function checkWouldStrandBuyer(
 
 /**
  * Format a token amount in base units to a human-readable string,
- * trimming trailing zeros. Mirrors the display semantics of formatUnits.
+ * trimming trailing zeros. Caps at 6 significant fractional digits so
+ * 18-decimal tokens display sensibly.
  *
  * Examples (decimals = 6):
  *   1_000_000n → "1"
  *   1_500_000n → "1.5"
- *   1_234_567n → "1.234567"
- *       500n   → "0.0005"  (if decimals = 6)
+ * Examples (decimals = 18):
+ *   1_000_000_000_000_000_000n → "1"
+ *   1_500_000_000_000_000_000n → "1.5"
+ *   1_234_567_890_000_000_000n → "1.23456789" (trimmed trailing zeros)
  *
  * While decimals are loading, callers should show nothing rather than
  * the raw number — pass undefined and check for undefined return.
  */
 export function formatTokenAmount(raw: bigint, decimals: number): string {
   if (decimals === 0) return raw.toString()
-  const scale = 10 ** decimals
-  const whole = raw / BigInt(scale)
-  const frac  = raw % BigInt(scale)
+  const scaleBig = 10n ** BigInt(decimals)
+  const whole = raw / scaleBig
+  const frac  = raw % scaleBig
   if (frac === 0n) return whole.toString()
   // Pad fractional part to `decimals` digits, then trim trailing zeros
   const fracStr = frac.toString().padStart(decimals, '0').replace(/0+$/, '')
-  return `${whole}.${fracStr}`
+  // Cap at 6 significant fractional digits for readability on 18-decimal tokens
+  const capped = fracStr.length > 6 ? fracStr.slice(0, 6).replace(/0+$/, '') : fracStr
+  if (capped === '') return whole.toString()
+  return `${whole}.${capped}`
+}
+
+/**
+ * Compute USDC price per 1 whole token.
+ *
+ * The contract prices deals in USDC per unit, but a unit may be a fraction of
+ * a token (e.g. 0.5 EURC). This helper gives the effective exchange rate so
+ * buyers can compare against the market.
+ *
+ * All arithmetic is done in bigint to avoid float imprecision; the result is
+ * formatted for display only.
+ *
+ * @param pricePerUnit  micro-USDC per unit (6-decimal, from the contract)
+ * @param tokensPerUnit raw token base-units per unit (token's own decimals)
+ * @param tokenDecimals decimal count of the goods token
+ * @returns             formatted string like "2.26 USDC" or null when either
+ *                      input is zero / undefined
+ */
+export function pricePerToken(
+  pricePerUnit:  bigint,
+  tokensPerUnit: bigint,
+  tokenDecimals: number,
+): string | null {
+  if (!pricePerUnit || !tokensPerUnit || tokensPerUnit === 0n) return null
+  // price per whole token = (pricePerUnit * 10^tokenDecimals) / tokensPerUnit
+  // Keep as micro-USDC (6 decimal), multiply by 10^tokenDecimals then divide by tokensPerUnit
+  const scale = 10n ** BigInt(tokenDecimals)
+  const microUsdcPerToken = (pricePerUnit * scale) / tokensPerUnit
+  return formatUsdcPrice(microUsdcPerToken) + ' USDC'
+}
+
+/**
+ * Compute market deviation of a USDC/token rate vs a USD/token market rate.
+ * @param pricePerUnit   micro-USDC per unit (contract, 6 decimals)
+ * @param tokensPerUnit  token base-units per unit
+ * @param tokenDecimals  decimals of goods token
+ * @param marketUsdRate  USD per 1 whole token from market data (e.g. 1.08 for EUR)
+ * @returns  { pct: number, label: string, severity: 'ok'|'amber'|'red' } or null
+ */
+export function marketDeviation(
+  pricePerUnit:  bigint,
+  tokensPerUnit: bigint,
+  tokenDecimals: number,
+  marketUsdRate: number,
+): { pct: number; label: string; severity: 'ok' | 'amber' | 'red' } | null {
+  if (!pricePerUnit || !tokensPerUnit || tokensPerUnit === 0n || marketUsdRate <= 0) return null
+  const scale = 10n ** BigInt(tokenDecimals)
+  const microUsdcPerToken = (pricePerUnit * scale) / tokensPerUnit
+  const dealRate = Number(microUsdcPerToken) / 1_000_000
+  const pct = ((dealRate - marketUsdRate) / marketUsdRate) * 100
+  const absPct = Math.abs(pct)
+  if (absPct < 0.5) return null   // not worth showing sub-half-percent noise
+  const sign = pct > 0 ? '+' : ''
+  const label = `${sign}${Math.round(pct)}% vs market`
+  const severity: 'ok' | 'amber' | 'red' = pct > 15 ? 'red' : pct > 5 ? 'amber' : 'ok'
+  return { pct, label, severity }
 }
 
 /** Parse a Solidity revert error name from a wagmi error message */

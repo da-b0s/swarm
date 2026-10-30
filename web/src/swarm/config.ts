@@ -143,33 +143,33 @@ export const ARC_TX_FEES = {
 // ── Goods tokens ──────────────────────────────────────────────────────────────
 
 export interface GoodsToken {
-  symbol:   string
-  name:     string
-  address:  `0x${string}`
-  decimals: number
+  symbol:       string
+  name:         string
+  address:      `0x${string}`
+  decimals:     number
+  /** Key used by useMarketRates to look up the USD rate for this token
+   *  (EUR, GBP, MXN, BTC, ETH). undefined = no market comparison available. */
+  marketSymbol?: string
 }
 
 /**
  * Tokens offered for sale in Swarm deals, per network.
- * Today: EURC only. Adding a token is one entry here.
+ * Adding a token is one entry here; the UI picks up the rest automatically.
  */
 export const GOODS_TOKENS: readonly GoodsToken[] = ACTIVE_NETWORK === 'mainnet'
   ? [
-      {
-        symbol:   'EURC',
-        name:     'EURC',
-        address:  '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1',
-        decimals: 6,
-      },
+      { symbol: 'EURC',  name: 'Circle Euro',           address: '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1', decimals: 6,  marketSymbol: 'EUR' },
+      { symbol: 'GBPA',  name: 'Agant British Pound',   address: '0xbBe6aAB0Ed76e90AeA0d1cd978EC231c8AdCDF8b', decimals: 6,  marketSymbol: 'GBP' },
+      { symbol: 'MXNB',  name: 'Mexican Peso (Bitso)',  address: '0xF197FFC28c23E0309B5559e7a166f2c6164C80aA', decimals: 6,  marketSymbol: 'MXN' },
+      { symbol: 'cirBTC', name: 'Circle Wrapped Bitcoin', address: '0x171A4217b86A807A64eB94757Db6849fb4bDbAA0', decimals: 8, marketSymbol: 'BTC' },
+      { symbol: 'WETH',  name: 'Bridged Ether',         address: '0x128cC466B61f542da60c70e3aA11c10e19B84EDB', decimals: 18, marketSymbol: 'ETH' },
     ]
   : [
-      {
-        symbol:   'EURC',
-        name:     'EURC',
-        address:  '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a',
-        decimals: 6,
-      },
+      { symbol: 'EURC',  name: 'Circle Euro (testnet)', address: '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a', decimals: 6, marketSymbol: 'EUR' },
     ]
+
+/** How often the market-rates hook re-fetches (ms). No polling while tab is hidden. */
+export const POLL_MARKET_RATES = 5 * 60 * 1000
 
 export const RETIRED_SETTLERS: readonly `0x${string}`[] = ACTIVE_NETWORK === 'testnet'
   ? [

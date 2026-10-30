@@ -23,7 +23,7 @@ const PROMISES = [
 
 const FAQ = [
   { q: 'What can I buy?',
-    a: "Today every deal sells EURC, Circle's euro stablecoin, paid for in USDC. More tokens are coming soon." },
+    a: "Deals sell stablecoins and tokens including EURC, GBPA, MXNB, cirBTC, and WETH, paid for in USDC. Every buyer pays the same final price." },
   { q: 'How is the final price decided?',
     a: 'Each deal has price levels set by the seller, for example $1.20 each, then $1.17 once 25 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.' },
   { q: 'What do I need to order?',
@@ -60,7 +60,7 @@ export function HomePage({ onBrowse, onSell }: Props) {
         </motion.h1>
         <motion.p {...fade} transition={{ duration: 0.35, delay: 0.05 }}
           className="mt-4 text-base sm:text-lg max-w-md mx-auto" style={{ color: 'var(--muted)' }}>
-          Group deals on EURC, Circle&apos;s euro stablecoin. The more people buy, the better everyone&apos;s rate.
+          Group deals on stablecoins and tokens on Arc. The more people buy, the better everyone&apos;s rate.
         </motion.p>
         <motion.div {...fade} transition={{ duration: 0.35, delay: 0.1 }}
           className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">

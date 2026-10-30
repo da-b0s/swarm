@@ -24,8 +24,11 @@ import {
 } from 'lucide-react'
 import {
   formatUsdcPrice, txUrl, parseRevertReason,
-  checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn, formatTokenAmount,
+  checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn, formatTokenAmount, pricePerToken,
 } from './utils'
+import { PricePerToken } from './PricePerToken'
+import { useMarketRates } from './useMarketRates'
+import { GOODS_TOKENS } from './config'
 import {
   useEscrowed, useUnitsOf, usePaidPerUnit, useTierCounts, useChainNow,
 } from './hooks'
@@ -127,10 +130,13 @@ function relayerMessage(code: string | undefined): string {
 
 export function CommitFlow({
   dealId, clearingPrice, totalUnits, buyerCount, tiers,
-  maxUnits, maxUnitsPerBuyer, deadline, state, goodsToken: _goodsToken,
+  maxUnits, maxUnitsPerBuyer, deadline, state, goodsToken,
   goodsSymbol, goodsDecimals, tokensPerUnit, onCommitted,
 }: Props) {
   const { address, isConnected, chainId: walletChain, connector } = useAccount()
+  const marketRates = useMarketRates()
+  const tokenConfig = GOODS_TOKENS.find(t => t.address.toLowerCase() === goodsToken.toLowerCase())
+  const marketRate  = tokenConfig?.marketSymbol ? marketRates?.get(tokenConfig.marketSymbol) : undefined
   const { switchChain }   = useSwitchChain()
   const { signTypedData } = useSignTypedData()
   const { writeContract, reset: resetWrite } = useWriteContract()
@@ -234,13 +240,19 @@ export function CommitFlow({
   }, [commitSuccess])
 
   // ── Withdraw state ───────────────────────────────────────────────────────────
-  const [rawWithdrawUnits, setWithdrawUnits] = useState(1)
-  const withdrawUnits = myUnitsN > 0 ? Math.min(rawWithdrawUnits, myUnitsN) : 1
+  const [withdrawInput, setWithdrawInput] = useState('')   // raw text; '' means "use default = all"
+  const withdrawUnitsRaw = withdrawInput === '' ? myUnitsN : parseInt(withdrawInput)
+  const withdrawUnitsValid = Number.isInteger(withdrawUnitsRaw) && withdrawUnitsRaw > 0 && withdrawUnitsRaw <= myUnitsN
+  const withdrawUnits  = withdrawUnitsValid ? withdrawUnitsRaw : (myUnitsN > 0 ? myUnitsN : 1)
   const withdrawReturn = computeWithdrawReturn(myEscrow, withdrawUnits, myUnitsN)
+  const withdrawInputErr = withdrawInput !== '' && !withdrawUnitsValid
+    ? (parseInt(withdrawInput) <= 0 || withdrawInput.includes('.') ? 'Enter a whole number from 1 to ' + myUnitsN
+      : `You only hold ${myUnitsN} unit${myUnitsN !== 1 ? 's' : ''}`)
+    : null
 
-  // Keep withdraw slider defaulting to full when units change
+  // Reset withdraw input when order changes
   useEffect(() => {
-    if (myUnitsN > 0) setWithdrawUnits(myUnitsN)
+    setWithdrawInput('')
   }, [myUnitsN])
 
   const withdrawCheck = isCommitted
@@ -451,6 +463,7 @@ export function CommitFlow({
           maxOrderable={maxAddable > 0 ? maxAddable : (remainingStock)} isTopUp={false}
           onUnits={setOrderUnits}
           badge={RELAYER_URL ? 'gasless' : undefined}
+          marketRate={marketRate}
         />
         <ConnectKitButton.Custom>
           {({ show }) => (
@@ -577,6 +590,7 @@ export function CommitFlow({
                   maxOrderable={maxOrderable} isTopUp={isCommitted}
                   onUnits={setOrderUnits}
                   badge={useGasless ? 'gasless' : undefined}
+                  marketRate={marketRate}
                 />
 
                 {/* Status rows */}
@@ -731,28 +745,49 @@ export function CommitFlow({
                 </div>
 
                 {/* Units to withdraw */}
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs" style={{ color: 'var(--muted)' }}>Units to withdraw</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setWithdrawUnits(u => Math.max(1, u - 1))}
-                      disabled={withdrawUnits <= 1}
-                      className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
-                      style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-                      <Minus className="size-3.5" />
-                    </button>
-                    <span className="text-xl font-bold tabular-nums w-10 text-center"
-                      style={{ color: 'var(--ink)' }}>
-                      {withdrawUnits}
-                    </span>
-                    <button
-                      onClick={() => setWithdrawUnits(u => Math.min(myUnitsN, u + 1))}
-                      disabled={withdrawUnits >= myUnitsN}
-                      className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
-                      style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-                      <Plus className="size-3.5" />
-                    </button>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs" style={{ color: 'var(--muted)' }}>Units to withdraw</span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setWithdrawInput(String(Math.max(1, withdrawUnits - 1)))}
+                        disabled={withdrawUnits <= 1}
+                        className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
+                        style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+                        <Minus className="size-3.5" />
+                      </button>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={withdrawInput === '' ? String(myUnitsN) : withdrawInput}
+                        onChange={e => setWithdrawInput(e.target.value)}
+                        className="w-14 rounded-lg px-2 py-1.5 text-center text-sm font-bold tabular-nums outline-none"
+                        style={{
+                          background: 'var(--surface-muted)',
+                          border: `1px solid ${withdrawInputErr ? 'var(--danger)' : 'var(--border)'}`,
+                          color: 'var(--ink)',
+                        }}
+                      />
+                      <button
+                        onClick={() => setWithdrawInput(String(Math.min(myUnitsN, withdrawUnits + 1)))}
+                        disabled={withdrawUnits >= myUnitsN}
+                        className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
+                        style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+                        <Plus className="size-3.5" />
+                      </button>
+                      {withdrawUnits < myUnitsN && (
+                        <button
+                          onClick={() => setWithdrawInput('')}
+                          className="text-xs px-2 py-1 rounded-lg transition-all"
+                          style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
+                          All
+                        </button>
+                      )}
+                    </div>
                   </div>
+                  {withdrawInputErr && (
+                    <p className="text-xs" style={{ color: 'var(--danger)' }}>{withdrawInputErr}</p>
+                  )}
                 </div>
 
                 {/* Return amount */}
@@ -774,12 +809,14 @@ export function CommitFlow({
                 )}
 
                 {/* Strand check / withdraw button */}
-                {withdrawCheck.blocked ? (
+                {(withdrawCheck.blocked || !!withdrawInputErr) ? (
+                  withdrawCheck.blocked ? (
                   <div className="flex items-start gap-2.5 rounded-xl p-3"
                     style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
                     <Lock className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--muted)' }} />
                     <p className="text-xs" style={{ color: 'var(--muted)' }}>{withdrawCheck.reason}</p>
                   </div>
+                  ) : null
                 ) : (
                   <button
                     onClick={handleWithdraw}
@@ -840,13 +877,37 @@ interface OrderPreviewProps {
   isTopUp:        boolean
   onUnits:        (n: number) => void
   badge?:         'gasless' | undefined
+  marketRate?:    number
 }
 
 function OrderPreviewCard({
   units, quotedPPU, quotedTotal, breaksTier,
-  goodsSymbol, goodsDecimals, tokensPerUnit, maxOrderable, isTopUp, onUnits, badge,
+  goodsSymbol, goodsDecimals, tokensPerUnit, maxOrderable, isTopUp, onUnits, badge, marketRate,
 }: OrderPreviewProps) {
   const tokensReceived = BigInt(units) * tokensPerUnit
+  const [rawInput, setRawInput] = useState(String(units))
+
+  const handleInput = (val: string) => {
+    setRawInput(val)
+    const n = parseInt(val)
+    if (Number.isInteger(n) && n >= 1 && n <= maxOrderable && !val.includes('.')) {
+      onUnits(n)
+    }
+  }
+
+  const inputErr = rawInput !== '' && rawInput !== String(units)
+    ? (() => {
+        if (rawInput.includes('.')) return 'Whole numbers only'
+        const n = parseInt(rawInput)
+        if (!Number.isInteger(n) || n < 1) return 'At least 1'
+        if (n > maxOrderable) return `Max ${maxOrderable}`
+        return null
+      })()
+    : null
+
+  const tokensReceivedStr = goodsDecimals !== undefined
+    ? formatTokenAmount(tokensReceived, goodsDecimals)
+    : null
 
   return (
     <div className="rounded-2xl p-4 space-y-3"
@@ -864,57 +925,116 @@ function OrderPreviewCard({
             : null}
       </div>
 
-      {/* Quantity picker */}
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xs" style={{ color: 'var(--muted)' }}>
-          {isTopUp ? 'Units to add' : 'Quantity'}
-        </span>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onUnits(Math.max(1, units - 1))}
-            disabled={units <= 1}
-            className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
-            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-            <Minus className="size-3.5" />
-          </button>
-          <span className="text-xl font-bold tabular-nums w-10 text-center" style={{ color: 'var(--ink)' }}>
-            {units}
+      {/* Quantity picker: text input + − + quick-add */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-xs" style={{ color: 'var(--muted)' }}>
+            {isTopUp ? 'Units to add' : 'Quantity'}
           </span>
-          <button
-            onClick={() => onUnits(Math.min(maxOrderable, units + 1))}
-            disabled={units >= maxOrderable}
-            className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
-            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-            <Plus className="size-3.5" />
-          </button>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              onClick={() => { const n = Math.max(1, units - 1); onUnits(n); setRawInput(String(n)) }}
+              disabled={units <= 1}
+              className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
+              style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+              <Minus className="size-3.5" />
+            </button>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={rawInput}
+              onChange={e => handleInput(e.target.value)}
+              className="w-14 rounded-lg px-2 py-1.5 text-center text-sm font-bold tabular-nums outline-none"
+              style={{
+                background: 'var(--surface-muted)',
+                border: `1px solid ${inputErr ? 'var(--danger)' : 'var(--border)'}`,
+                color: 'var(--ink)',
+              }}
+            />
+            <button
+              onClick={() => { const n = Math.min(maxOrderable, units + 1); onUnits(n); setRawInput(String(n)) }}
+              disabled={units >= maxOrderable}
+              className="size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
+              style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+              <Plus className="size-3.5" />
+            </button>
+            {/* Quick-add buttons */}
+            {maxOrderable >= 10 && units + 10 <= maxOrderable && (
+              <button
+                onClick={() => { const n = Math.min(maxOrderable, units + 10); onUnits(n); setRawInput(String(n)) }}
+                className="text-xs px-2 py-1 rounded-lg transition-all hover:opacity-80"
+                style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
+                +10
+              </button>
+            )}
+            {maxOrderable >= 100 && units + 100 <= maxOrderable && (
+              <button
+                onClick={() => { const n = Math.min(maxOrderable, units + 100); onUnits(n); setRawInput(String(n)) }}
+                className="text-xs px-2 py-1 rounded-lg transition-all hover:opacity-80"
+                style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
+                +100
+              </button>
+            )}
+            {units < maxOrderable && (
+              <button
+                onClick={() => { onUnits(maxOrderable); setRawInput(String(maxOrderable)) }}
+                className="text-xs px-2 py-1 rounded-lg transition-all hover:opacity-80"
+                style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--accent)' }}>
+                Max
+              </button>
+            )}
+          </div>
         </div>
+        {inputErr && (
+          <p className="text-xs" style={{ color: 'var(--danger)' }}>{inputErr}</p>
+        )}
+        {maxOrderable > 0 && (
+          <p className="text-xs" style={{ color: 'var(--subtle)' }}>
+            {isTopUp
+              ? `Up to ${maxOrderable} more unit${maxOrderable !== 1 ? 's' : ''} available`
+              : `Up to ${maxOrderable} unit${maxOrderable !== 1 ? 's' : ''} available`}
+          </p>
+        )}
       </div>
 
-      {maxOrderable > 0 && (
-        <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-          {isTopUp
-            ? `Up to ${maxOrderable} more unit${maxOrderable !== 1 ? 's' : ''} available`
-            : `Up to ${maxOrderable} unit${maxOrderable !== 1 ? 's' : ''} available`}
-        </p>
-      )}
-
-      <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-baseline justify-between">
-          <span className="text-xs" style={{ color: 'var(--muted)' }}>
-            {formatUsdcPrice(quotedPPU)}/unit
-          </span>
+      <div className="border-t pt-3 space-y-1" style={{ borderColor: 'var(--border)' }}>
+        {/* Per-unit price + per-token rate */}
+        <div className="flex items-baseline justify-between gap-2 flex-wrap">
+          <div className="text-xs space-y-0.5">
+            <span style={{ color: 'var(--muted)' }}>{formatUsdcPrice(quotedPPU)}/unit</span>
+            <div>
+              <PricePerToken
+                pricePerUnit={quotedPPU} tokensPerUnit={tokensPerUnit}
+                tokenDecimals={goodsDecimals} tokenSymbol={goodsSymbol}
+                marketRate={marketRate}
+                className="text-xs"
+              />
+            </div>
+          </div>
           <span className="text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
             {formatUsdcPrice(quotedTotal)}
           </span>
         </div>
-        <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
-          {goodsDecimals !== undefined
-            ? `You will receive ${formatTokenAmount(tokensReceived, goodsDecimals)} ${goodsSymbol}`
-            : null}
-          {badge === 'gasless' ? ' · one signature, nothing else to pay' : ''}
-        </p>
+
+        {/* Confirmation sentence */}
+        {tokensReceivedStr !== null && (
+          <p className="text-xs" style={{ color: 'var(--subtle)' }}>
+            You pay up to{' '}
+            <span className="font-semibold">{formatUsdcPrice(quotedTotal)}</span>{' '}
+            for{' '}
+            <span className="font-semibold">{tokensReceivedStr} {goodsSymbol}</span>
+            {goodsDecimals !== undefined && (() => {
+              const r = pricePerToken(quotedPPU, tokensPerUnit, goodsDecimals)
+              return r ? ` (${r} per ${goodsSymbol})` : null
+            })()}
+            .{' '}
+            You get the difference back if the price drops.
+            {badge === 'gasless' ? ' One signature, no network fee.' : ''}
+          </p>
+        )}
+
         {breaksTier && (
-          <p className="text-xs mt-1 font-medium" style={{ color: 'var(--accent)' }}>
+          <p className="text-xs font-medium" style={{ color: 'var(--accent)' }}>
             Your order unlocks this price for everyone.
           </p>
         )}

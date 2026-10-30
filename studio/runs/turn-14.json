@@ -1,0 +1,593 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading all files I need before writing anything. Now read SupplierView and DealList to see where per-unit prices appear: Good. Now I have a complete picture. Let me plan precisely what needs to be done:\n\n**1. config.ts** — expand `GOODS_TOKENS` mainnet to 5 tokens; add `marketSymbol` field to `GoodsToken`; `POLL_MARKET_RATES = 5 * 60 * 1000`\n\n**2. utils.ts** — add `pricePerToken(pricePerUnit, tokensPerUnit, decimals)` helper; improve `formatTokenAmount` for large-decimal tokens (cap at 6 significant fractional digits)\n\n**3. New `useMarketRates.ts`** — fetches Coinbase exchange-rates API once on load + every 5 min, maps currency symbols to USD rate\n\n**4. New `PricePerToken.tsx`** — reusable component that shows \"2.26 USDC per EURC\" (or \"x% above/below market\") next to a per-unit price\n\n**5. DealList** — add per-token price to each card\n\n**6. DealRoom** — add per-token price to the price hero / header area\n\n**7. CommitFlow** — order confirmation sentence \"You pay up to X USDC for Y EURC (Z USDC per EURC)\"\n\n**8. SupplierView** — add per-token price next to each tier price as seller types\n\n**9. Quantity: text input** — replace the `Minus`/`Plus`-only picker with a text input + buttons + quick-add buttons (+10, +100, Max) in `CommitFlow.tsx` (`OrderPreviewCard` and the withdraw section)\n\n**10. Remove EURC hardcoding** — `validate()` error message \"EURC per unit\" → \"tokens per unit\"; label `{symbol} per unit`; `useGoodsTokenMeta` fallback for unknown tokens\n\n**11. HomePage** — update copy\n\nLet me set up todos and work through this: Now update utils.ts — add `pricePerToken` and improve `formatTokenAmount` for large decimals: Now write `useMarketRates.ts`: Now write `PricePerToken.tsx` — reusable inline component: Now I need to update `hooks.ts` to ensure `useGoodsTokenMeta` falls back to chain reads for unknown tokens (it probably already does). Let me check: Good — `useGoodsTokenMeta` already does on-chain fallback for any token via `symbol()` and `decimals()`. Now I need to add \"Unverified token\" label for tokens not in `GOODS_TOKENS`. I'll handle that in the display layer by checking against `GOODS_TOKENS` in `DealRoom.tsx`. Actually, the `useGoodsTokenMeta` result is used in `DealRoom` — I should add a `verified` flag. But let me keep it simple: the `DealRoom` will check if the token is in `GOODS_TOKENS` and show \"Unverified token\" in a label if not.\n\nNow I also need the `marketSymbol` for use in the market-rate lookup. I'll compute it in each component that needs it by looking up `GOODS_TOKENS.find(t => t.address.toLowerCase() === goodsToken.toLowerCase())?.marketSymbol`.\n\nNow update `CommitFlow.tsx` — this is the biggest change: The key changes to `CommitFlow.tsx`:\n1. `OrderPreviewCard`: replace `<span>{units}</span>` + `Minus`/`Plus` with a text input + buttons + quick-add (+10, +100, Max)\n2. Add order confirmation sentence to `OrderPreviewCard`\n3. Add `PricePerToken` to the price line in `OrderPreviewCard`\n4. Add `marketRate` prop (looked up from `useMarketRates` in parent)\n5. Withdraw section: same text input instead of pure button picker\n6. Remove any remnant `AlreadyCommitted` handling\n\nI'll edit the key sections rather than rewriting the whole file: Now add market rate lookup in the main component and thread it to `OrderPreviewCard`: Now update the withdraw section to use a text input instead of pure buttons, and default to full (myUnitsN): Now update the withdraw section render — replace `Minus`/`Plus` span with a text input: Also disable the withdraw button when there's an input error: Also update the strand-check block to show the right message (input error is shown above, not here): Now update `OrderPreviewCard` — replace the `<span>{units}</span>` with a text input + quick-add buttons, add the order confirmation sentence, and add `PricePerToken`: I need to import `pricePerToken` and `useState`/`useEffect` into `OrderPreviewCard`. The `useState`/`useEffect` are already imported at the top. `pricePerToken` needs to be added to the utils import: Now pass `marketRate` down to `OrderPreviewCard` in both call sites: Also update the disconnected state `OrderPreviewCard` call: Now update `DealList.tsx` — add per-token price on deal cards. The `DealSummary` needs `tokensPerUnit` and `goodsToken` decimals. Currently `DealSummary` has `goodsToken` address but not `tokensPerUnit`. I need to add that: Add `tokensPerUnit` to `DealSummary` and populate it from the deal data: Populate `tokensPerUnit` in the `deals` useMemo: Now add `useMarketRates` to `DealList` component and pass `deal` data to `DealCard`: Pass `marketRates` to `DealCard`: Update `DealCardProps` and `DealCard` to show per-token price: Add per-token rate lookup and display in the card: Now add the per-token price to the card's price line: Now update `DealRoom.tsx` — add per-token price in the header and mark unverified tokens: Add `useMarketRates` to `DealRoom` and use it in the price hero and goods-info line: Now update the goods-info line in the DealRoom header to show per-token price and \"Unverified token\" badge: Now add `PricePerToken` below the `PriceHero` in the hero card: Now also add `PricePerToken` to the activity list `@` price line: Now update `SupplierView.tsx` — add per-token price next to each tier, remove EURC-specific hardcoding in error messages and labels: Fix EURC-specific error messages in `validate` and `handleApprove`/`handlePost`: Now add `useMarketRates` to the component and show per-token price next to each tier's price input: Add per-token price display inline in the tier row, after the price input: The inline IIFE for market deviation is ugly but avoids a re-import. Actually let me simplify by importing `marketDeviation` from utils instead: Now simplify the inline IIFE to use `marketDeviation`: Now update `HomePage.tsx`: Now look at the complete `utils.ts` to make sure `pricePerToken` and `marketDeviation` are properly exported: Good — both `pricePerToken` and `marketDeviation` are exported from utils. Now read `PricePerToken.tsx` and `useMarketRates.ts` to verify they're complete: Good. Now run lint + typecheck: Two issues:\n1. `CommitFlow.tsx:892` — `setRawInput` called synchronously inside `useEffect` (linter error in the existing `OrderPreviewCard`). I need to see that code.\n2. `SupplierView.tsx:484` — missing `symbol` in `handlePost`'s deps array.\n\nFix both: The `setRawInput(String(units))` in `useEffect` is an error. The right fix: derive `rawInput` by controlling it only from user input events, and when `units` changes from outside (Max click), update via the event path instead. The cleanest lint-safe approach: track whether the input is \"user-driven\" vs \"external-driven\" by using a ref as a guard.\n\nActually the simpler fix is: keep `rawInput` controlled from user input only, and when `units` changes from outside (i.e. `onUnits` was called from a quick button), just let `units` be the \"truth\" — `rawInput` becomes stale until the user types again. We only show `rawInput` in the text box; the actual value used is parsed from `rawInput` when it's valid, or falls back to `units`.\n\nSimplest fix: remove the effect and instead update `rawInput` in the quick-button `onClick` calls directly: Now ensure the quick-add buttons also call `setRawInput` alongside `onUnits`. Let me read that section: The quick buttons already call `setRawInput` directly. Now fix the `symbol` dep in `SupplierView.tsx`: Zero warnings, zero errors. Dev server check: All done, clean lint and types. Here's what landed:\n\n**New files:**\n- `src/swarm/useMarketRates.ts` — fetches Coinbase exchange-rates once on mount and every 5 min while the tab is visible; returns a `Map<marketSymbol, USDperToken>`, silently keeps stale data on failure, never polls while hidden.\n- `src/swarm/PricePerToken.tsx` — reusable inline component. Shows \"2.26 USDC per EURC\" when `tokensPerUnit != 1 whole token`. When a market rate is available, appends \"+8% vs market\" in amber or red for deals priced significantly above market (>5% amber, >15% red). Suppresses the price line when `pricePerUnit` matches exactly 1 whole token (no redundant \"X USDC per token = X USDC per unit\" duplication).\n\n**utils.ts:**\n- `pricePerToken(pricePerUnit, tokensPerUnit, tokenDecimals)` — returns \"2.26 USDC\" using pure bigint arithmetic; no float rounding.\n- `marketDeviation(...)` — returns `{ pct, label, severity }` or null when deviation is under 0.5%.\n- `formatTokenAmount` now caps at 6 significant fractional digits so 18-decimal tokens (WETH) don't show 18-digit strings.\n\n**Per-token price displayed in:**\n- Deal list cards (beside price/unit and fill count)\n- Deal room hero price area and activity list entries\n- SupplierView: under each tier's price input (also shows ±% vs market so sellers can see how their price compares)\n- CommitFlow order preview card\n\n**Other changes:**\n- All EURC-hardcoded error messages replaced with `${symbol}` in SupplierView.\n- Quantity picker in CommitFlow: text input with −/+ buttons and +10, +100, Max quick-add buttons (valid range enforced inline without silent clamps).\n- Withdraw picker: text input with −/+ and \"All\" button; strand-check block only shows when withdrawal is truly blocked, input errors show inline.\n- `GOODS_TOKENS` mainnet: five tokens (EURC, GBPA, MXNB, cirBTC, WETH) each with `marketSymbol`. `POLL_MARKET_RATES = 5 * 60 * 1000`.\n- Unverified token badge in DealRoom header for any token not in `GOODS_TOKENS`.\n- HomePage copy updated.",
+  "todos": [
+    {
+      "id": "todo:config.ts: expand goods_tokens mainnet to 5, add marketsymbol, poll_market_rates:0",
+      "text": "config.ts: expand GOODS_TOKENS mainnet to 5, add marketSymbol, POLL_MARKET_RATES",
+      "status": "done"
+    },
+    {
+      "id": "todo:utils.ts: pricepertoken helper, formattokenamount max-sig-figs for 18-decimal tokens:0",
+      "text": "utils.ts: pricePerToken helper, formatTokenAmount max-sig-figs for 18-decimal tokens",
+      "status": "done"
+    },
+    {
+      "id": "todo:new usemarketrates.ts: coinbase api fetch, 5-min polling, no hidden-tab poll:0",
+      "text": "New useMarketRates.ts: Coinbase API fetch, 5-min polling, no hidden-tab poll",
+      "status": "done"
+    },
+    {
+      "id": "todo:commitflow: text+buttons quantity picker, +10/+100/max quick-add, order sentence, per-token price:0",
+      "text": "CommitFlow: text+buttons quantity picker, +10/+100/Max quick-add, order sentence, per-token price",
+      "status": "done"
+    },
+    {
+      "id": "todo:deallist: per-token price on deal cards:0",
+      "text": "DealList: per-token price on deal cards",
+      "status": "done"
+    },
+    {
+      "id": "todo:dealroom: per-token price in header, sweep eurc hardcoding:0",
+      "text": "DealRoom: per-token price in header, sweep EURC hardcoding",
+      "status": "done"
+    },
+    {
+      "id": "todo:supplierview: per-token price beside each tier, remove eurc hardcoding:0",
+      "text": "SupplierView: per-token price beside each tier, remove EURC hardcoding",
+      "status": "done"
+    },
+    {
+      "id": "todo:homepage: copy update:0",
+      "text": "HomePage: copy update",
+      "status": "done"
+    },
+    {
+      "id": "todo:run tsc + lint, paste output:0",
+      "text": "Run tsc + lint, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/DealList.tsx",
+    "src/swarm/DealRoom.tsx",
+    "src/swarm/HomePage.tsx",
+    "src/swarm/PricePerToken.tsx",
+    "src/swarm/SupplierView.tsx",
+    "src/swarm/config.ts",
+    "src/swarm/useMarketRates.ts",
+    "src/swarm/utils.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import {\n   formatUsdcPrice, txUrl, parseRevertReason,\n   checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn, formatTokenAmount,\n-} from './utils'\n+} from './utils'\n+import { PricePerToken } from './PricePerToken'\n+import { useMarketRates } from './useMarketRates'\n+import { GOODS_TOKENS } from './config'"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function CommitFlow({\n   dealId, clearingPrice, totalUnits, buyerCount, tiers,\n-  maxUnits, maxUnitsPerBuyer, deadline, state, goodsToken: _goodsToken,\n+  maxUnits, maxUnitsPerBuyer, deadline, state, goodsToken,\n   goodsSymbol, goodsDecimals, tokensPerUnit, onCommitted,\n }: Props) {\n-  const { address, isConnected, chainId: walletChain, connector } = useAccount()\n+  const { address, isConnected, chainId: walletChain, connector } = useAccount()\n+  const marketRates = useMarketRates()\n+  const tokenConfig = GOODS_TOKENS.find(t => t.address.toLowerCase() === goodsToken.toLowerCase())"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 15,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── Withdraw state ───────────────────────────────────────────────────────────\n-  const [rawWithdrawUnits, setWithdrawUnits] = useState(1)\n-  const withdrawUnits = myUnitsN > 0 ? Math.min(rawWithdrawUnits, myUnitsN) : 1\n+  const [withdrawInput, setWithdrawInput] = useState('')   // raw text; '' means \"use default = all\"\n+  const withdrawUnitsRaw = withdrawInput === '' ? myUnitsN : parseInt(withdrawInput)\n+  const withdrawUnitsValid = Number.isInteger(withdrawUnitsRaw) && withdrawUnitsRaw > 0 && withdrawUnitsRaw <= myUnitsN\n+  const withdrawUnits  = withdrawUnitsValid ? withdrawUnitsRaw : (myUnitsN > 0 ? myUnitsN : 1)\n   const withdrawReturn = computeWithdrawReturn(myEscrow, withdrawUnits, myUnitsN)\n-\n-  // Keep withdraw slider defaulting to full when units change\n-  useEffect(() => {\n-    if (myUnitsN > 0) setWithdrawUnits(myUnitsN)\n+  const withdrawInputErr = withdrawInput !== '' && !withdrawUnitsValid\n+    ? (parseInt(withdrawInput) <= 0 || withdrawInput.includes('.') ? 'Enter a whole number from 1 to ' + myUnitsN"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 45,
+      "removedLines": 24,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "                 {/* Units to withdraw */}\n-                <div className=\"flex items-center justify-between gap-3\">\n-                  <span className=\"text-xs\" style={{ color: 'var(--muted)' }}>Units to withdraw</span>\n-                  <div className=\"flex items-center gap-2\">\n-                    <button\n-                      onClick={() => setWithdrawUnits(u => Math.max(1, u - 1))}\n-                      disabled={withdrawUnits <= 1}\n-                      className=\"size-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30\"\n+                <div className=\"space-y-1.5\">\n+                  <div className=\"flex items-center justify-between gap-3\">\n+                    <span className=\"text-xs\" style={{ color: 'var(--muted)' }}>Units to withdraw</span>\n+                    <div className=\"flex items-center gap-1.5\">\n+                      <button\n+                        onClick={() => setWithdrawInput(String(Math.max(1, withdrawUnits - 1)))}\n+                        disabled={withdrawUnits <= 1}"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-                {withdrawCheck.blocked ? (\n+                {(withdrawCheck.blocked || !!withdrawInputErr) ? ("
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "                 {(withdrawCheck.blocked || !!withdrawInputErr) ? (\n+                  withdrawCheck.blocked ? (\n                   <div className=\"flex items-start gap-2.5 rounded-xl p-3\"\n                     style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>\n                     <Lock className=\"size-4 shrink-0 mt-0.5\" style={{ color: 'var(--muted)' }} />\n                     <p className=\"text-xs\" style={{ color: 'var(--muted)' }}>{withdrawCheck.reason}</p>\n-                  </div>\n+                  </div>\n+                  ) : null"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 182,
+      "removedLines": 94,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface OrderPreviewProps {\n   units:          number\n   quotedPPU:      bigint\n   quotedTotal:    bigint\n   breaksTier:     boolean\n   goodsSymbol:    string\n   goodsDecimals?: number\n   tokensPerUnit:  bigint"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import {\n   formatUsdcPrice, txUrl, parseRevertReason,\n-  checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn, formatTokenAmount,\n+  checkWouldStrandBuyer, computeOrderTotal, computeWithdrawReturn, formatTokenAmount, pricePerToken,\n } from './utils'"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <OrderPreviewCard\n                   units={orderUnits} quotedPPU={quotedPPU} quotedTotal={quotedTotal}\n                   breaksTier={breaksTier} goodsSymbol={goodsSymbol} goodsDecimals={goodsDecimals}\n                   tokensPerUnit={tokensPerUnit}\n                   maxOrderable={maxOrderable} isTopUp={isCommitted}\n                   onUnits={setOrderUnits}\n                   badge={useGasless ? 'gasless' : undefined}\n-                />\n+                  marketRate={marketRate}"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <OrderPreviewCard\n           units={orderUnits} quotedPPU={quotedPPU} quotedTotal={quotedTotal}\n           breaksTier={breaksTier} goodsSymbol={goodsSymbol} goodsDecimals={goodsDecimals}\n           tokensPerUnit={tokensPerUnit}\n           maxOrderable={maxAddable > 0 ? maxAddable : (remainingStock)} isTopUp={false}\n           onUnits={setOrderUnits}\n           badge={RELAYER_URL ? 'gasless' : undefined}\n-        />\n+          marketRate={marketRate}"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const tokensReceived = BigInt(units) * tokensPerUnit\n-  const [rawInput, setRawInput] = useState(String(units))\n-\n-  // Sync rawInput when units changes from outside (e.g. Max click)\n-  useEffect(() => {\n-    setRawInput(String(units))\n-  }, [units])\n+  const [rawInput, setRawInput] = useState(String(units))"
+    },
+    {
+      "path": "src/swarm/config.ts",
+      "action": "edit",
+      "addedLines": 28,
+      "removedLines": 28,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export interface GoodsToken {\n-  symbol:   string\n-  name:     string\n-  address:  `0x${string}`\n-  decimals: number\n-}\n-\n-/**\n+  symbol:       string\n+  name:         string\n+  address:      `0x${string}`\n+  decimals:     number\n+  /** ISO 4217 / ticker used by the Coinbase exchange-rates API to get USD rate.\n+   *  undefined means no market rate comparison is available for this token. */\n+  marketSymbol?: string"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'\n+import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'\n+import { PricePerToken } from './PricePerToken'\n+import { useMarketRates } from './useMarketRates'\n+import { GOODS_TOKENS } from './config'"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 13,
+      "removedLines": 12,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface DealSummary {\n-  dealId:       bigint\n-  title:        string\n-  goodsToken:   `0x${string}`\n-  tiers:        { minUnits: number; pricePerUnit: bigint }[]\n-  minUnits:     number\n-  maxUnits:     number\n-  deadline:     bigint\n+  dealId:        bigint\n+  title:         string\n+  goodsToken:    `0x${string}`\n+  tokensPerUnit: bigint\n+  tiers:         { minUnits: number; pricePerUnit: bigint }[]\n+  minUnits:      number\n+  maxUnits:      number"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 13,
+      "removedLines": 12,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       return {\n-        dealId:       BigInt(i + 1),\n-        title:        d.title,\n-        goodsToken:   d.goodsToken,\n+        dealId:        BigInt(i + 1),\n+        title:         d.title,\n+        goodsToken:    d.goodsToken,\n+        tokensPerUnit: BigInt(d.tokensPerUnit),\n         tiers,\n-        minUnits:     Number(d.minUnits),\n-        maxUnits:     Number(d.maxUnits),\n-        deadline:     BigInt(d.deadline),\n+        minUnits:      Number(d.minUnits),\n+        maxUnits:      Number(d.maxUnits),"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props) {\n   const { data: dealCountRaw } = useDealCount()\n-  const dealCount = dealCountRaw !== undefined ? Number(dealCountRaw) : 0\n-  const nowSec    = useChainNow()\n+  const dealCount  = dealCountRaw !== undefined ? Number(dealCountRaw) : 0\n+  const nowSec     = useChainNow()\n+  const marketRates = useMarketRates()"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 10,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         {shown.map((deal, idx) => (\n           <DealCard\n             key={deal.dealId.toString()}\n             deal={deal}\n             nowSec={nowSec}\n             onSelect={onSelectDeal}\n             delay={idx * 0.04}\n-          />\n+            marketRates={marketRates}"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface DealCardProps {\n-  deal:     DealSummary\n-  nowSec:   number\n-  onSelect: (id: bigint) => void\n-  delay:    number\n+  deal:        DealSummary\n+  nowSec:      number\n+  onSelect:    (id: bigint) => void\n+  delay:       number\n+  marketRates?: Map<string, number>\n }\n-\n-function DealCard({ deal, nowSec, onSelect, delay }: DealCardProps) {"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " function DealCard({ deal, nowSec, onSelect, delay, marketRates }: DealCardProps) {\n   const secondsLeft  = nowSec > 0 ? Math.max(0, Number(deal.deadline) - nowSec) : undefined\n   const isEnded      = deal.state !== 0 || (nowSec > 0 && secondsLeft === 0)\n-  const fillPct      = deal.maxUnits > 0 ? Math.min(1, deal.totalUnits / deal.maxUnits) : 0\n+  const fillPct      = deal.maxUnits > 0 ? Math.min(1, deal.totalUnits / deal.maxUnits) : 0\n+  const tokenConfig  = GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken.toLowerCase())\n+  const tokenSymbol  = tokenConfig?.symbol ?? '?'\n+  const tokenDecimals = tokenConfig?.decimals\n+  const marketRate   = tokenConfig?.marketSymbol ? marketRates?.get(tokenConfig.marketSymbol) : undefined"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 15,
+      "removedLines": 9,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           {/* Price + units */}\n           <div className=\"flex items-baseline gap-3 mt-1 flex-wrap\">\n             <span className=\"text-base font-bold tabular-nums\" style={{ color: 'var(--accent)' }}>\n               {formatUsdcPrice(deal.clearingPrice)}/unit\n             </span>\n-            <span className=\"text-xs tabular-nums\" style={{ color: 'var(--muted)' }}>\n-              {deal.totalUnits}/{deal.maxUnits} units\n-            </span>\n+            <PricePerToken\n+              pricePerUnit={deal.clearingPrice} tokensPerUnit={deal.tokensPerUnit}\n+              tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol}"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { formatUsdcPrice, formatCountdown, shortAddr, txUrl, formatTokenAmount } from './utils'\n-import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES } from './config'\n+import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES, GOODS_TOKENS } from './config'\n+import { PricePerToken } from './PricePerToken'\n+import { useMarketRates } from './useMarketRates'"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const secondsLeft = useBlockCountdown(deal?.deadline)\n-  const history     = useDealHistory(deal ? dealId : undefined)\n-  const tokenMeta   = useGoodsTokenMeta(deal?.goodsToken)\n+  const secondsLeft  = useBlockCountdown(deal?.deadline)\n+  const history      = useDealHistory(deal ? dealId : undefined)\n+  const tokenMeta    = useGoodsTokenMeta(deal?.goodsToken)\n+  const marketRates  = useMarketRates()\n+  const tokenConfig  = deal ? GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken.toLowerCase()) : undefined\n+  const marketRate   = tokenConfig?.marketSymbol ? marketRates?.get(tokenConfig.marketSymbol) : undefined\n+  const isVerifiedToken = !!tokenConfig\n   const [copied, setCopied] = useState(false)"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        <div className=\"flex items-center gap-1.5 pt-0.5\">\n-          <Package className=\"size-3.5 shrink-0\" style={{ color: 'var(--muted)' }} />\n-          <span className=\"text-xs\" style={{ color: 'var(--muted)' }}>\n-            {tokenMeta?.decimals !== undefined\n-              ? `1 unit = ${formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)} ${symbol}`\n-              : symbol !== '…' ? `1 unit = ? ${symbol}` : null}\n-          </span>\n-        </div>\n+        <div className=\"flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5\">\n+          <div className=\"flex items-center gap-1.5\">\n+            <Package className=\"size-3.5 shrink-0\" style={{ color: 'var(--muted)' }} />\n+            <span className=\"text-xs\" style={{ color: 'var(--muted)' }}>\n+              {tokenMeta?.decimals !== undefined\n+                ? `1 unit = ${formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)} ${symbol}`\n+                : symbol !== '…' ? `1 unit = ? ${symbol}` : null}\n+            </span>"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 12,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <PriceHero price={clearingPrice} loading={dealLoading} />\n-        <div className=\"mt-5 w-full\">\n+        {tokenMeta && (\n+          <div className=\"mt-1 text-sm text-center\">\n+            <PricePerToken\n+              pricePerUnit={clearingPrice} tokensPerUnit={deal.tokensPerUnit}\n+              tokenDecimals={tokenMeta.decimals} tokenSymbol={symbol}\n+              marketRate={marketRate}\n+              className=\"text-sm font-medium\""
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "                     {entry.withdrawn ? (\n                       <span className=\"text-xs\" style={{ color: 'var(--subtle)' }}>left</span>\n                     ) : (\n-                      <span className=\"text-xs tabular-nums\" style={{ color: 'var(--muted)' }}>\n-                        {entry.units} unit{entry.units !== 1 ? 's' : ''}{' '}\n-                        @ {formatUsdcPrice(entry.paidPerUnit)}/unit\n-                      </span>\n-                    )}\n+                      <div className=\"text-xs tabular-nums\" style={{ color: 'var(--muted)' }}>\n+                        <span>{entry.units} unit{entry.units !== 1 ? 's' : ''}{' '}\n+                        @ {formatUsdcPrice(entry.paidPerUnit)}/unit</span>\n+                        <div>\n+                          <PricePerToken"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    a: \"Today every deal sells EURC, Circle's euro stablecoin, paid for in USDC. More tokens are coming soon.\" },\n+    a: \"Deals sell stablecoins and tokens including EURC, GBPA, MXNB, cirBTC, and WETH, paid for in USDC. Every buyer pays the same final price.\" },"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-          Group deals on EURC, Circle&apos;s euro stablecoin. The more people buy, the better everyone&apos;s rate.\n+          Group deals on stablecoins and tokens on Arc. The more people buy, the better everyone&apos;s rate."
+    },
+    {
+      "path": "src/swarm/PricePerToken.tsx",
+      "action": "write",
+      "addedLines": 70,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * PricePerToken — inline rate display for a deal unit price.\n+ *\n+ * Shows \"2.26 USDC per EURC\" next to any per-unit price.\n+ * When a market rate is available, adds \"x% vs market\" in amber or red\n+ * when the deal price is significantly above the market rate.\n+ *\n+ * When tokensPerUnit is exactly 1 whole token (i.e. 10^decimals base units),"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount } from './utils'\n+import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount, pricePerToken } from './utils'\n+import { useMarketRates } from './useMarketRates'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  if (inp.tokensPerUnit <= 0n) return 'EURC per unit must be greater than zero.'\n+  if (inp.tokensPerUnit <= 0n) return 'Tokens per unit must be greater than zero.'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 19,
+      "removedLines": 19,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "     if (tokensPerUnit === null) {\n-      setValidationErr(tokensPerUnitErr ?? 'Invalid EURC per unit.')\n+      setValidationErr(tokensPerUnitErr ?? `Invalid ${symbol} per unit.`)\n       return\n     }\n     const inp: PostInputs = {\n       goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,\n       tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,\n       durationHours, title, description,"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    if (tokensPerUnit === null) { setValidationErr(tokensPerUnitErr ?? 'Invalid EURC per unit.'); return }\n+    if (tokensPerUnit === null) { setValidationErr(tokensPerUnitErr ?? `Invalid ${symbol} per unit.`); return }"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => void }) {\n   const { address, isConnected, chainId: walletChain } = useAccount()\n   const { switchChain } = useSwitchChain()\n-  const wrongChain = isConnected && walletChain !== CHAIN_ID\n-  const chainNow   = useChainNow()\n+  const wrongChain  = isConnected && walletChain !== CHAIN_ID\n+  const chainNow    = useChainNow()\n+  const marketRates = useMarketRates()"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 61,
+      "removedLines": 30,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <div className=\"grid grid-cols-[1fr_1fr_auto] gap-2 px-1\">\n           <span className=\"text-xs\" style={{ color: 'var(--subtle)' }}>From N units</span>\n           <span className=\"text-xs\" style={{ color: 'var(--subtle)' }}>Price/unit (USDC)</span>\n           <span className=\"w-7\" />\n         </div>\n         <div className=\"space-y-2\">\n-          {tiers.map((tier, i) => (\n-            <div key={i} className=\"grid grid-cols-[1fr_1fr_auto] gap-2 items-center\">\n+          {tiers.map((tier, i) => {\n+            const tierPrice = parsePriceToMicro(tier.pricePerUnit)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount, pricePerToken } from './utils'\n+import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount, pricePerToken, marketDeviation } from './utils'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 16,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "                   {mRate !== undefined && tierPrice !== null && tokensPerUnit !== null && (() => {\n-                    const { marketDeviation: md } = { marketDeviation: (p: bigint, t: bigint, d: number, r: number) => {\n-                      const s2 = 10n ** BigInt(d)\n-                      const mu = (p * s2) / t\n-                      const dr = Number(mu) / 1_000_000\n-                      const pct = ((dr - r) / r) * 100\n-                      if (Math.abs(pct) < 0.5) return null\n-                      const lbl = `${pct > 0 ? '+' : ''}${Math.round(pct)}% vs market`\n+                    const dev = marketDeviation(tierPrice, tokensPerUnit, decimals, mRate)\n+                    if (!dev) return null\n+                    const c = dev.severity === 'red' ? 'var(--danger)' : 'var(--warn, #b45309)'\n+                    return <span className=\"text-xs\" style={{ color: c }}>({dev.label})</span>\n+                  })()}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   }, [\n-    goodsAddr, tokensPerUnit, tokensPerUnitErr, decimals,\n+    goodsAddr, tokensPerUnit, tokensPerUnitErr, decimals, symbol,\n     tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,\n     durationHours, title, description, chainNow, writeContract,\n   ])"
+    },
+    {
+      "path": "src/swarm/useMarketRates.ts",
+      "action": "write",
+      "addedLines": 90,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * useMarketRates — fetch USD exchange rates from Coinbase once on mount and\n+ * every POLL_MARKET_RATES ms while the tab is visible.\n+ *\n+ * The Coinbase endpoint is:\n+ *   GET https://api.coinbase.com/v2/exchange-rates?currency=USD\n+ * Response: { data: { currency: \"USD\", rates: { EUR: \"0.924\", BTC: \"0.0000...\", ... } } }\n+ * The values are units of the target currency per 1 USD, so:"
+    },
+    {
+      "path": "src/swarm/utils.ts",
+      "action": "edit",
+      "addedLines": 85,
+      "removedLines": 23,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " /**\n  * Format a token amount in base units to a human-readable string,\n- * trimming trailing zeros. Mirrors the display semantics of formatUnits.\n+ * trimming trailing zeros. Caps at 6 significant fractional digits so\n+ * 18-decimal tokens display sensibly.\n  *\n  * Examples (decimals = 6):\n  *   1_000_000n → \"1\"\n- *   1_500_000n → \"1.5\"\n- *   1_234_567n → \"1.234567\"\n+ *   1_500_000n → \"1.5\""
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

@@ -12,7 +12,9 @@ import {
 import { useDealHistory } from './useDealHistory'
 import { SETTLER_ABI } from './abis'
 import { formatUsdcPrice, formatCountdown, shortAddr, txUrl, formatTokenAmount } from './utils'
-import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES } from './config'
+import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES, GOODS_TOKENS } from './config'
+import { PricePerToken } from './PricePerToken'
+import { useMarketRates } from './useMarketRates'
 
 interface Props { dealId: bigint }
 
@@ -32,9 +34,13 @@ export function DealRoom({ dealId }: Props) {
     nextTier, tierProgress, refetchAll,
   } = useLiveDealState(dealId)
 
-  const secondsLeft = useBlockCountdown(deal?.deadline)
-  const history     = useDealHistory(deal ? dealId : undefined)
-  const tokenMeta   = useGoodsTokenMeta(deal?.goodsToken)
+  const secondsLeft  = useBlockCountdown(deal?.deadline)
+  const history      = useDealHistory(deal ? dealId : undefined)
+  const tokenMeta    = useGoodsTokenMeta(deal?.goodsToken)
+  const marketRates  = useMarketRates()
+  const tokenConfig  = deal ? GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken.toLowerCase()) : undefined
+  const marketRate   = tokenConfig?.marketSymbol ? marketRates?.get(tokenConfig.marketSymbol) : undefined
+  const isVerifiedToken = !!tokenConfig
   const [copied, setCopied] = useState(false)
 
   const handleShare = () => {
@@ -79,13 +85,21 @@ export function DealRoom({ dealId }: Props) {
         {deal.description && (
           <p className="text-sm" style={{ color: 'var(--ink-2)' }}>{deal.description}</p>
         )}
-        <div className="flex items-center gap-1.5 pt-0.5">
-          <Package className="size-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
-          <span className="text-xs" style={{ color: 'var(--muted)' }}>
-            {tokenMeta?.decimals !== undefined
-              ? `1 unit = ${formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)} ${symbol}`
-              : symbol !== '…' ? `1 unit = ? ${symbol}` : null}
-          </span>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
+          <div className="flex items-center gap-1.5">
+            <Package className="size-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>
+              {tokenMeta?.decimals !== undefined
+                ? `1 unit = ${formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)} ${symbol}`
+                : symbol !== '…' ? `1 unit = ? ${symbol}` : null}
+            </span>
+          </div>
+          {!isVerifiedToken && symbol !== '…' && (
+            <span className="text-xs px-1.5 py-0.5 rounded-md"
+              style={{ background: 'rgba(255,160,0,0.12)', color: 'var(--warn, #b45309)' }}>
+              Unverified token
+            </span>
+          )}
         </div>
       </motion.div>
 
@@ -101,6 +115,16 @@ export function DealRoom({ dealId }: Props) {
         {...fadeUp}
       >
         <PriceHero price={clearingPrice} loading={dealLoading} />
+        {tokenMeta && (
+          <div className="mt-1 text-sm text-center">
+            <PricePerToken
+              pricePerUnit={clearingPrice} tokensPerUnit={deal.tokensPerUnit}
+              tokenDecimals={tokenMeta.decimals} tokenSymbol={symbol}
+              marketRate={marketRate}
+              className="text-sm font-medium"
+            />
+          </div>
+        )}
         <div className="mt-5 w-full">
           <TierProgress
             buyerCount={unitCount}
@@ -238,10 +262,18 @@ export function DealRoom({ dealId }: Props) {
                     {entry.withdrawn ? (
                       <span className="text-xs" style={{ color: 'var(--subtle)' }}>left</span>
                     ) : (
-                      <span className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>
-                        {entry.units} unit{entry.units !== 1 ? 's' : ''}{' '}
-                        @ {formatUsdcPrice(entry.paidPerUnit)}/unit
-                      </span>
+                      <div className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>
+                        <span>{entry.units} unit{entry.units !== 1 ? 's' : ''}{' '}
+                        @ {formatUsdcPrice(entry.paidPerUnit)}/unit</span>
+                        <div>
+                          <PricePerToken
+                            pricePerUnit={entry.paidPerUnit} tokensPerUnit={deal.tokensPerUnit}
+                            tokenDecimals={tokenMeta?.decimals} tokenSymbol={symbol}
+                            marketRate={marketRate}
+                            className="text-xs"
+                          />
+                        </div>
+                      </div>
                     )}
                   </div>
                   <ExternalLink className="size-3.5 shrink-0" style={{ color: 'var(--subtle)' }} />

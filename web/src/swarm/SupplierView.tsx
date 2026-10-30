@@ -23,7 +23,8 @@ import { DEAL_FACTORY_ABI, ERC20_ABI } from './abis'
 import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS, POLL_MY_ORDER } from './config'
 import type { GoodsToken } from './config'
 import { useChainNow } from './hooks'
-import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount } from './utils'
+import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount, pricePerToken, marketDeviation } from './utils'
+import { useMarketRates } from './useMarketRates'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 const USDC     = ARC_NETWORK.usdc.address
@@ -134,7 +135,7 @@ function validate(inp: PostInputs, chainNow: number): ValidatedInputs | string {
   const descBytes = byteLengthOf(inp.description)
   if (descBytes > 500)  return `Description is ${descBytes} bytes; maximum is 500.`
 
-  if (inp.tokensPerUnit <= 0n) return 'EURC per unit must be greater than zero.'
+  if (inp.tokensPerUnit <= 0n) return 'Tokens per unit must be greater than zero.'
 
   const minNum = parseInt(inp.minUnits)
   const maxNum = parseInt(inp.maxUnits)
@@ -247,8 +248,9 @@ function TokenPickerCard({ selected, onSelect, balance }: TokenPickerProps) {
 export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => void }) {
   const { address, isConnected, chainId: walletChain } = useAccount()
   const { switchChain } = useSwitchChain()
-  const wrongChain = isConnected && walletChain !== CHAIN_ID
-  const chainNow   = useChainNow()
+  const wrongChain  = isConnected && walletChain !== CHAIN_ID
+  const chainNow    = useChainNow()
+  const marketRates = useMarketRates()
 
   // ── Form state ───────────────────────────────────────────────────────────
   const [selectedToken,    setSelectedToken]    = useState<GoodsToken>(GOODS_TOKENS[0])
@@ -406,7 +408,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     setValidationErr(null)
     setErrMsg('')
     if (tokensPerUnit === null) {
-      setValidationErr(tokensPerUnitErr ?? 'Invalid EURC per unit.')
+      setValidationErr(tokensPerUnitErr ?? `Invalid ${symbol} per unit.`)
       return
     }
     const inp: PostInputs = {
@@ -447,7 +449,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   // ── Step 2: Post deal ────────────────────────────────────────────────────
   const handlePost = useCallback(() => {
     setErrMsg('')
-    if (tokensPerUnit === null) { setValidationErr(tokensPerUnitErr ?? 'Invalid EURC per unit.'); return }
+    if (tokensPerUnit === null) { setValidationErr(tokensPerUnitErr ?? `Invalid ${symbol} per unit.`); return }
     const inp: PostInputs = {
       goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,
       tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,
@@ -480,7 +482,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       }
     )
   }, [
-    goodsAddr, tokensPerUnit, tokensPerUnitErr, decimals,
+    goodsAddr, tokensPerUnit, tokensPerUnitErr, decimals, symbol,
     tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,
     durationHours, title, description, chainNow, writeContract,
   ])
@@ -611,29 +613,50 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
           <span className="w-7" />
         </div>
         <div className="space-y-2">
-          {tiers.map((tier, i) => (
-            <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-              <input type="number" min="1"
-                value={tier.minUnits}
-                onChange={e => updateTier(i, 'minUnits', e.target.value)}
-                placeholder="10"
-                className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
-                style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
-              />
-              <input type="number" min="0.000001" max="5" step="0.01"
-                value={tier.pricePerUnit}
-                onChange={e => updateTier(i, 'pricePerUnit', e.target.value)}
-                placeholder="1.00"
-                className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
-                style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
-              />
-              <button onClick={() => removeTier(i)} disabled={tiers.length <= 1}
-                className="size-7 flex items-center justify-center rounded-lg disabled:opacity-20 hover:opacity-60"
-                style={{ color: 'var(--danger)' }}>
-                <Trash2 className="size-3.5" />
-              </button>
+          {tiers.map((tier, i) => {
+            const tierPrice = parsePriceToMicro(tier.pricePerUnit)
+            const tierPPT   = tierPrice !== null && tokensPerUnit !== null
+              ? pricePerToken(tierPrice, tokensPerUnit, decimals)
+              : null
+            const mSym = selectedToken.marketSymbol
+            const mRate = mSym ? marketRates?.get(mSym) : undefined
+            return (
+            <div key={i} className="space-y-0.5">
+              <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                <input type="number" min="1"
+                  value={tier.minUnits}
+                  onChange={e => updateTier(i, 'minUnits', e.target.value)}
+                  placeholder="10"
+                  className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
+                  style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+                />
+                <input type="number" min="0.000001" max="5" step="0.01"
+                  value={tier.pricePerUnit}
+                  onChange={e => updateTier(i, 'pricePerUnit', e.target.value)}
+                  placeholder="1.00"
+                  className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
+                  style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+                />
+                <button onClick={() => removeTier(i)} disabled={tiers.length <= 1}
+                  className="size-7 flex items-center justify-center rounded-lg disabled:opacity-20 hover:opacity-60"
+                  style={{ color: 'var(--danger)' }}>
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+              {tierPPT && (
+                <div className="flex items-center gap-2 px-1">
+                  <span className="text-xs" style={{ color: 'var(--muted)' }}>{tierPPT} per {symbol}</span>
+                  {mRate !== undefined && tierPrice !== null && tokensPerUnit !== null && (() => {
+                    const dev = marketDeviation(tierPrice, tokensPerUnit, decimals, mRate)
+                    if (!dev) return null
+                    const c = dev.severity === 'red' ? 'var(--danger)' : 'var(--warn, #b45309)'
+                    return <span className="text-xs" style={{ color: c }}>({dev.label})</span>
+                  })()}
+                </div>
+              )}
             </div>
-          ))}
+            )
+          })}
         </div>
 
         {/* Curve chart */}

@@ -17,6 +17,9 @@ import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'
 import { useDealCount, useChainNow } from './hooks'
 import { POLL_DEAL_ROOM, POLL_LIST } from './config'
 import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'
+import { PricePerToken } from './PricePerToken'
+import { useMarketRates } from './useMarketRates'
+import { GOODS_TOKENS } from './config'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 
@@ -28,22 +31,24 @@ interface Props {
 }
 
 interface DealSummary {
-  dealId:       bigint
-  title:        string
-  goodsToken:   `0x${string}`
-  tiers:        { minUnits: number; pricePerUnit: bigint }[]
-  minUnits:     number
-  maxUnits:     number
-  deadline:     bigint
-  state:        number
-  totalUnits:   number
-  clearingPrice:bigint
+  dealId:        bigint
+  title:         string
+  goodsToken:    `0x${string}`
+  tokensPerUnit: bigint
+  tiers:         { minUnits: number; pricePerUnit: bigint }[]
+  minUnits:      number
+  maxUnits:      number
+  deadline:      bigint
+  state:         number
+  totalUnits:    number
+  clearingPrice: bigint
 }
 
 export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props) {
   const { data: dealCountRaw } = useDealCount()
-  const dealCount = dealCountRaw !== undefined ? Number(dealCountRaw) : 0
-  const nowSec    = useChainNow()
+  const dealCount  = dealCountRaw !== undefined ? Number(dealCountRaw) : 0
+  const nowSec     = useChainNow()
+  const marketRates = useMarketRates()
 
   // Build batched getDeal calls for IDs 1..dealCount
   const dealCalls = useMemo(() =>
@@ -92,14 +97,15 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
       const totalUnits    = totalUnitsRaw !== undefined ? Number(totalUnitsRaw) : 0
       const clearingPrice = computePriceAt(tiers, totalUnits)
       return {
-        dealId:       BigInt(i + 1),
-        title:        d.title,
-        goodsToken:   d.goodsToken,
+        dealId:        BigInt(i + 1),
+        title:         d.title,
+        goodsToken:    d.goodsToken,
+        tokensPerUnit: BigInt(d.tokensPerUnit),
         tiers,
-        minUnits:     Number(d.minUnits),
-        maxUnits:     Number(d.maxUnits),
-        deadline:     BigInt(d.deadline),
-        state:        Number(d.state),
+        minUnits:      Number(d.minUnits),
+        maxUnits:      Number(d.maxUnits),
+        deadline:      BigInt(d.deadline),
+        state:         Number(d.state),
         totalUnits,
         clearingPrice,
       }
@@ -194,6 +200,7 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
             nowSec={nowSec}
             onSelect={onSelectDeal}
             delay={idx * 0.04}
+            marketRates={marketRates}
           />
         ))}
       </div>
@@ -204,16 +211,21 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
 // ── Deal card ─────────────────────────────────────────────────────────────────
 
 interface DealCardProps {
-  deal:     DealSummary
-  nowSec:   number
-  onSelect: (id: bigint) => void
-  delay:    number
+  deal:        DealSummary
+  nowSec:      number
+  onSelect:    (id: bigint) => void
+  delay:       number
+  marketRates?: Map<string, number>
 }
 
-function DealCard({ deal, nowSec, onSelect, delay }: DealCardProps) {
+function DealCard({ deal, nowSec, onSelect, delay, marketRates }: DealCardProps) {
   const secondsLeft  = nowSec > 0 ? Math.max(0, Number(deal.deadline) - nowSec) : undefined
   const isEnded      = deal.state !== 0 || (nowSec > 0 && secondsLeft === 0)
   const fillPct      = deal.maxUnits > 0 ? Math.min(1, deal.totalUnits / deal.maxUnits) : 0
+  const tokenConfig  = GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken.toLowerCase())
+  const tokenSymbol  = tokenConfig?.symbol ?? '?'
+  const tokenDecimals = tokenConfig?.decimals
+  const marketRate   = tokenConfig?.marketSymbol ? marketRates?.get(tokenConfig.marketSymbol) : undefined
   const urgent       = secondsLeft !== undefined && secondsLeft < 3600 && !isEnded
 
   // Next tier hint
@@ -254,6 +266,12 @@ function DealCard({ deal, nowSec, onSelect, delay }: DealCardProps) {
             <span className="text-base font-bold tabular-nums" style={{ color: 'var(--accent)' }}>
               {formatUsdcPrice(deal.clearingPrice)}/unit
             </span>
+            <PricePerToken
+              pricePerUnit={deal.clearingPrice} tokensPerUnit={deal.tokensPerUnit}
+              tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol}
+              marketRate={marketRate}
+              className="text-xs"
+            />
             <span className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>
               {deal.totalUnits}/{deal.maxUnits} units
             </span>
