@@ -89,6 +89,32 @@ function parseTokenAmount(str: string, decimals: number): bigint | null {
   }
 }
 
+/**
+ * Given a token's decimals and its current USD market rate, suggest the
+ * largest "round amount" (from a fixed candidate list) whose value is at most $5.
+ * Returns the suggestion as a human-readable string (e.g. "0.001").
+ * Returns "1" when the market rate is unknown or the token value ≤ $5 already.
+ */
+const UNIT_CANDIDATES = [
+  1, 0.5, 0.1, 0.05, 0.01, 0.005, 0.001, 0.0005, 0.0001,
+  0.00005, 0.00001, 0.000005, 0.000001,
+]
+
+function suggestTokensPerUnit(decimals: number, usdPerToken: number | undefined): string {
+  if (usdPerToken === undefined || usdPerToken <= 0) return '1'
+  // If one whole token is already ≤ $5, use 1.
+  if (usdPerToken <= 5) return '1'
+  // Find the largest candidate that fits within $5 and respects decimals.
+  for (const c of UNIT_CANDIDATES) {
+    if (usdPerToken * c <= 5) {
+      // Check it has no more decimal places than the token allows.
+      const decimalPlaces = c.toString().split('.')[1]?.length ?? 0
+      if (decimalPlaces <= decimals) return c.toString()
+    }
+  }
+  return UNIT_CANDIDATES[UNIT_CANDIDATES.length - 1].toString()
+}
+
 /** Format a closing-time duration in plain language, e.g. "30 minutes", "3 days 2 hours". */
 function formatDuration(hours: number): string {
   if (!Number.isFinite(hours) || hours <= 0) return ''
@@ -176,7 +202,7 @@ function validate(inp: PostInputs, chainNow: number): ValidatedInputs | string {
     if (!Number.isFinite(pr) || pr <= 0) return tiers[i].pricePerUnit === ''
       ? 'Set a price for every tier.'
       : `Tier ${i + 1}: price must be greater than zero.`
-    if (BigInt(Math.round(pr * 1_000_000)) > MAX_PRICE_USDC) return `Tier ${i + 1}: price exceeds the $5 cap.`
+    if (BigInt(Math.round(pr * 1_000_000)) > MAX_PRICE_USDC) return `Tier ${i + 1}: price exceeds the $5 cap. One unit would cost more than $5. Use a smaller unit, for example ${suggestTokensPerUnit(inp.tokenDecimals, pr)} tokens per unit.`
     if (i > 0 && mu <= prevMin)  return `Tier ${i + 1}: min units must be strictly ascending.`
     if (i > 0 && pr >= prevPrice) return `Tier ${i + 1}: price must be strictly descending.`
     prevMin = mu; prevPrice = pr
@@ -476,6 +502,8 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   // ── Form state ───────────────────────────────────────────────────────────
   const [selectedToken,    setSelectedToken]    = useState<AnyToken>(GOODS_TOKENS[0])
   const [tokensPerUnitStr, setTokensPerUnitStr] = useState('1')
+  // Whether the seller manually edited the tokensPerUnit field.
+  const tpuEditedRef = useRef(false)
   const [tiers,            setTiers]            = useState<TierInput[]>(defaultTiers)
   const [minUnits,         setMinUnits]         = useState('1')
   const [maxUnits,         setMaxUnits]         = useState('50')
@@ -494,6 +522,17 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   const [errMsg,        setErrMsg]        = useState('')
   const [approveTxHash, setApproveTxHash] = useState<`0x${string}` | undefined>()
   const [postTxHash,    setPostTxHash]    = useState<`0x${string}` | undefined>()
+
+  // ── Auto-suggest tokensPerUnit when token or market rate changes ─────────
+  // Only updates if the seller has not manually edited the field.
+  const mSymForEffect = (selectedToken).marketSymbol
+  const mRateForEffect = mSymForEffect ? marketRates?.get(mSymForEffect) : undefined
+  useEffect(() => {
+    if (tpuEditedRef.current) return
+    const suggestion = suggestTokensPerUnit(selectedToken.decimals, mRateForEffect)
+    setTokensPerUnitStr(suggestion)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedToken.address, mRateForEffect])
 
   // ── Token reads ──────────────────────────────────────────────────────────
   const goodsAddr = selectedToken.address
@@ -604,10 +643,33 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     ? formatTokenAmount(stockAmount, decimals)
     : null
 
+  // ── Per-token price mode ─────────────────────────────────────────────────
+  // When tokensPerUnit is not exactly 1 whole token, sellers enter prices per
+  // whole token and we convert to per-unit for the contract.
+  const oneWholeToken = decimals <= 77 ? 10n ** BigInt(decimals) : null
+  const isMultiUnit   = tokensPerUnit !== null && oneWholeToken !== null && tokensPerUnit !== oneWholeToken
+
+  /**
+   * Convert a per-token price string to a per-unit price bigint (micro-USDC),
+   * rounded down. Returns null if the input is invalid.
+   */
+  const perTokenToPerUnit = (perTokenStr: string): bigint | null => {
+    if (!isMultiUnit || tokensPerUnit === null || oneWholeToken === null) {
+      return parsePriceToMicro(perTokenStr)
+    }
+    const perToken = parseFloat(perTokenStr)
+    if (!Number.isFinite(perToken) || perToken <= 0) return null
+    // perUnit = perToken × (tokensPerUnit / 10^decimals)
+    const scale = Number(oneWholeToken)
+    const perUnit = perToken * (Number(tokensPerUnit) / scale)
+    if (!Number.isFinite(perUnit) || perUnit <= 0) return null
+    return BigInt(Math.floor(perUnit * 1_000_000))
+  }
+
   // ── Tier chart ───────────────────────────────────────────────────────────
   const parsedTiers = tiers.map(t => ({
     minUnits:     parseInt(t.minUnits) || 0,
-    pricePerUnit: parsePriceToMicro(t.pricePerUnit) ?? 0n,
+    pricePerUnit: (isMultiUnit ? perTokenToPerUnit(t.pricePerUnit) : parsePriceToMicro(t.pricePerUnit)) ?? 0n,
   })).filter(t => t.minUnits > 0 && t.pricePerUnit > 0n)
 
   const chartMax    = Math.max(...parsedTiers.map(t => t.minUnits), effectiveMaxUnitsNum, 1)
@@ -631,19 +693,27 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   const mUsdPerToken = mSym ? marketRates?.get(mSym) : undefined
 
   /**
-   * Compute the USDC price per unit corresponding to a given USD/token market
-   * rate, rounded to 2 dp (or 4 dp when the value is < $1 to keep tiers distinct).
+   * Compute the "market price to fill" string:
+   * - In single-unit mode (1 unit = 1 token): price per unit = price per token.
+   * - In multi-unit mode: price per whole token (what the seller enters).
+   * Rounded to 2 dp (4 dp when < $1).
    */
   const marketPricePerUnit = useMemo((): string | null => {
-    if (mUsdPerToken === undefined || !tokensPerUnit || tokensPerUnit === 0n) return null
-    // USD per token × tokens per unit (in whole-token units) = USD per unit
+    if (mUsdPerToken === undefined) return null
+    if (isMultiUnit) {
+      // Seller enters price per whole token; market price is simply mUsdPerToken.
+      if (mUsdPerToken <= 0) return null
+      const dp = mUsdPerToken < 1 ? 4 : 2
+      return mUsdPerToken.toFixed(dp)
+    }
+    if (!tokensPerUnit || tokensPerUnit === 0n) return null
     const scale = 10 ** decimals
     const tokensWhole = Number(tokensPerUnit) / scale
     const usdPerUnit  = mUsdPerToken * tokensWhole
     if (usdPerUnit <= 0) return null
     const dp = usdPerUnit < 1 ? 4 : 2
     return usdPerUnit.toFixed(dp)
-  }, [mUsdPerToken, tokensPerUnit, decimals])
+  }, [mUsdPerToken, tokensPerUnit, decimals, isMultiUnit])
 
   /**
    * Fill all tier prices from the market rate.
@@ -711,6 +781,17 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     ? `Closes in ${formatDuration(hoursNum)}`
     : ''
 
+  // Convert tier price strings to per-unit strings for validation (multi-unit mode).
+  const tiersForValidation = useMemo((): TierInput[] => {
+    if (!isMultiUnit) return tiers
+    return tiers.map(t => {
+      const pu = perTokenToPerUnit(t.pricePerUnit)
+      return { ...t, pricePerUnit: pu !== null ? (Number(pu) / 1_000_000).toFixed(6) : t.pricePerUnit }
+    })
+  // perTokenToPerUnit is a stable closure derived from component state
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tiers, isMultiUnit, tokensPerUnit, decimals])
+
   // ── Step 1: Approve ──────────────────────────────────────────────────────
   const handleApprove = useCallback(() => {
     setValidationErr(null)
@@ -721,7 +802,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     }
     const inp: PostInputs = {
       goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,
-      tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,
+      tiers: tiersForValidation, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,
       durationHours, title, description,
     }
     const result = validate(inp, chainNow)
@@ -749,7 +830,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     )
   }, [
     goodsAddr, tokensPerUnit, tokensPerUnitErr, tokensPerUnitStr, decimals,
-    tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,
+    tiersForValidation, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,
     durationHours, title, description, chainNow,
     overBudget, maxAffordable, symbol, writeContract,
   ])
@@ -760,7 +841,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     if (tokensPerUnit === null) { setValidationErr(tokensPerUnitErr ?? `Invalid ${symbol} per unit.`); return }
     const inp: PostInputs = {
       goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,
-      tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,
+      tiers: tiersForValidation, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,
       durationHours, title, description,
     }
     const result = validate(inp, chainNow)
@@ -791,7 +872,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     )
   }, [
     goodsAddr, tokensPerUnit, tokensPerUnitErr, decimals, symbol,
-    tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,
+    tiersForValidation, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,
     durationHours, title, description, chainNow, writeContract,
   ])
 
@@ -911,7 +992,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       {/* ── Token picker ──────────────────────────────────────────────────── */}
       <TokenPickerDropdown
         selected={selectedToken}
-        onSelect={t => { setSelectedToken(t); setStockEdited(false) }}
+        onSelect={t => { setSelectedToken(t); setStockEdited(false); tpuEditedRef.current = false }}
         balances={allBalancesWithCustom}
         walletAddr={address}
       />
@@ -949,7 +1030,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
           <input
             type="number" min="0.000001" step="any"
             value={tokensPerUnitStr}
-            onChange={e => setTokensPerUnitStr(e.target.value)}
+            onChange={e => { tpuEditedRef.current = true; setTokensPerUnitStr(e.target.value) }}
             placeholder="1"
             className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none transition-colors"
             style={{ background: 'var(--surface-muted)', border: `1px solid ${tokensPerUnitErr ? 'var(--danger)' : 'var(--border)'}`, color: 'var(--ink)' }}
@@ -1035,14 +1116,22 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         )}
         <div className="grid grid-cols-[1fr_1fr_auto] gap-2 px-1">
           <span className="text-xs" style={{ color: 'var(--subtle)' }}>From N units</span>
-          <span className="text-xs" style={{ color: 'var(--subtle)' }}>Price/unit (USDC)</span>
+          <span className="text-xs" style={{ color: 'var(--subtle)' }}>
+            {isMultiUnit ? `Price per ${symbol} (USDC)` : 'Price/unit (USDC)'}
+          </span>
           <span className="w-7" />
         </div>
         <div className="space-y-2">
           {tiers.map((tier, i) => {
-            const tierPrice = parsePriceToMicro(tier.pricePerUnit)
-            const tierPPT   = tierPrice !== null && tokensPerUnit !== null
-              ? pricePerToken(tierPrice, tokensPerUnit, decimals)
+            // In multi-unit mode the input is per-token; compute per-unit for display.
+            const tierPricePerUnit = isMultiUnit
+              ? perTokenToPerUnit(tier.pricePerUnit)
+              : parsePriceToMicro(tier.pricePerUnit)
+            const tierPriceAsPerToken = isMultiUnit
+              ? parsePriceToMicro(tier.pricePerUnit)  // raw per-token micro
+              : tierPricePerUnit
+            const tierPPT = tierPricePerUnit !== null && tokensPerUnit !== null && !isMultiUnit
+              ? pricePerToken(tierPricePerUnit, tokensPerUnit, decimals)
               : null
             return (
             <div key={i} className="space-y-1">
@@ -1054,10 +1143,10 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
                   className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
                   style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
                 />
-                <input type="number" min="0.000001" max="5" step="0.01"
+                <input type="number" min="0.000001" step="0.0001"
                   value={tier.pricePerUnit}
                   onChange={e => updateTier(i, 'pricePerUnit', e.target.value)}
-                  placeholder="e.g. 1.12"
+                  placeholder={isMultiUnit ? `e.g. ${mUsdPerToken ? mUsdPerToken.toFixed(2) : '2200'}` : 'e.g. 1.12'}
                   className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
                   style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
                 />
@@ -1067,13 +1156,24 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
                   <Trash2 className="size-3.5" />
                 </button>
               </div>
-              {/* Per-token rate + market deviation + "Set to market" */}
+              {/* Per-unit equivalent (multi-unit mode) + market deviation + "Set to market" */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1">
-                {tierPPT && (
+                {isMultiUnit && tierPricePerUnit !== null && (
+                  <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                    = {formatUsdcPrice(tierPricePerUnit)}/unit
+                  </span>
+                )}
+                {!isMultiUnit && tierPPT && (
                   <span className="text-xs" style={{ color: 'var(--muted)' }}>{tierPPT} per {symbol}</span>
                 )}
-                {tierPPT && mUsdPerToken !== undefined && tierPrice !== null && tokensPerUnit !== null && (() => {
-                  const dev = marketDeviation(tierPrice, tokensPerUnit, decimals, mUsdPerToken)
+                {mUsdPerToken !== undefined && tierPriceAsPerToken !== null && tokensPerUnit !== null && (() => {
+                  // Deviation is always in per-token space for comparison.
+                  const refPrice = isMultiUnit
+                    ? tierPriceAsPerToken  // per-token micro-USDC
+                    : tierPricePerUnit     // per-unit micro-USDC (same as per-token when 1:1)
+                  if (refPrice === null) return null
+                  const refTpu = isMultiUnit ? oneWholeToken ?? tokensPerUnit : tokensPerUnit
+                  const dev = marketDeviation(refPrice, refTpu, decimals, mUsdPerToken)
                   if (!dev) return null
                   const c = dev.severity === 'red' ? 'var(--danger)' : 'var(--warn, #b45309)'
                   return <span className="text-xs" style={{ color: c }}>({dev.label})</span>

@@ -15,6 +15,7 @@ import { formatUsdcPrice, formatCountdown, shortAddr, txUrl, formatTokenAmount }
 import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES, GOODS_TOKENS } from './config'
 import { PricePerToken } from './PricePerToken'
 import { useMarketRates } from './useMarketRates'
+import { AddNetworkButton } from './CommitFlow'
 
 interface Props { dealId: bigint }
 
@@ -74,35 +75,9 @@ export function DealRoom({ dealId }: Props) {
   const symbol      = tokenMeta?.symbol ?? '…'
   const recentHistory = history.slice(0, 12)
 
-  // ── Two-column layout from lg, single column below ───────────────────────
+  // ── Left column ──────────────────────────────────────────────────────────
   const leftCol = (
-    <div className="space-y-5">
-      {/* Title + goods info */}
-      <motion.div className="space-y-1" {...fadeUp}>
-        <h1 className="text-2xl font-bold leading-tight" style={{ color: 'var(--ink)' }}>
-          {deal.title}
-        </h1>
-        {deal.description && (
-          <p className="text-sm" style={{ color: 'var(--ink-2)' }}>{deal.description}</p>
-        )}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
-          <div className="flex items-center gap-1.5">
-            <Package className="size-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
-            <span className="text-xs" style={{ color: 'var(--muted)' }}>
-              {tokenMeta?.decimals !== undefined
-                ? `1 unit = ${formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)} ${symbol}`
-                : symbol !== '…' ? `1 unit = ? ${symbol}` : null}
-            </span>
-          </div>
-          {!isVerifiedToken && symbol !== '…' && (
-            <span className="text-xs px-1.5 py-0.5 rounded-md"
-              style={{ background: 'rgba(255,160,0,0.12)', color: 'var(--warn, #b45309)' }}>
-              Unverified token
-            </span>
-          )}
-        </div>
-      </motion.div>
-
+    <div className="space-y-5 min-w-0">
       {/* Hero price */}
       <motion.div
         className="rounded-3xl p-6 flex flex-col items-center"
@@ -203,10 +178,15 @@ export function DealRoom({ dealId }: Props) {
     </div>
   )
 
-  const rightCol = (
-    <div className="space-y-4">
-      {/* Commit / Withdraw */}
-      <motion.div {...fadeUp} transition={{ ...fadeUp.transition, delay: 0.08 }}>
+
+
+  // ── Unified right order card ─────────────────────────────────────────────
+  // CommitFlow + gas-toggle link + add-network + share footer, all in one card.
+  const rightCard = (
+    <div className="rounded-3xl overflow-hidden"
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      {/* CommitFlow fills the main card area */}
+      <div className="p-4">
         <CommitFlow
           dealId={dealId} clearingPrice={clearingPrice} totalUnits={unitCount}
           buyerCount={count} tiers={deal.tiers} maxUnits={deal.maxUnits}
@@ -215,47 +195,82 @@ export function DealRoom({ dealId }: Props) {
           goodsSymbol={symbol} goodsDecimals={tokenMeta?.decimals}
           tokensPerUnit={deal.tokensPerUnit} onCommitted={refetchAll}
         />
-      </motion.div>
+      </div>
 
-      {/* Share */}
+      {/* Thin divider then secondary buttons */}
+      <div className="border-t px-4 py-3 flex items-center gap-3 flex-wrap"
+        style={{ borderColor: 'var(--border)' }}>
+        <AddNetworkButton />
+      </div>
+
+      {/* Share footer */}
       {shareLabel && deal.state === 0 && (
-        <motion.div {...fadeUp} transition={{ ...fadeUp.transition, delay: 0.1 }}>
+        <div className="border-t px-4 py-3 flex items-center gap-3"
+          style={{ borderColor: 'var(--border)' }}>
           <button onClick={handleShare}
-            className="w-full rounded-2xl px-4 py-3 flex items-center gap-3 text-left transition-all hover:scale-[1.01] active:scale-[0.99]"
-            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            className="flex-1 flex items-center gap-2 text-sm text-left transition-opacity hover:opacity-70"
+            style={{ color: 'var(--ink-2)' }}>
             {copied
               ? <Check className="size-4 shrink-0" style={{ color: 'var(--success)' }} />
               : <Share2 className="size-4 shrink-0" style={{ color: 'var(--muted)' }} />}
-            <span className="text-sm flex-1" style={{ color: 'var(--ink-2)' }}>
-              {copied ? 'Link copied!' : shareLabel}
+            <span className="flex-1 text-xs" style={{ color: copied ? 'var(--success)' : 'var(--muted)' }}>
+              {copied ? 'Link copied.' : shareLabel}
             </span>
             {!copied && <Copy className="size-3.5 shrink-0" style={{ color: 'var(--subtle)' }} />}
           </button>
-        </motion.div>
-      )}
-
-      {/* Settle / Refund */}
-      {deal.state === 0 && secondsLeft !== undefined && secondsLeft === 0 && (
-        <SettleOrRefundPanel dealId={dealId} totalUnits={unitCount} minUnits={deal.minUnits}
-          goodsToken={deal.goodsToken} goodsSymbol={symbol} goodsDecimals={tokenMeta?.decimals}
-          onDone={refetchAll} />
-      )}
-
-      {/* Settled / refunded — claim */}
-      {(deal.state === 1 || deal.state === 2) && (
-        <ClaimPanel goodsToken={deal.goodsToken} goodsSymbol={symbol}
-          goodsDecimals={tokenMeta?.decimals} onDone={refetchAll} />
+        </div>
       )}
     </div>
   )
 
   return (
-    <div className="px-4 pt-5 pb-10">
-      {/* Two-column from lg */}
-      <div className="lg:grid lg:grid-cols-[1fr_380px] lg:gap-8 lg:items-start">
+    <div className="px-4 pb-10">
+
+      {/* Full-width header row */}
+      <motion.div className="pt-5 pb-4 space-y-1" {...fadeUp}>
+        <h1 className="text-2xl font-bold leading-tight" style={{ color: 'var(--ink)' }}>
+          {deal.title}
+        </h1>
+        {deal.description && (
+          <p className="text-sm" style={{ color: 'var(--ink-2)' }}>{deal.description}</p>
+        )}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
+          <div className="flex items-center gap-1.5">
+            <Package className="size-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>
+              {tokenMeta?.decimals !== undefined
+                ? `1 unit = ${formatTokenAmount(deal.tokensPerUnit, tokenMeta.decimals)} ${symbol}`
+                : symbol !== '…' ? `1 unit = ? ${symbol}` : null}
+            </span>
+          </div>
+          {!isVerifiedToken && symbol !== '…' && (
+            <span className="text-xs px-1.5 py-0.5 rounded-md"
+              style={{ background: 'rgba(255,160,0,0.12)', color: 'var(--warn, #b45309)' }}>
+              Unverified token
+            </span>
+          )}
+        </div>
+      </motion.div>
+
+      {/* Two-column from lg — both columns start at the same top edge */}
+      <div className="lg:grid lg:grid-cols-[1fr_380px] lg:gap-5 lg:items-start">
         {leftCol}
         <div className="mt-5 lg:mt-0 lg:sticky lg:top-20">
-          {rightCol}
+          {/* Settle / Refund panel (shown above the order card when ready to settle) */}
+          {deal.state === 0 && secondsLeft !== undefined && secondsLeft === 0 && (
+            <div className="mb-5">
+              <SettleOrRefundPanel dealId={dealId} totalUnits={unitCount} minUnits={deal.minUnits}
+                goodsToken={deal.goodsToken} goodsSymbol={symbol} goodsDecimals={tokenMeta?.decimals}
+                onDone={refetchAll} />
+            </div>
+          )}
+          {(deal.state === 1 || deal.state === 2) && (
+            <div className="mb-5">
+              <ClaimPanel goodsToken={deal.goodsToken} goodsSymbol={symbol}
+                goodsDecimals={tokenMeta?.decimals} onDone={refetchAll} />
+            </div>
+          )}
+          {rightCard}
         </div>
       </div>
     </div>

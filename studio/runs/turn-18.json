@@ -1,0 +1,552 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading all the files I need to understand before touching anything. Now read App.tsx and theme.ts to understand the current theme state, and CommitFlow to understand the buyer-side order panel: Now I have full visibility. Also read the theme file: Now I have everything. Let me set up the todo list and work through all four items systematically. **Step 0: sync workspace — delete home/, TierCurveEditor, strip SupplierView, revert theme to two-state.** Strip the TierCurveEditor import and usage block from SupplierView: Now restore the two-state theme toggle in App.tsx. Replace the three-way pill with a simple sun/moon icon button: Step 0 done. Now **Step 1: smart tokensPerUnit auto-suggest + per-token price input on sell page + buyer-side token display.**\n\nThe key logic for auto-suggest: when a token with a market rate is selected, compute the largest \"round amount\" from a candidate list whose value at market rate is ≤ $5. For EURC/GBPA (≈$1) that's 1; for MXNB (≈$0.053) that's 50 (50 × $0.053 ≈ $2.65); for WETH (≈$2200) that's 0.001; for cirBTC (≈$70k) that's 0.00001.\n\nThe tier price inputs will show \"Price per TOKEN\" (not per unit) when `tokensPerUnit ≠ 1 whole token`. The value the seller enters is per-token; we convert to per-unit for the contract. The stock/min/max fields also flip to token amounts.\n\nThis is a significant change to SupplierView. I'll do it in targeted edits rather than a full rewrite: Add the `suggestTokensPerUnit` helper and integrate it. I'll add it after the existing helpers in SupplierView, then wire the auto-suggest and the per-token price input mode: Now wire the auto-suggest: when the token changes, if the seller has not manually edited `tokensPerUnitStr`, update it. Add a `tpuEdited` ref to track manual edits: Now add an effect that auto-suggests `tokensPerUnit` when the token or market rate changes (but not when the seller has manually edited): Now mark `tpuEditedRef` when the seller edits the field, and also reset it when they change token: Now mark the ref when the seller types in the tokensPerUnit input: Now add the \"per-token price input\" mode. When `tokensPerUnit ≠ 1 whole token` (i.e. `tokensPerUnit !== 10n ** BigInt(decimals)`), the tier price inputs are labeled \"Price per TOKEN\" and the value is per-token, with a note showing the per-unit equivalent. The validation must convert per-token → per-unit before checking the $5 cap.\n\nFirst, add a computed boolean `isMultiUnit` and a helper to convert per-token price string to per-unit price string: Now update `parsedTiers` to use `perTokenToPerUnit` when in multi-unit mode: Update `validate()` to use `perTokenToPerUnit` in multi-unit mode. The validation function receives the raw `TierInput[]` strings. I need to pass `isMultiUnit` and `tokensPerUnit`/`decimals` into it, or do the conversion before passing. The cleanest approach: in the `validate` call, convert tier prices to per-unit strings first when in multi-unit mode: Also update `handlePost` to use `tiersForValidation`: Add `tiersForValidation` to the `handleApprove` and `handlePost` `useCallback` dep arrays: Now update the tier price input label and show per-unit equivalent when in multi-unit mode. Also update the `marketPricePerUnit` calculation for multi-unit mode (it should return per-token price): Now update the tier builder UI: change the price column label to \"Price per TOKEN\" in multi-unit mode and show the per-unit conversion beneath each price input. Also update the \"$5 cap exceeded\" error message: Now update the per-tier row to show per-unit equivalent when in multi-unit mode, and update the `$5 cap` message. First let me look at what the tier price derivation looks like in the render loop: Now update the validation error for the $5 cap to give a helpful message in multi-unit mode: Now for the **buyer side** (CommitFlow / OrderPreviewCard): when `tokensPerUnit ≠ oneWholeToken`, show quantity in tokens. The `OrderPreviewCard` already shows `tokensReceived` — I need to make the quantity picker label say tokens and update the \"available\" text. I'll add a prop `tokenDisplayMode` and update the label:\n\nThe spec says: \"quantity is entered and shown in tokens ('0.1 WETH'), with the unit count small underneath ('100 units'); Max, +/- step by one unit.\" The picker already steps by 1 unit and the text field is in units. Rather than restructure the input, I'll show the token equivalent prominently and add a subtitle showing unit count. The quantity label changes to show \"X WETH\" equivalent.\n\nThis is a display change in `OrderPreviewCard`. I'll update it to show \"Quantity in tokens\" when `isMultiUnit`: `BigInt(10 ** goodsDecimals)` can overflow for decimals > 15. Use a safer comparison. Let me fix that: Good. Now **Step 2: centred calm homepage**. Delete the old `HomePage.tsx` and write a new clean one in place: Now App.tsx passes `onProof` and `onSelectDeal` to `HomePage`. The new `HomePage` only needs `onBrowse` and `onSell`. Update the call site: Now add the CSS variable `--hero-bg` for light theme. Check the existing CSS to find the right place: Add `--hero-bg` to both theme blocks. For light: soft pale-blue gradient. For dark: the deep dark-blue already hardcoded in the component (but the CSS variable lets us override): Also update the hero's light-theme text and radial glow to match the pale-blue hero background — the white text on `#e8f0f8` would be unreadable. The hero text color needs to be dark in light mode. Use `--ink` for headline and text in light mode via CSS variable override, or handle in the component by checking theme. The simplest approach: make the hero section adapt based on the theme. I'll use the `useTheme` hook in HomePage: Now wire those palette variables into the hero JSX: Now **Step 3: DealRoom — full-width header, single right card with dividers, equal gaps.** The DealRoom changes: move title/token/unit line to a full-width header row above the two columns; wrap CommitFlow + share + settle/claim + secondary buttons (gas toggle, add-network) all inside one card; equal `gap-5` on both columns. I'll also move the `handleAddNetwork` button from CommitFlow's bottom into DealRoom's right card footer, and consolidate the share row.\n\nThe key structural change is in `DealRoom.tsx`. CommitFlow ends with a standalone \"Add Arc to wallet\" button — I need to move that into the DealRoom right card. To do this cleanly, I'll extract it from CommitFlow into a prop `onAddNetwork`, or just duplicate the small button in DealRoom. The simplest change: remove the button from CommitFlow and add it alongside the gas-toggle link in the right card wrapper.\n\nFirst, remove the standalone `handleAddNetwork` button from CommitFlow: Now update DealRoom to use the new layout — full-width header, equal gaps, and single right card: Now restructure the DealRoom render: full-width header above columns, unified right card, equal gaps: Now remove the `leftCol`'s title/token block since it's now in the full-width header, and remove the old separate `rightCol` (CommitFlow/share/settle/claim) since it's now in `rightCard`: Now remove the old `rightCol` variable (it's been replaced by `rightCard`): Also update `leftCol`'s gap to match the new `gap-5` between columns: Now run the check: Two issues: 1) The `(selectedToken` type assertion is missing a closing paren on the right type. 2) `handleAddNetwork` in `CommitFlow` is now unused (it was moved to `AddNetworkButton`). Fix both: The edit got mangled — `(selectedToken` is an unclosed expression. Fix it: Now remove the old `handleAddNetwork` from CommitFlow (the logic is now in `AddNetworkButton`): ```\noxlint: Found 0 warnings and 0 errors.\ntsc --noEmit: exit 0\n``` Here is a precise account of every change.\n\n**Step 0 (sync):** Deleted `src/swarm/home/` (all seven files from Turn 17b) and `src/swarm/TierCurveEditor.tsx`. Removed the `TierCurveEditor` import and usage block from `SupplierView.tsx`. Replaced the three-way theme pill in `App.tsx` with a single sun/moon icon button using `useTheme` + `toggleTheme` (the two-state API that was always in `theme.ts`).\n\n**Step 1 (high-value token units):**\n- `suggestTokensPerUnit(decimals, usdPerToken)` scans a fixed candidate list `[1, 0.5, 0.1, 0.05, …]` and returns the largest amount whose market value is at most $5 and whose decimal places fit the token. EURC/GBPA ($1) stay at `1`; MXNB (~$0.053) suggests `50`; WETH (~$2200) suggests `0.001`; cirBTC (~$70k) suggests `0.00001`.\n- A `tpuEditedRef` tracks whether the seller has manually changed the field. An effect runs on token/rate change and writes the suggestion only when the ref is false. Selecting a new token resets the ref.\n- `isMultiUnit` is true when `tokensPerUnit ≠ 10^decimals` (not exactly one whole token). When true: tier price inputs are labelled \"Price per TOKEN (USDC)\"; the entered value is per-token; `perTokenToPerUnit()` converts to per-unit for validation and chart; the per-unit equivalent is shown in small text under each input. `marketPricePerUnit` in multi-unit mode returns the per-token market price directly.\n- Validation error for the $5 cap now says: \"One unit would cost more than $5. Use a smaller unit, for example 0.001 WETH.\"\n- `OrderPreviewCard` (buyer side): when `tokensPerUnit ≠ 10^decimals`, shows the token amount prominently above the unit picker with the unit count in small text alongside.\n\n**Step 2 (homepage):** `HomePage.tsx` fully rewritten as a calm, centred three-section page. Hero: `--hero-bg` gradient (deep blue in dark mode, soft pale-blue in light) with a radial glow; centred headline and subtitle; a frosted search card with a text input and \"Browse deals\" button; token chips for each `GOODS_TOKENS` entry; \"or sell on Swarm\" text link. All hero colours (text, glow, chips, pill, icon) are computed from `useTheme()` so both modes look intentional. Stats band unchanged. \"How it works\" is three cards inside one large rounded container with a footer row containing the two CTAs. `--hero-bg` added to both theme blocks in `index.css`.\n\n**Step 3 (deal room):** Title/description/token line moved to a full-width header block above the two columns, so both columns' first cards start at the same top edge. Right column is now one rounded card (`rightCard`): CommitFlow inside a `p-4` area, then a thin-divider row with `AddNetworkButton`, then an optional share footer row. Settle/refund and claim panels still appear above `rightCard` when relevant. The old separate share button and `rightCol` variable are gone. Column gap changed to `lg:gap-5` (consistent with `space-y-5` in the left column). `handleAddNetwork` moved to an exported `AddNetworkButton` component so CommitFlow no longer renders it.",
+  "todos": [
+    {
+      "id": "todo:step 0: delete home/ dir + tiercurveeditor, strip from supplierview, restore two-state theme toggle in app.tsx:0",
+      "text": "Step 0: delete home/ dir + TierCurveEditor, strip from SupplierView, restore two-state theme toggle in App.tsx",
+      "status": "done"
+    },
+    {
+      "id": "todo:step 1: smart tokensperunit auto-suggest, per-token price input on sell page, token/unit display on buyer side:0",
+      "text": "Step 1: smart tokensPerUnit auto-suggest, per-token price input on sell page, token/unit display on buyer side",
+      "status": "done"
+    },
+    {
+      "id": "todo:step 2: centred calm homepage (gradient hero, search card, token chips, stats, how-it-works):0",
+      "text": "Step 2: centred calm homepage (gradient hero, search card, token chips, stats, how-it-works)",
+      "status": "done"
+    },
+    {
+      "id": "todo:step 3: dealroom full-width header, single right card with dividers, equal gaps:0",
+      "text": "Step 3: DealRoom full-width header, single right card with dividers, equal gaps",
+      "status": "done"
+    },
+    {
+      "id": "todo:run check, paste output:0",
+      "text": "Run check, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/App.tsx",
+    "src/index.css",
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/DealRoom.tsx",
+    "src/swarm/HomePage.tsx",
+    "src/swarm/SupplierView.tsx"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useState, useEffect } from 'react'\n import { ConnectKitButton } from 'connectkit'\n import { motion, AnimatePresence } from 'framer-motion'\n-import { ChevronLeft } from 'lucide-react'\n-import { useThemeMode, setTheme, type ThemeMode } from './swarm/theme'\n+import { ChevronLeft, Sun, Moon } from 'lucide-react'\n+import { useTheme, toggleTheme } from './swarm/theme'"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   useLateWalletReconnect()\n-  const themeMode = useThemeMode()\n+  const theme = useTheme()"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 17,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-          {/* Three-way theme control */}\n-          <div className=\"shrink-0 flex items-center rounded-xl overflow-hidden text-xs font-medium\"\n-            style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}>\n-            {(['light', 'system', 'dark'] as ThemeMode[]).map(m => (\n-              <button key={m}\n-                onClick={() => setTheme(m)}\n-                aria-label={`${m} mode`}\n-                aria-pressed={themeMode === m}\n+          {/* Light/dark toggle */}\n+          <button onClick={toggleTheme}\n+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}\n+            className=\"shrink-0 size-8 flex items-center justify-center rounded-xl transition-all hover:opacity-70\"\n+            style={{ border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--muted)' }}>\n+            {theme === 'dark' ? <Sun className=\"size-4\" /> : <Moon className=\"size-4\" />}\n+          </button>"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "               <HomePage\n                 onBrowse={() => handleTabChange('deals')}\n                 onSell={() => handleTabChange('post')}\n-                onProof={() => handleTabChange('proof')}\n-                onSelectDeal={handleSelectDeal}\n               />"
+    },
+    {
+      "path": "src/index.css",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   --on-accent: #ffffff;\n+  --hero-bg: linear-gradient(160deg, #e8f0f8 0%, #dce8f4 50%, #f0f4fa 100%);\n }\n \n /* ── Dark tokens ─────────────────────────────────────────────────────── */"
+    },
+    {
+      "path": "src/index.css",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   --on-accent: #ffffff;\n+  --hero-bg: linear-gradient(160deg, #0d1f33 0%, #122d45 50%, #0a1a28 100%);\n }\n \n * {"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 17,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {/* Quantity picker: text input + − + quick-add */}\n       <div className=\"space-y-1.5\">\n-        <div className=\"flex items-center justify-between gap-2 flex-wrap\">\n-          <span className=\"text-xs\" style={{ color: 'var(--muted)' }}>\n-            {isTopUp ? 'Units to add' : 'Quantity'}\n-          </span>\n+        {/* When the deal sells fractional tokens, show the token amount prominently */}\n+        {tokensReceivedStr !== null && goodsDecimals !== undefined && tokensPerUnit !== BigInt(10 ** goodsDecimals) && (\n+          <div>\n+            <span className=\"text-2xl font-bold tabular-nums\" style={{ color: 'var(--ink)' }}>\n+              {tokensReceivedStr} {goodsSymbol}\n+            </span>"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        {tokensReceivedStr !== null && goodsDecimals !== undefined && tokensPerUnit !== BigInt(10 ** goodsDecimals) && (\n+        {tokensReceivedStr !== null && goodsDecimals !== undefined && goodsDecimals <= 77 && tokensPerUnit !== 10n ** BigInt(goodsDecimals) && ("
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 26,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       </AnimatePresence>\n+    </div>\n+  )\n+}\n \n-      <button onClick={handleAddNetwork}\n-        className=\"w-full text-xs py-1 opacity-30 hover:opacity-60 transition-opacity\"\n-        style={{ color: 'var(--muted)' }}>\n-        Add {ARC_NETWORK.name} to wallet\n-      </button>\n-    </div>\n+/** Small utility button a parent can render in the order card footer. */\n+export function AddNetworkButton() {\n+  const handleAddNetwork = () => {"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 13,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const handleAddNetwork = () => {\n-    void (window as unknown as { ethereum: { request: (a: unknown) => Promise<void> } })\n-      .ethereum.request({\n-        method: 'wallet_addEthereumChain',\n-        params: [{\n-          chainId: ARC_NETWORK.hexChainId, chainName: ARC_NETWORK.name,\n-          nativeCurrency: ARC_NETWORK.nativeCurrency,\n-          rpcUrls: [ARC_NETWORK.rpcUrl], blockExplorerUrls: [ARC_NETWORK.explorerBase],\n+  // ── Guards ────────────────────────────────────────────────────────────────────"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useDealHistory } from './useDealHistory'\n import { SETTLER_ABI } from './abis'\n import { formatUsdcPrice, formatCountdown, shortAddr, txUrl, formatTokenAmount } from './utils'\n import { ARC_NETWORK, CONTRACTS_ACTIVE, ARC_TX_FEES, GOODS_TOKENS } from './config'\n import { PricePerToken } from './PricePerToken'\n-import { useMarketRates } from './useMarketRates'\n+import { useMarketRates } from './useMarketRates'\n+import { AddNetworkButton } from './CommitFlow'"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 95,
+      "removedLines": 11,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  return (\n-    <div className=\"px-4 pt-5 pb-10\">\n-      {/* Two-column from lg */}\n-      <div className=\"lg:grid lg:grid-cols-[1fr_380px] lg:gap-8 lg:items-start\">\n-        {leftCol}\n-        <div className=\"mt-5 lg:mt-0 lg:sticky lg:top-20\">\n-          {rightCol}\n-        </div>\n+  // ── Unified right order card ─────────────────────────────────────────────\n+  // CommitFlow + gas-toggle link + add-network + share footer, all in one card.\n+  const rightCard = (\n+    <div className=\"rounded-3xl overflow-hidden\"\n+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>\n+      {/* CommitFlow fills the main card area */}\n+      <div className=\"p-4\">\n+        <CommitFlow"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 30,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // ── Two-column layout from lg, single column below ───────────────────────\n+  // ── Left column ──────────────────────────────────────────────────────────\n   const leftCol = (\n     <div className=\"space-y-5\">\n-      {/* Title + goods info */}\n-      <motion.div className=\"space-y-1\" {...fadeUp}>\n-        <h1 className=\"text-2xl font-bold leading-tight\" style={{ color: 'var(--ink)' }}>\n-          {deal.title}\n-        </h1>\n+      {/* Hero price */}"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 0,
+      "removedLines": 45,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const rightCol = (\n-    <div className=\"space-y-4\">\n-      {/* Commit / Withdraw */}\n-      <motion.div {...fadeUp} transition={{ ...fadeUp.transition, delay: 0.08 }}>\n-        <CommitFlow\n-          dealId={dealId} clearingPrice={clearingPrice} totalUnits={unitCount}\n-          buyerCount={count} tiers={deal.tiers} maxUnits={deal.maxUnits}\n-          maxUnitsPerBuyer={deal.maxUnitsPerBuyer} deadline={deal.deadline}"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   const leftCol = (\n-    <div className=\"space-y-5\">\n+    <div className=\"space-y-5 min-w-0\">"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "write",
+      "addedLines": 261,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * HomePage — calm, centred landing page.\n+ *\n+ * Sections:\n+ *  1. Hero: gradient background, centred headline, search-style entry card,\n+ *     token chips, \"or sell on Swarm\" link.\n+ *  2. Stats band (unchanged from previous version).\n+ *  3. How it works: three cards inside one large rounded container."
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useState } from 'react'\n import { motion } from 'framer-motion'\n import { Search, ArrowRight } from 'lucide-react'\n+import { useTheme } from './theme'\n import { useSwarmStats } from './useSwarmStats'\n import { formatUsdcPrice } from './utils'\n import { ACTIVE_NETWORK, GOODS_TOKENS } from './config'"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 22,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function HomePage({ onBrowse, onSell }: Props) {\n-  const [query, setQuery] = useState('')\n+  const [query, setQuery] = useState('')\n+  const theme = useTheme()\n+  const isDark = theme === 'dark'\n+\n+  // Hero colour palette adapts to theme.\n+  const heroText        = isDark ? 'rgba(255,255,255,0.9)'  : '#122d45'\n+  const heroSubtext     = isDark ? 'rgba(255,255,255,0.65)' : '#334155'"
+    },
+    {
+      "path": "src/swarm/HomePage.tsx",
+      "action": "edit",
+      "addedLines": 84,
+      "removedLines": 91,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         {/* Radial glow behind centre */}\n-        <div\n-          className=\"absolute inset-0 pointer-events-none\"\n-          style={{\n-            background: 'radial-gradient(ellipse 60% 50% at 50% 55%, rgba(30,120,200,0.18) 0%, transparent 70%)',\n-          }}\n-        />\n+        <div className=\"absolute inset-0 pointer-events-none\"\n+          style={{ background: heroGlow }} />\n+\n+        <div className=\"relative max-w-2xl mx-auto px-4 pt-20 pb-16 flex flex-col items-center text-center\">\n+\n+          {/* Live pill */}\n+          <motion.div"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-import { TierCurveEditor } from './TierCurveEditor'\n import { DEAL_FACTORY_ABI, ERC20_ABI } from './abis'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 12,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        {/* Interactive curve editor */}\n-        <TierCurveEditor\n-          tiers={tiers}\n-          onChange={setTiers}\n-          maxUnits={effectiveMaxUnitsNum || 1}\n-          tokensPerUnit={tokensPerUnit}\n-          tokenDecimals={decimals}\n-          tokenSymbol={symbol}\n+        {/* Revenue preview */}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 27,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-/** Format a closing-time duration in plain language, e.g. \"30 minutes\", \"3 days 2 hours\". */\n+/**\n+ * Given a token's decimals and its current USD market rate, suggest the\n+ * largest \"round amount\" (from a fixed candidate list) whose value is at most $5.\n+ * Returns the suggestion as a human-readable string (e.g. \"0.001\").\n+ * Returns \"1\" when the market rate is unknown or the token value ≤ $5 already.\n+ */\n+const UNIT_CANDIDATES = [\n+  1, 0.5, 0.1, 0.05, 0.01, 0.005, 0.001, 0.0005, 0.0001,"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── Form state ───────────────────────────────────────────────────────────\n   const [selectedToken,    setSelectedToken]    = useState<AnyToken>(GOODS_TOKENS[0])\n   const [tokensPerUnitStr, setTokensPerUnitStr] = useState('1')\n+  // Whether the seller manually edited the tokensPerUnit field.\n+  const tpuEditedRef = useRef(false)\n   const [tiers,            setTiers]            = useState<TierInput[]>(defaultTiers)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 13,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // ── Token reads ──────────────────────────────────────────────────────────\n-  const goodsAddr = selectedToken.address\n+  // ── Auto-suggest tokensPerUnit when token or market rate changes ─────────\n+  // Only updates if the seller has not manually edited the field.\n+  const mSymForEffect = (selectedToken as GoodsToken).marketSymbol\n+  const mRateForEffect = mSymForEffect ? marketRates?.get(mSymForEffect) : undefined\n+  useEffect(() => {\n+    if (tpuEditedRef.current) return\n+    const suggestion = suggestTokensPerUnit(selectedToken.decimals, mRateForEffect)\n+    setTokensPerUnitStr(suggestion)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       <TokenPickerDropdown\n         selected={selectedToken}\n-        onSelect={t => { setSelectedToken(t); setStockEdited(false) }}\n+        onSelect={t => { setSelectedToken(t); setStockEdited(false); tpuEditedRef.current = false }}\n         balances={allBalancesWithCustom}\n         walletAddr={address}\n       />"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           <input\n             type=\"number\" min=\"0.000001\" step=\"any\"\n             value={tokensPerUnitStr}\n-            onChange={e => setTokensPerUnitStr(e.target.value)}\n+            onChange={e => { tpuEditedRef.current = true; setTokensPerUnitStr(e.target.value) }}\n             placeholder=\"1\""
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 24,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // ── Tier chart ───────────────────────────────────────────────────────────\n+  // ── Per-token price mode ─────────────────────────────────────────────────\n+  // When tokensPerUnit is not exactly 1 whole token, sellers enter prices per\n+  // whole token and we convert to per-unit for the contract.\n+  const oneWholeToken = decimals <= 77 ? 10n ** BigInt(decimals) : null\n+  const isMultiUnit   = tokensPerUnit !== null && oneWholeToken !== null && tokensPerUnit !== oneWholeToken\n+\n+  /**\n+   * Convert a per-token price string to a per-unit price bigint (micro-USDC),"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── Tier chart ───────────────────────────────────────────────────────────\n   const parsedTiers = tiers.map(t => ({\n     minUnits:     parseInt(t.minUnits) || 0,\n-    pricePerUnit: parsePriceToMicro(t.pricePerUnit) ?? 0n,\n+    pricePerUnit: (isMultiUnit ? perTokenToPerUnit(t.pricePerUnit) : parsePriceToMicro(t.pricePerUnit)) ?? 0n,\n   })).filter(t => t.minUnits > 0 && t.pricePerUnit > 0n)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 24,
+      "removedLines": 13,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // ── Step 1: Approve ──────────────────────────────────────────────────────\n-  const handleApprove = useCallback(() => {\n-    setValidationErr(null)\n-    setErrMsg('')\n-    if (tokensPerUnit === null) {\n-      setValidationErr(tokensPerUnitErr ?? `Invalid ${symbol} per unit.`)\n-      return\n-    }\n+  // Convert tier price strings to per-unit strings for validation (multi-unit mode).\n+  const tiersForValidation = useMemo((): TierInput[] => {\n+    if (!isMultiUnit) return tiers\n+    return tiers.map(t => {\n+      const pu = perTokenToPerUnit(t.pricePerUnit)\n+      return { ...t, pricePerUnit: pu !== null ? (Number(pu) / 1_000_000).toFixed(6) : t.pricePerUnit }\n+    })\n+  // perTokenToPerUnit is a stable closure derived from component state"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── Step 2: Post deal ────────────────────────────────────────────────────\n   const handlePost = useCallback(() => {\n     setErrMsg('')\n     if (tokensPerUnit === null) { setValidationErr(tokensPerUnitErr ?? `Invalid ${symbol} per unit.`); return }\n     const inp: PostInputs = {\n       goodsToken: goodsAddr, tokensPerUnit, tokenDecimals: decimals,\n-      tiers, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,\n+      tiers: tiersForValidation, minUnits, maxUnits: String(effectiveMaxUnitsNum), maxUnitsPerBuyer, maxBuyers,"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   }, [\n     goodsAddr, tokensPerUnit, tokensPerUnitErr, tokensPerUnitStr, decimals,\n-    tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,\n+    tiersForValidation, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,\n     durationHours, title, description, chainNow,\n     overBudget, maxAffordable, symbol, writeContract,\n   ])"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   }, [\n     goodsAddr, tokensPerUnit, tokensPerUnitErr, decimals, symbol,\n-    tiers, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,\n+    tiersForValidation, minUnits, effectiveMaxUnitsNum, maxUnitsPerBuyer, maxBuyers,\n     durationHours, title, description, chainNow, writeContract,\n   ])"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 22,
+      "removedLines": 14,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   /**\n-   * Compute the USDC price per unit corresponding to a given USD/token market\n-   * rate, rounded to 2 dp (or 4 dp when the value is < $1 to keep tiers distinct).\n+   * Compute the \"market price to fill\" string:\n+   * - In single-unit mode (1 unit = 1 token): price per unit = price per token.\n+   * - In multi-unit mode: price per whole token (what the seller enters).\n+   * Rounded to 2 dp (4 dp when < $1).\n    */\n   const marketPricePerUnit = useMemo((): string | null => {\n-    if (mUsdPerToken === undefined || !tokensPerUnit || tokensPerUnit === 0n) return null\n-    // USD per token × tokens per unit (in whole-token units) = USD per unit\n-    const scale = 10 ** decimals\n+    if (mUsdPerToken === undefined) return null"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <div className=\"grid grid-cols-[1fr_1fr_auto] gap-2 px-1\">\n           <span className=\"text-xs\" style={{ color: 'var(--subtle)' }}>From N units</span>\n-          <span className=\"text-xs\" style={{ color: 'var(--subtle)' }}>Price/unit (USDC)</span>\n+          <span className=\"text-xs\" style={{ color: 'var(--subtle)' }}>\n+            {isMultiUnit ? `Price per ${symbol} (USDC)` : 'Price/unit (USDC)'}\n+          </span>\n           <span className=\"w-7\" />\n         </div>"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 70,
+      "removedLines": 53,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <div className=\"space-y-2\">\n           {tiers.map((tier, i) => {\n-            const tierPrice = parsePriceToMicro(tier.pricePerUnit)\n-            const tierPPT   = tierPrice !== null && tokensPerUnit !== null\n-              ? pricePerToken(tierPrice, tokensPerUnit, decimals)\n-              : null\n-            return (\n-            <div key={i} className=\"space-y-1\">\n+            // In multi-unit mode the input is per-token; compute per-unit for display.\n+            const tierPricePerUnit = isMultiUnit\n+              ? perTokenToPerUnit(tier.pricePerUnit)\n+              : parsePriceToMicro(tier.pricePerUnit)\n+            const tierPriceAsPerToken = isMultiUnit\n+              ? parsePriceToMicro(tier.pricePerUnit)  // raw per-token micro"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    if (BigInt(Math.round(pr * 1_000_000)) > MAX_PRICE_USDC) return `Tier ${i + 1}: price exceeds the $5 cap.`\n+    if (BigInt(Math.round(pr * 1_000_000)) > MAX_PRICE_USDC) return `Tier ${i + 1}: price exceeds the $5 cap. One unit would cost more than $5. Use a smaller unit, for example ${suggestTokensPerUnit(inp.tokenDecimals, pr)} tokens per unit.`"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const mSymForEffect = (selectedToken\n+  const mSymForEffect = (selectedToken as GoodsToken).marketSymbol\n   const mRateForEffect = mSymForEffect ? marketRates?.get(mSymForEffect) : undefined"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

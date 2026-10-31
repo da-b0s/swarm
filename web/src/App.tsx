@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ConnectKitButton } from 'connectkit'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronLeft, Moon, Sun } from 'lucide-react'
+import { ChevronLeft, Sun, Moon } from 'lucide-react'
 import { useTheme, toggleTheme } from './swarm/theme'
 import { DealRoom } from './swarm/DealRoom'
 import { DealList } from './swarm/DealList'
@@ -81,12 +81,12 @@ export default function App() {
           borderBottom: '1px solid var(--border)',
         }}
       >
-        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2 sm:gap-3">
           {/* Logo + wordmark */}
           <button onClick={() => handleTabChange('home')} aria-label="Swarm home"
             className="flex items-center gap-2 shrink-0 min-w-0">
             <SwarmLogo size={28} />
-            <span className="display text-base font-bold" style={{ color: 'var(--ink)' }}>Swarm</span>
+            <span className="hidden sm:inline display text-base font-bold" style={{ color: 'var(--ink)' }}>Swarm</span>
             {ACTIVE_NETWORK === 'testnet' && (
               <span className="text-xs font-medium px-1.5 py-0.5 rounded-md shrink-0 hidden sm:inline"
                 style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)' }}>
@@ -96,11 +96,11 @@ export default function App() {
           </button>
 
           {/* Tab bar — left-aligned after logo */}
-          <div className="flex gap-1 ml-4">
+          <div className="flex gap-0 sm:gap-1 ml-0 sm:ml-4">
             {(['deals', 'post', 'proof'] as const).map(id => (
               <button key={id}
                 onClick={() => handleTabChange(id)}
-                className="px-3 py-1.5 rounded-xl text-sm font-medium transition-all"
+                className="px-1.5 sm:px-3 py-1.5 rounded-xl text-sm font-medium transition-all"
                 style={{
                   background: tab === id ? 'var(--accent)' : 'transparent',
                   color: tab === id ? '#fff' : 'var(--muted)',
@@ -113,10 +113,11 @@ export default function App() {
           {/* Spacer */}
           <div className="flex-1" />
 
-          {/* Theme toggle */}
-          <button onClick={toggleTheme} aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="shrink-0 size-9 rounded-xl flex items-center justify-center transition-all hover:opacity-70"
-            style={{ color: 'var(--muted)', border: '1px solid var(--border)' }}>
+          {/* Light/dark toggle */}
+          <button onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="hidden sm:flex shrink-0 size-8 items-center justify-center rounded-xl transition-all hover:opacity-70"
+            style={{ border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--muted)' }}>
             {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </button>
 
@@ -178,7 +179,10 @@ export default function App() {
             <motion.div key="home"
               initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
-              <HomePage onBrowse={() => handleTabChange('deals')} onSell={() => handleTabChange('post')} />
+              <HomePage
+                onBrowse={() => handleTabChange('deals')}
+                onSell={() => handleTabChange('post')}
+              />
             </motion.div>
           )}
 

@@ -430,18 +430,6 @@ export function CommitFlow({
   const resetCommit = () => { setCommitStep('idle'); setCommitErr(''); resetWrite() }
   const resetWithdraw = () => { setWithdrawStep('idle'); setWithdrawErr('') }
 
-  const handleAddNetwork = () => {
-    void (window as unknown as { ethereum: { request: (a: unknown) => Promise<void> } })
-      .ethereum.request({
-        method: 'wallet_addEthereumChain',
-        params: [{
-          chainId: ARC_NETWORK.hexChainId, chainName: ARC_NETWORK.name,
-          nativeCurrency: ARC_NETWORK.nativeCurrency,
-          rpcUrls: [ARC_NETWORK.rpcUrl], blockExplorerUrls: [ARC_NETWORK.explorerBase],
-        }],
-      })
-  }
-
   // ── Guards ────────────────────────────────────────────────────────────────────
 
   if (!isOpen || isPastDeadline) {
@@ -853,13 +841,29 @@ export function CommitFlow({
         )}
 
       </AnimatePresence>
-
-      <button onClick={handleAddNetwork}
-        className="w-full text-xs py-1 opacity-30 hover:opacity-60 transition-opacity"
-        style={{ color: 'var(--muted)' }}>
-        Add {ARC_NETWORK.name} to wallet
-      </button>
     </div>
+  )
+}
+
+/** Small utility button a parent can render in the order card footer. */
+export function AddNetworkButton() {
+  const handleAddNetwork = () => {
+    void (window as unknown as { ethereum: { request: (a: unknown) => Promise<void> } })
+      .ethereum.request({
+        method: 'wallet_addEthereumChain',
+        params: [{
+          chainId: ARC_NETWORK.hexChainId, chainName: ARC_NETWORK.name,
+          nativeCurrency: ARC_NETWORK.nativeCurrency,
+          rpcUrls: [ARC_NETWORK.rpcUrl], blockExplorerUrls: [ARC_NETWORK.explorerBase],
+        }],
+      })
+  }
+  return (
+    <button onClick={handleAddNetwork}
+      className="text-xs font-medium transition-opacity hover:opacity-70"
+      style={{ color: 'var(--muted)' }}>
+      Add {ARC_NETWORK.name} to wallet
+    </button>
   )
 }
 
@@ -927,6 +931,17 @@ function OrderPreviewCard({
 
       {/* Quantity picker: text input + − + quick-add */}
       <div className="space-y-1.5">
+        {/* When the deal sells fractional tokens, show the token amount prominently */}
+        {tokensReceivedStr !== null && goodsDecimals !== undefined && goodsDecimals <= 77 && tokensPerUnit !== 10n ** BigInt(goodsDecimals) && (
+          <div>
+            <span className="text-2xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
+              {tokensReceivedStr} {goodsSymbol}
+            </span>
+            <span className="ml-2 text-xs" style={{ color: 'var(--muted)' }}>
+              ({units} unit{units !== 1 ? 's' : ''})
+            </span>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-xs" style={{ color: 'var(--muted)' }}>
             {isTopUp ? 'Units to add' : 'Quantity'}
