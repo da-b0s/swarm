@@ -92,7 +92,7 @@ End-to-end scripts in `tools/` run the full lifecycle, gas-free orders, top-ups 
 
 ## Limits
 
-- **Up to 100 buyers per deal,** so settlement fits comfortably in one block.
+- **Up to 100 buyers per deal,** because settlement works out every buyer's refund in one transaction. Each buyer can order any number of units. Constant-cost settlement, which removes the limit, is next on the roadmap.
 - **Up to 5 USDC per unit.** For high-value assets like cirBTC or WETH, use a small unit (for example 0.001 WETH).
 - **Tokens only.** Nothing on chain can force delivery of a physical item; escrowed deals for goods and services are on the roadmap.
 - Tokens that take a fee on transfer or change balances on their own are not supported.
@@ -131,4 +131,4 @@ Contracts, tests, relayer and frontend were written in [Arc Studio](https://docs
 
 ## Roadmap
 
-Escrowed deals for goods and services, released on delivery · token launches through Swarm deals · more assets as issuers bring supply to Arc · paged settlement for larger deals · notifications when a deal you joined moves a tier or closes.
+Unlimited buyers per deal: settlement records only the final price, at the same cost for any number of buyers, and each buyer collects their own refund · escrowed deals for goods and services, released on delivery · token launches through Swarm deals · more assets as issuers bring supply to Arc · notifications when a deal you joined moves a tier or closes.
