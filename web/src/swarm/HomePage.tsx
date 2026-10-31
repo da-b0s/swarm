@@ -10,7 +10,7 @@
 
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Search, ArrowRight } from 'lucide-react'
+import { Search, ArrowRight, ChevronDown } from 'lucide-react'
 import { useTheme } from './theme'
 import { useSwarmStats } from './useSwarmStats'
 import { formatUsdcPrice } from './utils'
@@ -75,24 +75,56 @@ function StatsBand() {
 const HOW_STEPS = [
   {
     label: 'Post a deal',
-    value: '50 EURC deposited',
     body: 'The seller sets a price ladder and locks stock in the contract. Nothing moves until the deal closes.',
   },
   {
     label: 'Join and watch the price fall',
-    value: '25 units: $1.17',
     body: 'Each tier threshold unlocks a lower price for everyone, including buyers who joined first.',
   },
   {
     label: 'Close',
-    value: 'Everyone pays $1.15',
     body: 'A keeper settles the deal. Tokens are delivered, overpayments refunded. Nobody has to press a button.',
   },
 ] as const
 
+const FAQ_ITEMS = [
+  {
+    q: 'What can I buy?',
+    a: 'Deals sell assets on Arc, including EURC, GBPA, MXNB, cirBTC and WETH, paid for in USDC. Every buyer pays the same final price.',
+  },
+  {
+    q: 'How is the final price decided?',
+    a: 'Each deal has price levels set by the seller, for example $1.20 each, then $1.17 once 25 are ordered. When the deal closes, the price is set by the total ordered, and everyone pays that same price. If you paid more when you joined, the difference comes back to you.',
+  },
+  {
+    q: 'What do I need to order?',
+    a: 'A crypto wallet with USDC on Arc. Ordering takes one signature in your wallet. There is no separate network fee to pay.',
+  },
+  {
+    q: 'Can I change my mind?',
+    a: 'Yes. While a deal is open you can add more, remove some units or cancel your whole order, and the money goes straight back to your wallet. The one exception: you cannot cancel if it would push the price back up above what another buyer has already paid.',
+  },
+  {
+    q: 'What happens if not enough people join?',
+    a: 'Every deal has a minimum. If it is not reached by the deadline, the deal is cancelled and everyone is refunded in full. The seller gets their tokens back.',
+  },
+  {
+    q: 'When do I get my tokens?',
+    a: 'As soon as the deal closes, usually within a minute of the deadline. A banner at the top of the site shows anything waiting for you, with a button to collect it.',
+  },
+  {
+    q: 'How do I sell on Swarm?',
+    a: 'Go to Sell, choose the token you are offering, set your price levels, minimum and deadline, and post the deal. Your stock is held by the contract and anything unsold comes back to you. Your earnings are ready to collect when the deal closes.',
+  },
+] as const
+
 function HowItWorks({ onBrowse, onSell }: { onBrowse: () => void; onSell: () => void }) {
+  const [openIdx, setOpenIdx] = useState<number | null>(null)
+
   return (
-    <motion.section {...fade}>
+    <motion.section {...fade} className="space-y-10">
+
+      {/* How it works */}
       <div className="rounded-2xl overflow-hidden"
         style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}>
         <div className="px-6 pt-6 pb-2">
@@ -101,15 +133,12 @@ function HowItWorks({ onBrowse, onSell }: { onBrowse: () => void; onSell: () => 
           </h2>
         </div>
         <div className="grid sm:grid-cols-3 gap-px" style={{ background: 'var(--border)' }}>
-          {HOW_STEPS.map(({ label, value, body }, i) => (
+          {HOW_STEPS.map(({ label, body }, i) => (
             <div key={i} className="px-6 py-6 flex flex-col gap-3"
               style={{ background: 'var(--surface)' }}>
               <span className="text-xs font-semibold tabular-nums"
                 style={{ color: 'var(--muted)' }}>{i + 1}.</span>
-              <p className="text-lg font-bold leading-snug" style={{ color: 'var(--accent)' }}>
-                {value}
-              </p>
-              <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>{label}</p>
+              <p className="text-base font-bold leading-snug" style={{ color: 'var(--ink)' }}>{label}</p>
               <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>{body}</p>
             </div>
           ))}
@@ -133,6 +162,59 @@ function HowItWorks({ onBrowse, onSell }: { onBrowse: () => void; onSell: () => 
           </div>
         </div>
       </div>
+
+      {/* Questions accordion */}
+      <div className="rounded-2xl overflow-hidden"
+        style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}>
+        <div className="px-6 pt-6 pb-2">
+          <h2 className="display text-xl font-bold" style={{ color: 'var(--ink)' }}>
+            Questions
+          </h2>
+        </div>
+        <div>
+          {FAQ_ITEMS.map(({ q, a }, i) => {
+            const isOpen = openIdx === i
+            const panelId = `faq-panel-${i}`
+            const btnId   = `faq-btn-${i}`
+            return (
+              <div key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                <button
+                  id={btnId}
+                  aria-expanded={isOpen}
+                  aria-controls={panelId}
+                  onClick={() => setOpenIdx(isOpen ? null : i)}
+                  className="w-full flex items-center justify-between gap-4 px-6 py-4 text-left transition-colors hover:bg-black/[0.02]"
+                >
+                  <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>{q}</span>
+                  <ChevronDown
+                    className="size-4 shrink-0 transition-transform duration-200"
+                    style={{
+                      color: 'var(--muted)',
+                      transform: isOpen ? 'rotate(180deg)' : undefined,
+                    }}
+                  />
+                </button>
+                {/* Smooth expand: render content always, animate max-height via inline style */}
+                <div
+                  id={panelId}
+                  role="region"
+                  aria-labelledby={btnId}
+                  style={{
+                    maxHeight: isOpen ? '400px' : '0px',
+                    overflow: 'hidden',
+                    transition: 'max-height 0.22s ease',
+                  }}
+                >
+                  <p className="px-6 pb-5 text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
+                    {a}
+                  </p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
     </motion.section>
   )
 }
