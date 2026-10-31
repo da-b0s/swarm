@@ -13,7 +13,7 @@ Nobody holds anybody's money. The contract does.
 
 Built on [Arc](https://docs.arc.io) with USDC as both the unit of account and the gas.
 
-> Status: in development for Arc Microgrants Round 2. Not yet deployed to mainnet.
+> Status: live on Arc mainnet since 26 October 2026. App: https://swarm-zeta-one.vercel.app
 
 ---
 

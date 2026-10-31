@@ -706,5 +706,5 @@ the suite proves it, but the bytecode is not identical.
 
 ## What Studio did well / badly
 
-_Two honest paragraphs, written at the end. Reviewers trust candour, and a log that
+_Two honest paragraphs, written at the end. Candour matters here: a log that
 reads like nothing ever went wrong reads like a log that was written afterwards._

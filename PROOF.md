@@ -35,7 +35,7 @@ with only constructor-set immutable addresses masked.
 ## Phase 1 — the open house deal
 
 A permanent deal with a $0.25 floor, open to anyone from deploy day, relisted as
-it settles. A reviewer can commit in thirty seconds and watch their own commit
+it settles. Anyone can commit in thirty seconds and watch their own commit
 move the price for everybody.
 
 | Deal | Curve | Buyers | Clearing | Settlement tx |

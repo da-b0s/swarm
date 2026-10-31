@@ -65,7 +65,7 @@ needs a rebuild):
 
 | Variable | Value |
 |---|---|
-| `VITE_SWARM_NETWORK` | `mainnet` for the submission; `testnet` for a preview |
+| `VITE_SWARM_NETWORK` | `mainnet` for the live site; `testnet` for a preview |
 | `VITE_RELAYER_URL` | the relayer's public URL, no trailing slash. Leave unset to hide gasless commits and use approve-then-commit only |
 
 No rewrite rules are needed: the app routes with a `?deal=` query parameter on a
