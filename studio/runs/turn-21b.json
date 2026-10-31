@@ -1,0 +1,431 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the relevant files first. Now read App.tsx for the ConnectKit change, and check CommitFlow's closed-state rendering: Now I have all the context. Let me also check the DealList prop interface in App to understand `listTab` vs a `'yours'` tab, and look at the hooks for `unitsOf`/`getBuyerAt`: Good. I have enough. Now I'll plan and execute all four items:\n\n**Plan:**\n1. `utils.ts` — fix `formatUsdcPrice` for sub-cent values\n2. `src/swarm/copyText.ts` — new file\n3. `DealRoom.tsx` — supplier note + share fix + duplicate closed card removal\n4. `DealList.tsx` + `App.tsx` — \"Your deals\" tab (batched `unitsOf` multicall + supplier check) + wallet chip with copy icon Now write `copyText.ts` and update the DealRoom share button simultaneously: Now update DealRoom: import `copyText`, fix the share handler, add supplier note, and drop the duplicate \"This deal is closed.\" card from CommitFlow's rendered output by removing the `ClaimPanel`/`SettleOrRefundPanel` duplicate display (which lives in CommitFlow's closed guard): Now replace the `handleShare` and the `copied` state, add `copyFailed` state, and read `address` for the supplier check: Now replace the `rightCard` to add the supplier note in place of CommitFlow, and update the share footer's copy-failed state: Now find and remove the duplicate \"This deal is closed.\" card in CommitFlow: The CommitFlow renders the generic \"This deal is closed.\" / \"settled\" / \"refunded\" text when `!isOpen || isPastDeadline`. The SettleOrRefundPanel and ClaimPanel above it in DealRoom are the informative ones. The CommitFlow closed card is the bare duplicate — remove it and return `null` instead so only the DealRoom panels show: Now **item 4: \"Your deals\" tab in DealList**. I need to:\n- Add `walletAddr` prop\n- Batch `unitsOf(dealId, walletAddr)` for all deals via `useReadContracts`  \n- Filter to deals where wallet is supplier OR has units > 0\n- Third tab \"Yours\" shown only when connected\n- Extend the tab type in App.tsx Now add `supplier` to `DealSummary`, extend the multicall to read it, add a `unitsOf` batch, compute `yours`, and update the tabs: Now add the `unitsOf` batch call after `totalUnitsCalls`, and compute `yours`: Now add the `yours` computed list and update the tab rendering: Now update the tab bar to show \"Your deals\" when connected, and update the empty state: Now update the empty state to handle the \"yours\" tab, and pass role labels (\"Selling\" / \"Joined · N units\") to DealCard. First the empty state: Now add `roleLabel` and `highlight` props to `DealCard` and thread them through, plus compute them in the loop. First update the card list render: Now add `roleLabel` and `highlight` to `DealCardProps` and render them: Now add the role badge and highlight border to the card render: Now **item 5: App.tsx** — update `listTab` type, pass `walletAddr`, and replace `ConnectKitButton` with a custom chip + copy icon: Now update `listTab` type and pass `walletAddr` to `DealList`: Replace the `ConnectKitButton` in the nav and pass `walletAddr` to `DealList`: Now run the check: Two floating-promise violations — add `void`: ```\noxlint: Found 0 warnings and 0 errors.\ntsc --noEmit: exit 0\n``` All four items shipped. Here is what changed.\n\n**1. Small prices (utils.ts)**\n`formatUsdcPrice` now has two branches. At $0.01 and above it uses `Intl.NumberFormat` with 2 dp as before. Below $0.01 it computes the number of leading zeros after the decimal point, adds 2 for two significant digits, caps at 6 dp, and returns a plain `$` string. So 350 micro-USDC → `$0.00035`, 12 micro-USDC → `$0.000012`. Exactly zero still returns `$0.00`. All the call sites (deal room hero, tier chips, activity, deal cards, proof page) pick up the fix automatically because they all call `formatUsdcPrice`. The Sell page price inputs already accepted 6 dp via `step=\"0.000001\"` from a prior turn; no change needed there.\n\n**2. Copy button (copyText.ts + DealRoom.tsx)**\n`src/swarm/copyText.ts` tries `navigator.clipboard.writeText` first, then falls back to a hidden textarea with `document.execCommand('copy')`, returning `true`/`false`. The DealRoom share button now uses it: on success it shows \"Copied.\", on failure \"Couldn't copy — the link is selected.\" in amber (the link is selected in the textarea fallback so the user can Ctrl+C manually).\n\n**3. Seller can't order / duplicate closed card (DealRoom.tsx + CommitFlow.tsx)**\n`DealRoom` reads `useAccount` and compares `deal.supplier` to `address` case-insensitively. When they match (`isSupplier`), the right card shows the short note (\"This is your deal. Buyers' orders appear in the activity below.\") in place of CommitFlow, and the secondary-buttons strip is hidden. The settle/refund and claim panels above the card continue to render normally for the supplier. The duplicate \"This deal is closed.\" guard in `CommitFlow` is replaced with `return null` — `DealRoom` already shows the informative `SettleOrRefundPanel` or `ClaimPanel` in that state, so the bare text was redundant.\n\n**4. Your deals tab (DealList.tsx + App.tsx)**\n`DealListTab` is now `'active' | 'ended' | 'yours'` (exported). `DealList` gains a `walletAddr` prop. A third `useReadContracts` batch calls `unitsOf(dealId, walletAddr)` for every deal whenever a wallet is connected. The \"Your deals\" tab is inserted into the pill bar only when `walletAddr` is set. The `yours` computed list filters to deals where `supplier === walletAddr` or `myUnits > 0`, sorted newest-first. In that tab each card gets a role badge (\"Selling\" or \"Joined · N units\") and settled/refunded deals get a green \"Ready to collect\" highlight with a green border. Empty state says \"Deals you post or join show up here.\" The token filter pills are hidden on the \"yours\" tab.\n\n**5. Wallet chip with copy (App.tsx)**\n`ConnectKitButton` is replaced with `WalletChip`. When disconnected it renders a plain `ConnectKitButton`. When connected it renders: a chip (avatar circle + short address, click opens the ConnectKit modal via `useModal`) plus a small copy-icon button (sm and up only) that calls `copyText(address)` with a tick feedback. On 375 px phones only the chip avatar is visible (short address hidden via `hidden sm:inline`), keeping the header fitting.",
+  "todos": [
+    {
+      "id": "todo:1. fix formatusdcprice in utils.ts for sub-cent values:0",
+      "text": "1. Fix formatUsdcPrice in utils.ts for sub-cent values",
+      "status": "done"
+    },
+    {
+      "id": "todo:2. write copytext.ts + wire into dealroom share button:0",
+      "text": "2. Write copyText.ts + wire into DealRoom share button",
+      "status": "done"
+    },
+    {
+      "id": "todo:3. dealroom: supplier note + drop duplicate closed card:0",
+      "text": "3. DealRoom: supplier note + drop duplicate closed card",
+      "status": "done"
+    },
+    {
+      "id": "todo:4. deallist: your deals tab (batched unitsof + supplier check):0",
+      "text": "4. DealList: Your deals tab (batched unitsOf + supplier check)",
+      "status": "done"
+    },
+    {
+      "id": "todo:5. app.tsx: wallet chip with copy icon + listtab type fix:0",
+      "text": "5. App.tsx: wallet chip with copy icon + listTab type fix",
+      "status": "done"
+    },
+    {
+      "id": "todo:run check, paste output:0",
+      "text": "Run check, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/App.tsx",
+    "src/swarm/CommitFlow.tsx",
+    "src/swarm/DealList.tsx",
+    "src/swarm/DealRoom.tsx",
+    "src/swarm/copyText.ts",
+    "src/swarm/utils.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 73,
+      "removedLines": 17,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useState, useEffect } from 'react'\n-import { ConnectKitButton } from 'connectkit'\n+import { ConnectKitButton, useModal } from 'connectkit'\n+import { useAccount } from 'wagmi'\n import { motion, AnimatePresence } from 'framer-motion'\n-import { ChevronLeft, Sun, Moon } from 'lucide-react'\n+import { ChevronLeft, Sun, Moon, Copy, Check } from 'lucide-react'\n import { useTheme, toggleTheme } from './swarm/theme'\n import { DealRoom } from './swarm/DealRoom'\n-import { DealList } from './swarm/DealList'\n-import { HomePage } from './swarm/HomePage'\n+import { DealList } from './swarm/DealList'"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export default function App() {\n   useLateWalletReconnect()\n   const theme = useTheme()\n+  const { address } = useAccount()\n \n   const [tab,     setTab]     = useState<Tab>(() => (readDealId() !== undefined ? 'deals' : 'home'))\n   const [dealId,  setDealId]  = useState<bigint | null>(() => readDealId() ?? null)\n-  const [listTab, setListTab] = useState<'active' | 'ended'>('active')\n+  const [listTab, setListTab] = useState<DealListTab>('active')"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-          {/* Wallet */}\n-          <div className=\"shrink-0\">\n-            <ConnectKitButton />\n-          </div>\n+          {/* Wallet chip */}\n+          <WalletChip />"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "                 <DealList\n                   activeTab={listTab}\n                   onTabChange={setListTab}\n                   onSelectDeal={handleSelectDeal}\n                   onPost={() => handleTabChange('post')}\n+                  walletAddr={address}\n                 />"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    copyText(address).then(ok => {\n+    void copyText(address).then(ok => {"
+    },
+    {
+      "path": "src/swarm/CommitFlow.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  if (!isOpen || isPastDeadline) {\n-    return (\n-      <div className=\"rounded-2xl p-4 text-center text-sm\"\n-        style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>\n-        {state === 1 ? 'This deal has settled.' : state === 2 ? 'This deal has been refunded.' : 'This deal is closed.'}\n-      </div>\n-    )\n-  }\n+  // When the deal is closed/settled/refunded, DealRoom already renders\n+  // the informative SettleOrRefundPanel or ClaimPanel above this card.\n+  // Return null here to avoid the duplicate bare \"This deal is closed.\" card.\n+  if (!isOpen || isPastDeadline) return null"
+    },
+    {
+      "path": "src/swarm/copyText.ts",
+      "action": "write",
+      "addedLines": 35,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * copyText — reliable clipboard copy with textarea fallback.\n+ *\n+ * Returns true when the text was copied, false when it could not be.\n+ * On failure the text is selected in a hidden textarea so the user can\n+ * press Ctrl+C / Cmd+C manually.\n+ */\n+export async function copyText(text: string): Promise<boolean> {"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 22,
+      "removedLines": 19,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useMemo, useState } from 'react'\n import { useReadContracts } from 'wagmi'\n import { motion } from 'framer-motion'\n import { Clock, ChevronRight, PlusCircle, Package } from 'lucide-react'\n import { CONTRACTS_ACTIVE, ARC_NETWORK, GOODS_TOKENS, POLL_DEAL_ROOM, POLL_LIST } from './config'\n import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'\n import { useDealCount, useChainNow, useGoodsTokenMeta } from './hooks'\n import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 14,
+      "removedLines": 13,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface DealSummary {\n   dealId:        bigint\n   title:         string\n   goodsToken:    `0x${string}`\n   tokensPerUnit: bigint\n   tiers:         { minUnits: number; pricePerUnit: bigint }[]\n   minUnits:      number\n   maxUnits:      number"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props) {\n+export function DealList({ activeTab, onTabChange, onSelectDeal, onPost, walletAddr }: Props) {\n   const { data: dealCountRaw } = useDealCount()\n   const dealCount   = dealCountRaw !== undefined ? Number(dealCountRaw) : 0\n   const nowSec      = useChainNow()\n   const marketRates = useMarketRates()\n   const [tokenFilter, setTokenFilter] = useState<string>('all')"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 56,
+      "removedLines": 37,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const { data: dealResults } = useReadContracts({\n-    contracts: dealCalls,\n-    query: { enabled: dealCount > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false },\n-  })\n-\n-  const { data: unitResults } = useReadContracts({\n-    contracts: totalUnitsCalls,\n-    query: { enabled: dealCount > 0, refetchInterval: POLL_DEAL_ROOM, refetchIntervalInBackground: false },\n+  // Batch unitsOf calls for the connected wallet — to detect buyer membership\n+  const unitsOfCalls = useMemo(() => {\n+    if (!walletAddr) return []\n+    const zero = '0x0000000000000000000000000000000000000000' as `0x${string}`\n+    return Array.from({ length: dealCount }, (_, i) => ({\n+      address: CONTRACTS_ACTIVE.DemandPool,\n+      abi: DEMAND_POOL_ABI,\n+      functionName: 'unitsOf' as const,"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 30,
+      "removedLines": 16,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // Split active vs ended\n   const active = useMemo(() => deals\n     .filter(d => d.state === 0 && (nowSec === 0 || Number(d.deadline) > nowSec))\n     .sort((a, b) => Number(a.deadline) - Number(b.deadline)),\n     [deals, nowSec]\n   )\n   const ended = useMemo(() => deals\n     .filter(d => d.state !== 0 || (nowSec > 0 && Number(d.deadline) <= nowSec))"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 22,
+      "removedLines": 22,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {/* Controls row: tabs + Post button */}\n       <div className=\"flex items-center gap-3 flex-wrap\">\n         <div className=\"flex gap-1 p-1 rounded-xl\" style={{ background: 'var(--surface-muted)' }}>\n-          {(['active', 'ended'] as const).map(t => (\n+          {(['active', 'ended', ...(walletAddr ? ['yours'] : [])] as DealListTab[]).map(t => (\n             <button key={t}\n               onClick={() => onTabChange(t)}\n               className=\"px-4 py-1.5 rounded-lg text-sm font-medium transition-all\"\n               style={{"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 37,
+      "removedLines": 29,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {/* Empty state */}\n       {shown.length === 0 && (\n         <motion.div\n           className=\"rounded-2xl p-10 text-center\"\n           style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}\n           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}\n         >\n-          {activeTab === 'active' ? (\n+          {activeTab === 'yours' ? ("
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 29,
+      "removedLines": 13,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       {/* Deal cards — responsive grid */}\n       <div className=\"grid gap-3 sm:grid-cols-2 lg:grid-cols-3\">\n-        {shown.map((deal, idx) => (\n-          <DealCard\n-            key={deal.dealId.toString()}\n-            deal={deal}\n-            nowSec={nowSec}\n-            onSelect={onSelectDeal}\n+        {shown.map((deal, idx) => {\n+          const origIdx = deals.indexOf(deal)\n+          let roleLabel: string | undefined\n+          let highlight = false\n+          if (activeTab === 'yours' && walletAddr) {\n+            const walletLower = walletAddr.toLowerCase()"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface DealCardProps {\n   deal:        DealSummary\n   nowSec:      number\n   onSelect:    (id: bigint) => void\n   delay:       number\n   marketRates?: Map<string, number>\n-}\n+  roleLabel?:  string\n+  highlight?:  boolean"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-function DealCard({ deal, nowSec, onSelect, delay, marketRates }: DealCardProps) {\n+function DealCard({ deal, nowSec, onSelect, delay, marketRates, roleLabel, highlight }: DealCardProps) {"
+    },
+    {
+      "path": "src/swarm/DealList.tsx",
+      "action": "edit",
+      "addedLines": 37,
+      "removedLines": 22,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   return (\n     <motion.button\n       className=\"w-full rounded-2xl p-4 text-left transition-all hover:scale-[1.01] active:scale-[0.99]\"\n-      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}\n-      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}\n-      transition={{ duration: 0.22, delay }}\n-      onClick={() => onSelect(deal.dealId)}\n-    >\n+      style={{\n+        background: 'var(--surface)',\n+        border: `1px solid ${highlight ? 'var(--success)' : 'var(--border)'}`,\n+      }}\n+      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { useState, useEffect } from 'react'\n import { useWriteContract, useWaitForTransactionReceipt, useAccount } from 'wagmi'\n import { motion } from 'framer-motion'\n-import { ExternalLink, Share2, Copy, Check, Package } from 'lucide-react'\n+import { ExternalLink, Share2, Copy, Check, Package, AlertCircle } from 'lucide-react'\n+import { copyText } from './copyText'"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 30,
+      "removedLines": 22,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function DealRoom({ dealId }: Props) {\n   const {\n     deal, dealLoading, buyerCount, totalUnits, clearingPrice,\n     nextTier, tierProgress, refetchAll,\n   } = useLiveDealState(dealId)\n \n   const secondsLeft  = useBlockCountdown(deal?.deadline)\n   const history      = useDealHistory(deal ? dealId : undefined)"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 54,
+      "removedLines": 42,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── Unified right order card ─────────────────────────────────────────────\n-  // CommitFlow + gas-toggle link + add-network + share footer, all in one card.\n   const rightCard = (\n     <div className=\"rounded-3xl overflow-hidden\"\n       style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>\n-      {/* CommitFlow fills the main card area */}\n-      <div className=\"p-4\">\n-        <CommitFlow\n+\n+      {isSupplier ? (\n+        /* Supplier sees a short note instead of the order panel */\n+        <div className=\"p-5 flex items-start gap-3\">"
+    },
+    {
+      "path": "src/swarm/DealRoom.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    copyText(url).then(ok => {\n+    void copyText(url).then(ok => {"
+    },
+    {
+      "path": "src/swarm/utils.ts",
+      "action": "edit",
+      "addedLines": 31,
+      "removedLines": 8,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-/** Format 6-decimal micro-USDC bigint as \"$X.XX\" */\n-export function formatUsdcPrice(raw: bigint | number): string {\n-  const n = typeof raw === 'bigint' ? Number(raw) : raw\n-  return new Intl.NumberFormat('en-US', {\n-    style: 'currency', currency: 'USD',\n-    minimumFractionDigits: 2, maximumFractionDigits: 2,\n-  }).format(n / 1_000_000)\n-}\n+/**\n+ * Format 6-decimal micro-USDC bigint as a dollar string.\n+ *\n+ * - $0.01 and above: 2 decimal places ($2,288.23, $1.05)\n+ * - Below $0.01 but non-zero: 2 significant digits, up to 6 dp ($0.0035,\n+ *   $0.000012, $0.0004) — never shows \"$0.00\" for a non-zero value.\n+ * - Exactly zero: \"$0.00\"\n+ */"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

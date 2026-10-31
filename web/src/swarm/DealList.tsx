@@ -21,11 +21,14 @@ import { useMarketRates } from './useMarketRates'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 
+export type DealListTab = 'active' | 'ended' | 'yours'
+
 interface Props {
-  activeTab:      'active' | 'ended'
-  onTabChange:    (t: 'active' | 'ended') => void
+  activeTab:      DealListTab
+  onTabChange:    (t: DealListTab) => void
   onSelectDeal:   (id: bigint) => void
   onPost:         () => void
+  walletAddr:     `0x${string}` | undefined
 }
 
 interface DealSummary {
@@ -40,9 +43,10 @@ interface DealSummary {
   state:         number
   totalUnits:    number
   clearingPrice: bigint
+  supplier:      `0x${string}`
 }
 
-export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props) {
+export function DealList({ activeTab, onTabChange, onSelectDeal, onPost, walletAddr }: Props) {
   const { data: dealCountRaw } = useDealCount()
   const dealCount   = dealCountRaw !== undefined ? Number(dealCountRaw) : 0
   const nowSec      = useChainNow()
@@ -73,6 +77,19 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
     [dealCount]
   )
 
+  // Batch unitsOf calls for the connected wallet — to detect buyer membership
+  const unitsOfCalls = useMemo(() => {
+    if (!walletAddr) return []
+    const zero = '0x0000000000000000000000000000000000000000' as `0x${string}`
+    return Array.from({ length: dealCount }, (_, i) => ({
+      address: CONTRACTS_ACTIVE.DemandPool,
+      abi: DEMAND_POOL_ABI,
+      functionName: 'unitsOf' as const,
+      args: [BigInt(i + 1), walletAddr ?? zero] as const,
+      chainId: CHAIN_ID,
+    }))
+  }, [dealCount, walletAddr])
+
   const { data: dealResults } = useReadContracts({
     contracts: dealCalls,
     query: { enabled: dealCount > 0, refetchInterval: POLL_LIST, refetchIntervalInBackground: false },
@@ -81,6 +98,11 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
   const { data: unitResults } = useReadContracts({
     contracts: totalUnitsCalls,
     query: { enabled: dealCount > 0, refetchInterval: POLL_DEAL_ROOM, refetchIntervalInBackground: false },
+  })
+
+  const { data: myUnitsResults } = useReadContracts({
+    contracts: unitsOfCalls,
+    query: { enabled: unitsOfCalls.length > 0, refetchInterval: POLL_DEAL_ROOM, refetchIntervalInBackground: false },
   })
 
   const deals: DealSummary[] = useMemo(() => {
@@ -107,6 +129,7 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
         state:         Number(d.state),
         totalUnits,
         clearingPrice,
+        supplier:      d.supplier,
       }
     }).filter((d): d is DealSummary => d !== null)
   }, [dealResults, unitResults])
@@ -123,8 +146,22 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
     [deals, nowSec]
   )
 
-  const allShown = activeTab === 'active' ? active : ended
-  const shown = tokenFilter === 'all'
+  // "Your deals" — supplier OR buyer, newest first
+  const yours = useMemo(() => {
+    if (!walletAddr) return []
+    const walletLower = walletAddr.toLowerCase()
+    return deals
+      .filter((d, i) => {
+        const isSupplier = d.supplier.toLowerCase() === walletLower
+        const myUnitsRaw = myUnitsResults?.[i]?.result
+        const myUnits    = myUnitsRaw !== undefined ? Number(myUnitsRaw) : 0
+        return isSupplier || myUnits > 0
+      })
+      .sort((a, b) => Number(b.dealId) - Number(a.dealId))
+  }, [deals, walletAddr, myUnitsResults])
+
+  const allShown = activeTab === 'active' ? active : activeTab === 'ended' ? ended : yours
+  const shown = activeTab === 'yours' || tokenFilter === 'all'
     ? allShown
     : allShown.filter(d => d.goodsToken.toLowerCase() === tokenFilter.toLowerCase())
 
@@ -144,7 +181,7 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
       {/* Controls row: tabs + Post button */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--surface-muted)' }}>
-          {(['active', 'ended'] as const).map(t => (
+          {(['active', 'ended', ...(walletAddr ? ['yours'] : [])] as DealListTab[]).map(t => (
             <button key={t}
               onClick={() => onTabChange(t)}
               className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
@@ -153,7 +190,7 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
                 color: activeTab === t ? 'var(--ink)' : 'var(--muted)',
                 boxShadow: activeTab === t ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
               }}>
-              {t.charAt(0).toUpperCase() + t.slice(1)}
+              {t === 'yours' ? 'Your deals' : t.charAt(0).toUpperCase() + t.slice(1)}
               {t === 'active' && active.length > 0 && (
                 <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold"
                   style={{ background: 'var(--accent)', color: '#fff' }}>
@@ -204,7 +241,15 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
           style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
         >
-          {activeTab === 'active' ? (
+          {activeTab === 'yours' ? (
+            <>
+              <Package className="size-8 mx-auto mb-3" style={{ color: 'var(--muted)' }} />
+              <p className="font-semibold" style={{ color: 'var(--ink)' }}>No deals yet</p>
+              <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
+                Deals you post or join show up here.
+              </p>
+            </>
+          ) : activeTab === 'active' ? (
             <>
               <p className="font-semibold" style={{ color: 'var(--ink)' }}>No active deals</p>
               <p className="text-sm mt-1 mb-5" style={{ color: 'var(--muted)' }}>
@@ -229,16 +274,32 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost }: Props
 
       {/* Deal cards — responsive grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {shown.map((deal, idx) => (
-          <DealCard
-            key={deal.dealId.toString()}
-            deal={deal}
-            nowSec={nowSec}
-            onSelect={onSelectDeal}
-            delay={idx * 0.03}
-            marketRates={marketRates}
-          />
-        ))}
+        {shown.map((deal, idx) => {
+          const origIdx = deals.indexOf(deal)
+          let roleLabel: string | undefined
+          let highlight = false
+          if (activeTab === 'yours' && walletAddr) {
+            const walletLower = walletAddr.toLowerCase()
+            const isSupplier  = deal.supplier.toLowerCase() === walletLower
+            const myUnitsRaw  = origIdx >= 0 ? myUnitsResults?.[origIdx]?.result : undefined
+            const myUnits     = myUnitsRaw !== undefined ? Number(myUnitsRaw) : 0
+            roleLabel = isSupplier ? 'Selling' : myUnits > 0 ? `Joined · ${myUnits} unit${myUnits !== 1 ? 's' : ''}` : undefined
+            // Highlight when settled/refunded (state 1 or 2) — claim is likely available
+            highlight = deal.state === 1 || deal.state === 2
+          }
+          return (
+            <DealCard
+              key={deal.dealId.toString()}
+              deal={deal}
+              nowSec={nowSec}
+              onSelect={onSelectDeal}
+              delay={idx * 0.03}
+              marketRates={marketRates}
+              roleLabel={roleLabel}
+              highlight={highlight}
+            />
+          )
+        })}
       </div>
     </div>
   )
@@ -252,9 +313,11 @@ interface DealCardProps {
   onSelect:    (id: bigint) => void
   delay:       number
   marketRates?: Map<string, number>
+  roleLabel?:  string
+  highlight?:  boolean
 }
 
-function DealCard({ deal, nowSec, onSelect, delay, marketRates }: DealCardProps) {
+function DealCard({ deal, nowSec, onSelect, delay, marketRates, roleLabel, highlight }: DealCardProps) {
   const secondsLeft  = nowSec > 0 ? Math.max(0, Number(deal.deadline) - nowSec) : undefined
   const isEnded      = deal.state !== 0 || (nowSec > 0 && secondsLeft === 0)
   const fillPct      = deal.maxUnits > 0 ? Math.min(1, deal.totalUnits / deal.maxUnits) : 0
@@ -279,14 +342,17 @@ function DealCard({ deal, nowSec, onSelect, delay, marketRates }: DealCardProps)
   return (
     <motion.button
       className="w-full rounded-2xl p-4 text-left transition-all hover:scale-[1.01] active:scale-[0.99]"
-      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+      style={{
+        background: 'var(--surface)',
+        border: `1px solid ${highlight ? 'var(--success)' : 'var(--border)'}`,
+      }}
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.22, delay }}
       onClick={() => onSelect(deal.dealId)}
     >
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          {/* Title + state badge */}
+          {/* Title + state badge + role badge */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-sm leading-tight" style={{ color: 'var(--ink)' }}>
               {deal.title}
@@ -295,6 +361,18 @@ function DealCard({ deal, nowSec, onSelect, delay, marketRates }: DealCardProps)
               <span className="text-xs px-1.5 py-0.5 rounded-md"
                 style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
                 {deal.state === 1 ? 'Settled' : deal.state === 2 ? 'Refunded' : 'Ended'}
+              </span>
+            )}
+            {roleLabel && (
+              <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
+                style={{ background: 'color-mix(in srgb, var(--accent) 10%, transparent)', color: 'var(--accent)' }}>
+                {roleLabel}
+              </span>
+            )}
+            {highlight && (
+              <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
+                style={{ background: 'rgba(26,128,71,0.1)', color: 'var(--success)' }}>
+                Ready to collect
               </span>
             )}
           </div>

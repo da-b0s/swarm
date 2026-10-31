@@ -25,6 +25,8 @@ import type { GoodsToken } from './config'
 import { useChainNow } from './hooks'
 import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount, pricePerToken, marketDeviation } from './utils'
 import { useMarketRates } from './useMarketRates'
+import { useCustomTokenHistory, recordCustomToken } from './useCustomTokenHistory'
+import { useSupplierTokens } from './useSupplierTokens'
 
 const CHAIN_ID = ARC_NETWORK.chainId
 const USDC     = ARC_NETWORK.usdc.address
@@ -237,16 +239,18 @@ function validate(inp: PostInputs, chainNow: number): ValidatedInputs | string {
 // ── Token picker dropdown ─────────────────────────────────────────────────────
 
 interface TokenPickerProps {
-  selected:   AnyToken
-  onSelect:   (t: AnyToken) => void
+  selected:       AnyToken
+  onSelect:       (t: AnyToken) => void
   /** balances keyed by token address (lower-cased), raw base units */
-  balances:   Map<string, bigint>
-  walletAddr: `0x${string}` | undefined
+  balances:       Map<string, bigint>
+  walletAddr:     `0x${string}` | undefined
+  /** lowercase addresses of unlisted tokens the seller has used before */
+  yourTokenAddrs: string[]
 }
 
 type CustomState = 'idle' | 'loading' | 'error' | 'ok'
 
-function TokenPickerDropdown({ selected, onSelect, balances, walletAddr }: TokenPickerProps) {
+function TokenPickerDropdown({ selected, onSelect, balances, walletAddr, yourTokenAddrs }: TokenPickerProps) {
   const [open,        setOpen]        = useState(false)
   const [showOther,   setShowOther]   = useState(() => isCustomToken(selected))
   const [addrInput,   setAddrInput]   = useState(() => isCustomToken(selected) ? selected.address : '')
@@ -324,16 +328,69 @@ function TokenPickerDropdown({ selected, onSelect, balances, walletAddr }: Token
     return custom
   }, [customState, normalAddr, customData])
 
-  // When the resolved token changes, propagate to parent
+  // When the resolved custom token changes, propagate to parent and record it.
   useEffect(() => {
     if (resolvedCustom !== null) {
       onSelect(resolvedCustom)
-      // If it turned out to be a listed token, exit "other" mode
-      if (!isCustomToken(resolvedCustom)) setShowOther(false)
+      if (!isCustomToken(resolvedCustom)) {
+        setShowOther(false)
+      } else {
+        recordCustomToken(resolvedCustom.address)
+      }
     }
   // onSelect is stable via useCallback in parent
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedCustom])
+
+  // ── "Your tokens" batch read ─────────────────────────────────────────────
+  // Resolve symbol/name/decimals/balance for each address in yourTokenAddrs.
+  const zero = '0x0000000000000000000000000000000000000000' as `0x${string}`
+  const yourTokenCalls = useMemo(() => {
+    const calls: {
+      address: `0x${string}`
+      abi: typeof ERC20_ABI
+      functionName: 'symbol' | 'name' | 'decimals' | 'balanceOf'
+      args?: [`0x${string}`]
+      chainId: number
+    }[] = []
+    for (const addr of yourTokenAddrs) {
+      const a = addr as `0x${string}`
+      calls.push({ address: a, abi: ERC20_ABI, functionName: 'symbol',   chainId: CHAIN_ID })
+      calls.push({ address: a, abi: ERC20_ABI, functionName: 'name',     chainId: CHAIN_ID })
+      calls.push({ address: a, abi: ERC20_ABI, functionName: 'decimals', chainId: CHAIN_ID })
+      calls.push({ address: a, abi: ERC20_ABI, functionName: 'balanceOf', args: [walletAddr ?? zero], chainId: CHAIN_ID })
+    }
+    return calls
+  }, [yourTokenAddrs, walletAddr])
+
+  const { data: yourTokenData } = useReadContracts({
+    contracts: yourTokenCalls,
+    query: { enabled: yourTokenCalls.length > 0, staleTime: 30_000 },
+  })
+
+  // Resolve "Your tokens" into typed CustomToken entries (skip failed reads)
+  const resolvedYourTokens: CustomToken[] = useMemo(() => {
+    if (!yourTokenData || yourTokenAddrs.length === 0) return []
+    const out: CustomToken[] = []
+    for (let i = 0; i < yourTokenAddrs.length; i++) {
+      const base = i * 4
+      const symR  = yourTokenData[base]
+      const nameR = yourTokenData[base + 1]
+      const decR  = yourTokenData[base + 2]
+      if (symR?.status !== 'success' || decR?.status !== 'success') continue
+      const dec = Number(decR.result)
+      if (!Number.isFinite(dec) || dec > 36) continue
+      const sym  = String(symR.result)
+      const name = nameR?.status === 'success' ? String(nameR.result) : sym
+      const addr = yourTokenAddrs[i] as `0x${string}`
+      const balR = yourTokenData[base + 3]
+      const bal  = balR?.status === 'success' ? BigInt(String(balR.result)) : undefined
+      // Store balance in the balances map so it shows in the trigger
+      if (bal !== undefined) balances.set(addr.toLowerCase(), bal)
+      out.push({ address: addr, symbol: sym, name, decimals: dec, unverified: true as const })
+    }
+    return out
+  }, [yourTokenData, yourTokenAddrs, balances])
 
   const selBal = balances.get(selected.address.toLowerCase())
   const selBalDisplay = selBal !== undefined ? formatTokenAmount(selBal, selected.decimals) : undefined
@@ -406,6 +463,51 @@ function TokenPickerDropdown({ selected, onSelect, balances, walletAddr }: Token
             )
           })}
 
+          {/* Your tokens group */}
+          {resolvedYourTokens.length > 0 && (
+            <>
+              <li className="pt-1 pb-0.5 px-1">
+                <span className="text-xs font-semibold tracking-wide uppercase"
+                  style={{ color: 'var(--muted)' }}>Your tokens</span>
+              </li>
+              {resolvedYourTokens.map(tok => {
+                const isSelected = selected.address.toLowerCase() === tok.address.toLowerCase()
+                const bal = balances.get(tok.address.toLowerCase())
+                const balDisplay = bal !== undefined ? formatTokenAmount(bal, tok.decimals) : undefined
+                return (
+                  <li key={tok.address} role="option" aria-selected={isSelected}>
+                    <button
+                      type="button"
+                      onClick={() => { onSelect(tok); setShowOther(false); setOpen(false) }}
+                      className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 text-left transition-all hover:scale-[1.005]"
+                      style={{
+                        background: isSelected ? 'color-mix(in srgb, var(--warn, #b45309) 8%, transparent)' : 'var(--surface-muted)',
+                        border: `1px solid ${isSelected ? 'var(--warn, #b45309)' : 'var(--border)'}`,
+                      }}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        {isSelected
+                          ? <Check className="size-3.5 shrink-0" style={{ color: 'var(--warn, #b45309)' }} />
+                          : <span className="size-3.5 shrink-0" />}
+                        <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>{tok.symbol}</span>
+                        <span className="text-xs truncate" style={{ color: 'var(--muted)' }}>{tok.name}</span>
+                        <span className="text-xs shrink-0 px-1 rounded"
+                          style={{ background: 'rgba(180,83,9,0.1)', color: 'var(--warn, #b45309)' }}>
+                          Unverified
+                        </span>
+                      </div>
+                      {balDisplay !== undefined && (
+                        <span className="text-xs tabular-nums shrink-0" style={{ color: 'var(--subtle)' }}>
+                          {balDisplay} {tok.symbol}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                )
+              })}
+            </>
+          )}
+
           {/* Other token option */}
           <li role="option" aria-selected={showOther}>
             <button
@@ -473,6 +575,8 @@ function TokenPickerDropdown({ selected, onSelect, balances, walletAddr }: Token
 
 export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => void }) {
   const { address, isConnected, chainId: walletChain } = useAccount()
+  const customTokenHistory = useCustomTokenHistory()
+  const supplierTokenAddrs = useSupplierTokens(address)
   const { switchChain } = useSwitchChain()
   const wrongChain  = isConnected && walletChain !== CHAIN_ID
   const chainNow    = useChainNow()
@@ -498,6 +602,20 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   // ageFromRef reads the ref, not a prop/state — no deps needed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Merge supplier-deal tokens + localStorage history, exclude listed tokens.
+  const yourTokenAddrs: string[] = useMemo(() => {
+    const listedLower = new Set(GOODS_TOKENS.map(t => t.address.toLowerCase()))
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const addr of [...supplierTokenAddrs, ...customTokenHistory]) {
+      const lower = addr.toLowerCase()
+      if (listedLower.has(lower) || seen.has(lower)) continue
+      seen.add(lower)
+      out.push(lower)
+    }
+    return out
+  }, [supplierTokenAddrs, customTokenHistory])
 
   // ── Form state ───────────────────────────────────────────────────────────
   const [selectedToken,    setSelectedToken]    = useState<AnyToken>(GOODS_TOKENS[0])
@@ -1041,6 +1159,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         onSelect={t => { setSelectedToken(t); setStockEdited(false); tpuEditedRef.current = false; tiersEditedRef.current = false }}
         balances={allBalancesWithCustom}
         walletAddr={address}
+        yourTokenAddrs={yourTokenAddrs}
       />
 
       {/* Unverified custom token warning */}
@@ -1107,7 +1226,11 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
           <input
             value={title}
             onChange={e => setTitle(e.target.value)}
-            placeholder="e.g. Group buy: EURC at a discount"
+            placeholder={
+              stockDisplay
+                ? `e.g. ${stockDisplay} ${symbol}, weekend batch`
+                : `e.g. ${symbol} weekend batch`
+            }
             maxLength={200}
             className="rounded-xl px-3 py-2 text-sm outline-none transition-colors"
             style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
@@ -1302,20 +1425,42 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
         <span className="text-xs font-semibold tracking-wide uppercase"
           style={{ color: 'var(--muted)' }}>Parameters</span>
         <div className="grid grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1">
             <span className="text-xs" style={{ color: 'var(--subtle)' }}>Stock (max units)</span>
-            <input type="number" min="1"
-              value={stockEdited ? maxUnits : String(effectiveMaxUnitsNum)}
-              onChange={e => { setStockEdited(true); setMaxUnits(e.target.value) }}
-              className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
-              style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
-            {/* Deposit line — computed from same tokensPerUnit sent on chain */}
+            {/* Input row with inline Max button */}
+            <div className="flex items-center gap-1.5">
+              <input type="number" min="1"
+                value={stockEdited ? maxUnits : String(effectiveMaxUnitsNum)}
+                onChange={e => { setStockEdited(true); setMaxUnits(e.target.value) }}
+                className="flex-1 min-w-0 rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
+                style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+              {maxAffordable > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStockEdited(true)
+                    setMaxUnits(String(maxAffordable))
+                    tiersEditedRef.current = false
+                  }}
+                  className="shrink-0 rounded-lg px-2 py-1.5 text-xs font-semibold transition-all hover:opacity-80"
+                  style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--accent)' }}>
+                  Max
+                </button>
+              )}
+            </div>
+            {/* Deposit line */}
             {stockDisplay !== null && symbol && (
               <span className="text-xs" style={{ color: 'var(--muted)' }}>
                 = {stockDisplay} {symbol} deposited
               </span>
             )}
-            {/* Over-budget note — calm, next to the field, not a red banner at the top */}
+            {/* Balance line */}
+            {tokenBalance !== undefined && !balanceIsZero && (
+              <span className="text-xs" style={{ color: 'var(--subtle)' }}>
+                Balance: {formatTokenAmount(tokenBalance, decimals)} {symbol}
+              </span>
+            )}
+            {/* Over-budget note */}
             {overBudget && !balanceIsZero && tokensPerUnit !== null && (
               <span className="flex items-start gap-1 text-xs mt-0.5"
                 style={{ color: 'var(--warn, #b45309)' }}>
@@ -1324,7 +1469,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
                 {formatTokenAmount(tokensPerUnit, decimals)} {symbol} each.
               </span>
             )}
-          </label>
+          </div>
           <label className="flex flex-col gap-1">
             <span className="text-xs" style={{ color: 'var(--subtle)' }}>Deal minimum (units)</span>
             <input type="number" min="1" value={minUnits} onChange={e => setMinUnits(e.target.value)}

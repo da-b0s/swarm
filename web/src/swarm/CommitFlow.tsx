@@ -432,11 +432,14 @@ export function CommitFlow({
 
   // ── Guards ────────────────────────────────────────────────────────────────────
 
+  // Past the deadline but not yet finalised: DealRoom's SettleOrRefundPanel
+  // already explains it, so don't add a second "closed" card.
+  if (state === 0 && isPastDeadline) return null
   if (!isOpen || isPastDeadline) {
     return (
       <div className="rounded-2xl p-4 text-center text-sm"
         style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
-        {state === 1 ? 'This deal has settled.' : state === 2 ? 'This deal has been refunded.' : 'This deal is closed.'}
+        {state === 1 ? 'This deal has settled.' : 'This deal has been refunded.'}
       </div>
     )
   }

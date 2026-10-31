@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useWriteContract, useWaitForTransactionReceipt, useAccount } from 'wagmi'
 import { motion } from 'framer-motion'
-import { ExternalLink, Share2, Copy, Check, Package } from 'lucide-react'
+import { ExternalLink, Share2, Copy, Check, Package, AlertCircle } from 'lucide-react'
+import { copyText } from './copyText'
 import { PriceHero } from './PriceHero'
 import { TierProgress } from './TierProgress'
 import { CommitFlow } from './CommitFlow'
@@ -42,14 +43,22 @@ export function DealRoom({ dealId }: Props) {
   const tokenConfig  = deal ? GOODS_TOKENS.find(t => t.address.toLowerCase() === deal.goodsToken.toLowerCase()) : undefined
   const marketRate   = tokenConfig?.marketSymbol ? marketRates?.get(tokenConfig.marketSymbol) : undefined
   const isVerifiedToken = !!tokenConfig
-  const [copied, setCopied] = useState(false)
+  const { address }  = useAccount()
+  const isSupplier   = !!(deal && address && deal.supplier.toLowerCase() === address.toLowerCase())
+  const [copied, setCopied]     = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
 
   const handleShare = () => {
     const url = `${window.location.origin}?deal=${dealId.toString()}`
-    navigator.clipboard.writeText(url).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }).catch(() => { /* ignore */ })
+    void copyText(url).then(ok => {
+      if (ok) {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      } else {
+        setCopyFailed(true)
+        setTimeout(() => setCopyFailed(false), 3000)
+      }
+    })
   }
 
   // Share line counts units, not buyers
@@ -181,30 +190,41 @@ export function DealRoom({ dealId }: Props) {
 
 
   // ── Unified right order card ─────────────────────────────────────────────
-  // CommitFlow + gas-toggle link + add-network + share footer, all in one card.
   const rightCard = (
     <div className="rounded-3xl overflow-hidden"
       style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-      {/* CommitFlow fills the main card area */}
-      <div className="p-4">
-        <CommitFlow
-          dealId={dealId} clearingPrice={clearingPrice} totalUnits={unitCount}
-          buyerCount={count} tiers={deal.tiers} maxUnits={deal.maxUnits}
-          maxUnitsPerBuyer={deal.maxUnitsPerBuyer} deadline={deal.deadline}
-          state={deal.state} goodsToken={deal.goodsToken}
-          goodsSymbol={symbol} goodsDecimals={tokenMeta?.decimals}
-          tokensPerUnit={deal.tokensPerUnit} onCommitted={refetchAll}
-        />
-      </div>
 
-      {/* Thin divider then secondary buttons */}
-      <div className="border-t px-4 py-3 flex items-center gap-3 flex-wrap"
-        style={{ borderColor: 'var(--border)' }}>
-        <AddNetworkButton />
-      </div>
+      {isSupplier ? (
+        /* Supplier sees a short note instead of the order panel */
+        <div className="p-5 flex items-start gap-3">
+          <AlertCircle className="size-4 shrink-0 mt-0.5" style={{ color: 'var(--muted)' }} />
+          <p className="text-sm" style={{ color: 'var(--muted)' }}>
+            This is your deal. Buyers&apos; orders appear in the activity below.
+          </p>
+        </div>
+      ) : (
+        <div className="p-4">
+          <CommitFlow
+            dealId={dealId} clearingPrice={clearingPrice} totalUnits={unitCount}
+            buyerCount={count} tiers={deal.tiers} maxUnits={deal.maxUnits}
+            maxUnitsPerBuyer={deal.maxUnitsPerBuyer} deadline={deal.deadline}
+            state={deal.state} goodsToken={deal.goodsToken}
+            goodsSymbol={symbol} goodsDecimals={tokenMeta?.decimals}
+            tokensPerUnit={deal.tokensPerUnit} onCommitted={refetchAll}
+          />
+        </div>
+      )}
+
+      {/* Secondary buttons */}
+      {!isSupplier && (
+        <div className="border-t px-4 py-3 flex items-center gap-3 flex-wrap"
+          style={{ borderColor: 'var(--border)' }}>
+          <AddNetworkButton />
+        </div>
+      )}
 
       {/* Share footer */}
-      {shareLabel && deal.state === 0 && (
+      {(shareLabel || deal.state === 0) && (
         <div className="border-t px-4 py-3 flex items-center gap-3"
           style={{ borderColor: 'var(--border)' }}>
           <button onClick={handleShare}
@@ -213,8 +233,9 @@ export function DealRoom({ dealId }: Props) {
             {copied
               ? <Check className="size-4 shrink-0" style={{ color: 'var(--success)' }} />
               : <Share2 className="size-4 shrink-0" style={{ color: 'var(--muted)' }} />}
-            <span className="flex-1 text-xs" style={{ color: copied ? 'var(--success)' : 'var(--muted)' }}>
-              {copied ? 'Link copied.' : shareLabel}
+            <span className="flex-1 text-xs"
+              style={{ color: copied ? 'var(--success)' : copyFailed ? 'var(--warn, #b45309)' : 'var(--muted)' }}>
+              {copied ? 'Copied.' : copyFailed ? "Couldn't copy — the link is selected." : (shareLabel ?? 'Copy link')}
             </span>
             {!copied && <Copy className="size-3.5 shrink-0" style={{ color: 'var(--subtle)' }} />}
           </button>

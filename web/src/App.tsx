@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
-import { ConnectKitButton } from 'connectkit'
+import { ConnectKitButton, useModal } from 'connectkit'
+import { useAccount } from 'wagmi'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronLeft, Sun, Moon } from 'lucide-react'
+import { ChevronLeft, Sun, Moon, Copy, Check } from 'lucide-react'
 import { useTheme, toggleTheme } from './swarm/theme'
 import { DealRoom } from './swarm/DealRoom'
 import { DealList } from './swarm/DealList'
+import type { DealListTab } from './swarm/DealList'
 import { HomePage } from './swarm/HomePage'
 import { SupplierView } from './swarm/SupplierView'
 import { ProofPage } from './swarm/ProofPage'
@@ -13,8 +15,62 @@ import { RetiredClaims } from './swarm/RetiredClaims'
 import { useLateWalletReconnect } from './swarm/useLateWalletReconnect'
 import { ACTIVE_NETWORK, ARC_NETWORK, DEPLOYMENT_READY } from './swarm/config'
 import { SwarmLogo } from './swarm/SwarmLogo'
+import { shortAddr } from './swarm/utils'
+import { copyText } from './swarm/copyText'
 
 type Tab = 'home' | 'deals' | 'post' | 'proof'
+
+// ── Wallet chip with copy-address button ──────────────────────────────────────
+
+function WalletChip() {
+  const { address, isConnected } = useAccount()
+  const { setOpen }  = useModal()
+  const [addrCopied, setAddrCopied] = useState(false)
+
+  const handleCopyAddr = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!address) return
+    void copyText(address).then(ok => {
+      if (ok) { setAddrCopied(true); setTimeout(() => setAddrCopied(false), 2000) }
+    })
+  }
+
+  if (!isConnected) {
+    return (
+      <ConnectKitButton />
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-1 shrink-0">
+      {/* Chip — opens ConnectKit modal */}
+      <button
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-all hover:opacity-80"
+        style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}>
+        <span className="size-5 rounded-full shrink-0 flex items-center justify-center text-xs font-bold"
+          style={{
+            background: `hsl(${parseInt((address ?? '0x000000').slice(2, 6), 16) % 360}deg 60% 80%)`,
+            color: `hsl(${parseInt((address ?? '0x000000').slice(2, 6), 16) % 360}deg 60% 30%)`,
+          }}>
+          {(address ?? '').slice(2, 4).toUpperCase()}
+        </span>
+        <span className="hidden sm:inline mono text-xs">{shortAddr(address ?? '')}</span>
+      </button>
+
+      {/* Copy address — sm and up only */}
+      <button
+        onClick={handleCopyAddr}
+        aria-label="Copy address"
+        className="hidden sm:flex size-8 items-center justify-center rounded-xl transition-all hover:opacity-70"
+        style={{ border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--muted)' }}>
+        {addrCopied
+          ? <Check className="size-3.5" style={{ color: 'var(--success)' }} />
+          : <Copy className="size-3.5" />}
+      </button>
+    </div>
+  )
+}
 
 // ── URL param helpers ─────────────────────────────────────────────────────────
 
@@ -37,10 +93,11 @@ function writeDealId(id: bigint | null) {
 export default function App() {
   useLateWalletReconnect()
   const theme = useTheme()
+  const { address } = useAccount()
 
   const [tab,     setTab]     = useState<Tab>(() => (readDealId() !== undefined ? 'deals' : 'home'))
   const [dealId,  setDealId]  = useState<bigint | null>(() => readDealId() ?? null)
-  const [listTab, setListTab] = useState<'active' | 'ended'>('active')
+  const [listTab, setListTab] = useState<DealListTab>('active')
 
   // If a ?deal= param was present on load, go straight to that deal room.
   // Keep URL in sync as we navigate.
@@ -121,10 +178,8 @@ export default function App() {
             {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </button>
 
-          {/* Wallet */}
-          <div className="shrink-0">
-            <ConnectKitButton />
-          </div>
+          {/* Wallet chip */}
+          <WalletChip />
         </div>
       </nav>
 
@@ -170,6 +225,7 @@ export default function App() {
                   onTabChange={setListTab}
                   onSelectDeal={handleSelectDeal}
                   onPost={() => handleTabChange('post')}
+                  walletAddr={address}
                 />
               )}
             </motion.div>

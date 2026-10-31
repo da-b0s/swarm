@@ -1,0 +1,346 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading the current file state first. Good. Now I also need to check what deal data hooks exist for reading supplier deals. Let me check what the factory ABI exposes and what hooks are already available. Good — `dealCount` and `getDeal` exist. Now I have everything I need. The plan:\n\n**Item 1 (Balance + Max button):** Add balance display line and a \"Max\" button inside the stock field's wrapper.\n\n**Item 2 (Title placeholder):** Derive a dynamic placeholder from `symbol` + `stockDisplay`.\n\n**Item 3 (Your tokens):** New helper file `src/swarm/useCustomTokenHistory.ts` for localStorage reads/writes, and a new hook `useSupplierTokens` (batched multicall over up to ~50 deal IDs from `dealCount`). Wire both into `TokenPickerDropdown` via new props. **Items 1 + 2 first — targeted edits to SupplierView:** Now **item 2 — dynamic title placeholder:** Now **item 3 — \"Your tokens\"**. Write the helper file first, then update `TokenPickerDropdown`. The `import` at the bottom will fail — React imports must be at the top. Fix the file: Now write the hook that reads supplier deals from the factory in one batched multicall: Now check what `useDealCount` returns — it might be a different type: `useDealCount()` returns a wagmi query object, not the raw bigint. Fix `useSupplierTokens` to destructure `.data`: Now wire both into `TokenPickerDropdown`. I need to:\n1. Add `yourTokenAddrs` prop to `TokenPickerProps`\n2. Resolve their metadata+balance via one more `useReadContracts` batch inside the dropdown\n3. Render the \"Your tokens\" group between the listed tokens and \"Other token…\"\n4. Call `recordCustomToken` when a custom token resolves successfully Now add `yourTokenAddrs` to `TokenPickerProps` and update the component: Now update the component signature and add the \"Your tokens\" batch read and render: Now add the \"Your tokens\" batch multicall inside the dropdown, after the existing `customCalls` block: Now add the \"Your tokens\" group between the listed tokens and \"Other token…\" in the dropdown JSX: Now wire the two hooks into the main component and pass `yourTokenAddrs` to the picker. Also call `recordCustomToken` when the selected token is custom and changes in the parent: Derive the merged `yourTokenAddrs` (union of supplier deals + localStorage, deduplicated, excluding listed tokens): Now pass `yourTokenAddrs` to `TokenPickerDropdown`: Now run the check: Type the `JSON.parse` result as `unknown`: ```\noxlint: Found 0 warnings and 0 errors.\ntsc --noEmit: exit 0\n``` Here is what changed across the three items.\n\n**1. Balance + Max button (SupplierView.tsx):**\nThe stock `<label>` was converted to a `<div>` so the input and \"Max\" button can sit side-by-side in a flex row. The \"Max\" button appears only when `maxAffordable > 0` (balance is enough for at least one unit). Clicking it sets `maxUnits` to `String(maxAffordable)`, marks `stockEdited = true`, and resets `tiersEditedRef.current = false` so the tier thresholds auto-spread to the new stock. A \"Balance: 875.399 FAZE\" line is shown in `--subtle` colour below the deposit line whenever the balance is known and non-zero.\n\n**2. Dynamic title placeholder (SupplierView.tsx):**\nThe `placeholder` attribute is now computed: when `stockDisplay` is available it becomes `e.g. 50 EURC, weekend batch` (or `e.g. 0.05 WETH, weekend batch` for WETH-style tokens); when stock is empty it falls back to `e.g. EURC weekend batch`.\n\n**3. Your tokens group (new files + SupplierView.tsx):**\n\n- `src/swarm/useCustomTokenHistory.ts`: reads and writes `swarm.customTokens` in localStorage. `recordCustomToken(addr)` deduplicates, prepends, caps at 10, and dispatches a `swarm-custom-tokens` synthetic event. `useCustomTokenHistory()` subscribes to that event and the standard `storage` event to stay live.\n\n- `src/swarm/useSupplierTokens.ts`: calls `useDealCount()`, then batches up to 50 `getDeal` view calls via `useReadContracts`. Filters to deals where `supplier === walletAddr`, collects unique `goodsToken` addresses, excludes any already in `GOODS_TOKENS`.\n\n- `SupplierView.tsx`: imports both, merges `supplierTokenAddrs + customTokenHistory` into `yourTokenAddrs` (deduplicated, listed tokens excluded). Passes it as a new `yourTokenAddrs` prop to `TokenPickerDropdown`. Inside the dropdown a four-calls-per-token multicall resolves symbol/name/decimals/balance for every entry. The \"Your tokens\" group renders between the listed tokens and \"Other token…\" when non-empty, with the same layout as listed tokens but an amber \"Unverified\" tag and amber selection border. Selecting a \"Your tokens\" entry calls `onSelect` exactly like a pasted custom token (the unverified warning above the form appears). `recordCustomToken` is also called when any pasted address resolves successfully, so it will appear next session.",
+  "todos": [
+    {
+      "id": "todo:1. balance display + max button in stock field:0",
+      "text": "1. Balance display + Max button in stock field",
+      "status": "done"
+    },
+    {
+      "id": "todo:2. dynamic title placeholder:0",
+      "text": "2. Dynamic title placeholder",
+      "status": "done"
+    },
+    {
+      "id": "todo:3. your tokens group in dropdown (localstorage + supplier deals multicall):0",
+      "text": "3. Your tokens group in dropdown (localStorage + supplier deals multicall)",
+      "status": "done"
+    },
+    {
+      "id": "todo:run check, paste output:0",
+      "text": "Run check, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/swarm/SupplierView.tsx",
+    "src/swarm/useCustomTokenHistory.ts",
+    "src/swarm/useSupplierTokens.ts"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 46,
+      "removedLines": 24,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <div className=\"grid grid-cols-2 gap-3\">\n-          <label className=\"flex flex-col gap-1\">\n+          <div className=\"flex flex-col gap-1\">\n             <span className=\"text-xs\" style={{ color: 'var(--subtle)' }}>Stock (max units)</span>\n-            <input type=\"number\" min=\"1\"\n-              value={stockEdited ? maxUnits : String(effectiveMaxUnitsNum)}\n-              onChange={e => { setStockEdited(true); setMaxUnits(e.target.value) }}\n-              className=\"rounded-xl px-3 py-2 text-sm tabular-nums outline-none\"\n-              style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />\n+            {/* Input row with inline Max button */}\n+            <div className=\"flex items-center gap-1.5\">\n+              <input type=\"number\" min=\"1\"\n+                value={stockEdited ? maxUnits : String(effectiveMaxUnitsNum)}\n+                onChange={e => { setStockEdited(true); setMaxUnits(e.target.value) }}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           <input\n             value={title}\n             onChange={e => setTitle(e.target.value)}\n-            placeholder=\"e.g. Group buy: EURC at a discount\"\n+            placeholder={\n+              stockDisplay\n+                ? `e.g. ${stockDisplay} ${symbol}, weekend batch`\n+                : `e.g. ${symbol} weekend batch`\n+            }"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 8,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " import { DEAL_FACTORY_ABI, ERC20_ABI } from './abis'\n import { CONTRACTS_ACTIVE, ARC_NETWORK, MAX_CAP, MAX_TIERS, MAX_PRICE_USDC, ARC_TX_FEES, GOODS_TOKENS, POLL_MY_ORDER } from './config'\n import type { GoodsToken } from './config'\n import { useChainNow } from './hooks'\n import { formatUsdcPrice, txUrl, parseRevertReason, computePriceAt, formatTokenAmount, pricePerToken, marketDeviation } from './utils'\n-import { useMarketRates } from './useMarketRates'\n+import { useMarketRates } from './useMarketRates'\n+import { useCustomTokenHistory, recordCustomToken } from './useCustomTokenHistory'\n+import { useSupplierTokens } from './useSupplierTokens'"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 9,
+      "removedLines": 7,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " interface TokenPickerProps {\n-  selected:   AnyToken\n-  onSelect:   (t: AnyToken) => void\n+  selected:       AnyToken\n+  onSelect:       (t: AnyToken) => void\n   /** balances keyed by token address (lower-cased), raw base units */\n-  balances:   Map<string, bigint>\n-  walletAddr: `0x${string}` | undefined\n-}\n+  balances:       Map<string, bigint>\n+  walletAddr:     `0x${string}` | undefined\n+  /** lowercase addresses of unlisted tokens the seller has used before */\n+  yourTokenAddrs: string[]"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-function TokenPickerDropdown({ selected, onSelect, balances, walletAddr }: TokenPickerProps) {\n+function TokenPickerDropdown({ selected, onSelect, balances, walletAddr, yourTokenAddrs }: TokenPickerProps) {"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 63,
+      "removedLines": 10,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // When the resolved token changes, propagate to parent\n+  // When the resolved custom token changes, propagate to parent and record it.\n   useEffect(() => {\n     if (resolvedCustom !== null) {\n       onSelect(resolvedCustom)\n-      // If it turned out to be a listed token, exit \"other\" mode\n-      if (!isCustomToken(resolvedCustom)) setShowOther(false)\n-    }\n-  // onSelect is stable via useCallback in parent\n+      if (!isCustomToken(resolvedCustom)) {\n+        setShowOther(false)\n+      } else {\n+        recordCustomToken(resolvedCustom.address)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 47,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-          {/* Other token option */}\n-          <li role=\"option\" aria-selected={showOther}>\n+          {/* Your tokens group */}\n+          {resolvedYourTokens.length > 0 && (\n+            <>\n+              <li className=\"pt-1 pb-0.5 px-1\">\n+                <span className=\"text-xs font-semibold tracking-wide uppercase\"\n+                  style={{ color: 'var(--muted)' }}>Your tokens</span>\n+              </li>\n+              {resolvedYourTokens.map(tok => {"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": " export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => void }) {\n-  const { address, isConnected, chainId: walletChain } = useAccount()\n+  const { address, isConnected, chainId: walletChain } = useAccount()\n+  const customTokenHistory = useCustomTokenHistory()\n+  const supplierTokenAddrs = useSupplierTokens(address)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 16,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // ── Form state ───────────────────────────────────────────────────────────\n-  const [selectedToken,    setSelectedToken]    = useState<AnyToken>(GOODS_TOKENS[0])\n+  // Merge supplier-deal tokens + localStorage history, exclude listed tokens.\n+  const yourTokenAddrs: string[] = useMemo(() => {\n+    const listedLower = new Set(GOODS_TOKENS.map(t => t.address.toLowerCase()))\n+    const seen = new Set<string>()\n+    const out: string[] = []\n+    for (const addr of [...supplierTokenAddrs, ...customTokenHistory]) {\n+      const lower = addr.toLowerCase()\n+      if (listedLower.has(lower) || seen.has(lower)) continue"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 7,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "       <TokenPickerDropdown\n         selected={selectedToken}\n         onSelect={t => { setSelectedToken(t); setStockEdited(false); tpuEditedRef.current = false; tiersEditedRef.current = false }}\n         balances={allBalancesWithCustom}\n         walletAddr={address}\n+        yourTokenAddrs={yourTokenAddrs}\n       />"
+    },
+    {
+      "path": "src/swarm/useCustomTokenHistory.ts",
+      "action": "write",
+      "addedLines": 69,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * useCustomTokenHistory — persist and recall unverified token addresses the\n+ * seller has used before (pasted in the \"Other token…\" input or selected from\n+ * their own deals).\n+ *\n+ * Storage: localStorage key `swarm.customTokens`, JSON array of lowercase\n+ * 0x-addresses, newest-first, capped at MAX_HISTORY entries.\n+ * All reads/writes are wrapped in try/catch so a broken localStorage never"
+    },
+    {
+      "path": "src/swarm/useCustomTokenHistory.ts",
+      "action": "write",
+      "addedLines": 62,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * useCustomTokenHistory — persist and recall unverified token addresses the\n+ * seller has used before (pasted in \"Other token…\" or found in their own deals).\n+ *\n+ * Storage: localStorage key `swarm.customTokens`, JSON array of lowercase\n+ * 0x-addresses, newest-first, capped at MAX_HISTORY entries.\n+ * All reads/writes are wrapped in try/catch so a broken localStorage never\n+ * crashes the sell page."
+    },
+    {
+      "path": "src/swarm/useCustomTokenHistory.ts",
+      "action": "edit",
+      "addedLines": 2,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-    const parsed = JSON.parse(raw)\n+    const parsed: unknown = JSON.parse(raw)\n     if (!Array.isArray(parsed)) return []"
+    },
+    {
+      "path": "src/swarm/useSupplierTokens.ts",
+      "action": "write",
+      "addedLines": 73,
+      "removedLines": 0,
+      "isFragment": false,
+      "truncated": true,
+      "hunk": "+/**\n+ * useSupplierTokens — collect unique goodsToken addresses from deals where\n+ * the connected wallet is the supplier, using batched getDeal reads.\n+ *\n+ * Reads at most MAX_DEALS deal IDs from the factory (newest-first), filters\n+ * to deals owned by `walletAddr`, and returns the unique goodsToken addresses,\n+ * excluding any address already in GOODS_TOKENS (those are listed, not custom).\n+ *"
+    },
+    {
+      "path": "src/swarm/useSupplierTokens.ts",
+      "action": "edit",
+      "addedLines": 5,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  const dealCount = useDealCount()\n+  const { data: dealCount } = useDealCount()\n \n   // Build call list: newest-first, up to MAX_DEALS IDs\n   const dealIds: bigint[] = useMemo(() => {\n     if (!dealCount || dealCount === 0n) return []"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}

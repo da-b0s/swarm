@@ -2,13 +2,36 @@
 
 import { ARC_NETWORK } from './config'
 
-/** Format 6-decimal micro-USDC bigint as "$X.XX" */
+/**
+ * Format 6-decimal micro-USDC bigint as a dollar string.
+ *
+ * - $0.01 and above: 2 decimal places ($2,288.23, $1.05)
+ * - Below $0.01 but non-zero: 2 significant digits, up to 6 dp ($0.0035,
+ *   $0.000012, $0.0004) — never shows "$0.00" for a non-zero value.
+ * - Exactly zero: "$0.00"
+ */
 export function formatUsdcPrice(raw: bigint | number): string {
   const n = typeof raw === 'bigint' ? Number(raw) : raw
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency', currency: 'USD',
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(n / 1_000_000)
+  const dollars = n / 1_000_000
+  if (dollars === 0) return '$0.00'
+
+  // Large values: standard 2-dp currency format with thousands separators
+  if (dollars >= 0.01) {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency', currency: 'USD',
+      minimumFractionDigits: 2, maximumFractionDigits: 2,
+    }).format(dollars)
+  }
+
+  // Sub-cent: find 2 significant digits, cap at 6 decimal places
+  // e.g. 0.0035 → "$0.0035", 0.000012 → "$0.000012", 0.0004 → "$0.0004"
+  const abs = Math.abs(dollars)
+  if (abs === 0) return '$0.00'
+  // Number of leading zeros after the decimal point before the first sig digit
+  const leadingZeros = Math.max(0, -Math.floor(Math.log10(abs)) - 1)
+  const dp = Math.min(leadingZeros + 2, 6)
+  const formatted = dollars.toFixed(dp).replace(/0+$/, '').replace(/\.$/, '')
+  return `$${formatted}`
 }
 
 /** Format 18-decimal native Arc balance as "$X.XX" */
