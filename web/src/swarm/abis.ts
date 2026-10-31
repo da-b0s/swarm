@@ -202,8 +202,8 @@ export const SETTLER_ABI = [
   {
     type: 'event', name: 'GoodsClaimed',
     inputs: [
-      { name: 'claimant', type: 'address', indexed: true  },
       { name: 'token',    type: 'address', indexed: true  },
+      { name: 'claimant', type: 'address', indexed: true  },
       { name: 'amount',   type: 'uint256', indexed: false },
     ],
   },

@@ -1,20 +1,15 @@
 /**
- * Event log scanner for the /proof page — v2.
+ * Event log scanner for the /proof page — v3.
  *
- * Paginates eth_getLogs starting at the deployment block, distinguishing two
- * classes of RPC failure that need different treatment:
- *
- *   RangeTooLargeError — node rejected the window.
- *     Halve it and retry the same cursor immediately.
- *     If already at SCAN_MIN_WINDOW, surface as a real error rather than
- *     looping forever.
- *
- *   RateLimitError — node is throttling us (HTTP 429 or message).
- *     Keep window, wait with exponential back-off (RATE_BASE_MS → RATE_MAX_MS),
- *     then retry.
- *
- * After GROW_AFTER consecutive successes the window grows back toward
- * SCAN_MAX_WINDOW so the scan speeds up again after an early halving.
+ * Strategy:
+ *   1. Fetch all three contracts' logs from the Blockscout explorer API in
+ *      parallel (handles the full contract history in ~1–3 requests total).
+ *   2. RPC gap-fill from (highest explorer block + 1) to the current head for
+ *      anything not yet indexed by the explorer, using the existing windowed
+ *      scanner with rate-limit back-off.
+ *   3. De-duplicate by (txHash, logIndex).
+ *   4. If any explorer request fails or returns malformed data, fall back to
+ *      a full RPC scan from the deployment block.
  *
  * Conservation model — two assets
  * ────────────────────────────────
@@ -26,18 +21,6 @@
  *   settle():   stockDeposited = unitsDelivered + unsoldReturned
  *               (read from Settled event: unitsDelivered + (maxUnits - totalUnits) × tokensPerUnit)
  *   refundAll():entire stock returned to supplier (stockDeposited = stockReturned)
- *               We cannot verify this without reading maxUnits × tokensPerUnit from
- *               the deal, so we mark goods conservation as "stock returned" when
- *               the deal is refunded.
- *
- * For a settled deal the Settled event carries both totalUnits and unitsDelivered,
- * which together with the DealPosted maxUnits gives us enough to verify goods.
- * For open deals both conservation fields stay null.
- *
- * Note on Committed.escrow vs pricePaid:
- *   v2 Committed emits (dealId, buyer, units, paidPerUnit, escrow, livePrice, totalUnits, buyerCount).
- *   commitsIn accumulates 'escrow' (= paidPerUnit × units), not just paidPerUnit.
- *   Withdrawn emits amountReturned which equals the buyer's full escrow.
  */
 
 import { useState, useCallback, useRef } from 'react'
@@ -54,35 +37,6 @@ import {
 } from './rpc'
 
 // ── Event topic hashes — v2 signatures ────────────────────────────────────────
-//
-// Compute from the canonical Solidity event signatures of the v2 contracts.
-// These differ from v1 because Committed gained (units, paidPerUnit, escrow,
-// livePrice, totalUnits, buyerCount) and Settled gained (totalUnits, unitsDelivered).
-//
-// v2 canonical signatures:
-//   DealPosted(uint256,address,address,uint32,uint32,uint64,uint64)
-//     indexed: dealId, supplier, goodsToken
-//     non-indexed: minUnits, maxUnits, deadline, startPrice
-//
-//   Committed(uint256,address,uint32,uint64,uint256,uint64,uint32,uint32)
-//     indexed: dealId, buyer
-//     non-indexed: units, paidPerUnit, escrow, livePrice, totalUnits, buyerCount
-//
-//   Withdrawn(uint256,address,uint32,uint256,bool,uint64,uint32,uint32)   — v2.2
-//     indexed: dealId, buyer
-//     non-indexed: units, amountReturned, paidDirectly, livePrice, totalUnits, buyerCount
-//
-//   TierBroken(uint256,uint32,uint64)
-//     indexed: dealId
-//     non-indexed: newTotalUnits, newPrice
-//
-//   Settled(uint256,uint64,uint32,uint32,uint256,uint256)
-//     indexed: dealId
-//     non-indexed: clearingPrice, totalUnits, buyerCount, totalRefunds, unitsDelivered
-//
-//   Refunded(uint256,address,uint256)          — unchanged
-//   Claimed(address,uint256)                   — unchanged
-//   ExcessCredited(uint256,address,uint256)     — unchanged
 
 const TOPICS = {
   DealPosted:     keccak256(toBytes('DealPosted(uint256,address,address,uint32,uint32,uint64,uint64)')),
@@ -108,63 +62,164 @@ const ALL_ABIS = [...DEAL_FACTORY_ABI, ...DEMAND_POOL_ABI, ...SETTLER_ABI] as co
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export interface SwarmEvent {
-  type: keyof typeof TOPICS
+  type:        keyof typeof TOPICS
   blockNumber: bigint
-  txHash: string
-  logIndex: number
-  args: Record<string, unknown>
+  txHash:      string
+  logIndex:    number
+  args:        Record<string, unknown>
+  /** Unix timestamp (seconds) from the explorer; undefined for RPC-only logs */
+  timestamp?:  number
 }
 
 export interface ProofStats {
-  totalCommits:   bigint     // sum of Committed.escrow (net of withdrawals)
-  totalRefunds:   bigint     // sum of per-deal refunds
-  totalClaimed:   bigint     // sum of Claimed.amount (USDC)
-  totalWithdrawn: bigint     // sum of Withdrawn.amountReturned
-  totalExcess:    bigint     // sum of ExcessCredited.amount
-  totalUnitsSold: bigint     // sum of Settled.totalUnits across settled deals
-  totalGoodsClaimed: bigint  // sum of GoodsClaimed.amount (varies by token, treat as base units)
-  distinctBuyers: Set<string>
-  tierBreaks: number
-  deals: Map<string, DealProof>
+  totalCommits:      bigint
+  totalRefunds:      bigint
+  totalClaimed:      bigint
+  totalWithdrawn:    bigint
+  totalExcess:       bigint
+  totalUnitsSold:    bigint
+  /** Per-token goods claimed: token address (lowercase) → total base-unit amount */
+  goodsClaimedByToken: Map<string, bigint>
+  distinctBuyers:    Set<string>
+  tierBreaks:        number
+  deals:             Map<string, DealProof>
 }
 
 export interface DealProof {
-  dealId: string
-  goodsToken: string  // address of the goods token (from DealPosted), lowercase
-  // USDC conservation
-  commitsIn:        bigint  // net escrowed USDC (Committed.escrow − Withdrawn.amountReturned)
-  excessIn:         bigint  // ExcessCredited.amount sum
-  supplierCredited: bigint  // cp × totalUnits from Settled; 0 for refunded
-  refundsOut:       bigint  // totalRefunds from Settled OR sum of Refunded events
-  usdcConserved:    boolean | null
-  // Goods conservation
-  totalUnitsSettled: bigint  // Settled.totalUnits (units sold)
-  unitsDelivered:    bigint  // Settled.unitsDelivered (token base units given to buyers)
+  dealId:            string
+  goodsToken:        string
+  commitsIn:         bigint
+  excessIn:          bigint
+  supplierCredited:  bigint
+  refundsOut:        bigint
+  usdcConserved:     boolean | null
+  totalUnitsSettled: bigint
+  unitsDelivered:    bigint
   settled:           boolean
   refunded:          boolean
-  goodsNote:         string  // human-readable goods conservation status
+  goodsNote:         string
 }
 
 export type ScanState = 'idle' | 'scanning' | 'done' | 'error'
 
-// ── RPC helpers ───────────────────────────────────────────────────────────────
+// ── RPC log shape ─────────────────────────────────────────────────────────────
 
 type RawLog = {
-  address: string
-  topics: Hex[]
-  data: Hex
-  blockNumber: Hex
+  address:         string
+  topics:          Hex[]
+  data:            Hex
+  blockNumber:     Hex
   transactionHash: Hex
-  logIndex: Hex
+  logIndex:        Hex
+  /** Unix seconds — populated only for explorer-sourced logs */
+  timestamp?:      number
 }
 
-async function getLogs(from: bigint, to: bigint): Promise<RawLog[]> {
+// ── RPC helpers ───────────────────────────────────────────────────────────────
+
+async function getLogsRpc(from: bigint, to: bigint): Promise<RawLog[]> {
   return rpcFetch<RawLog[]>('eth_getLogs', [{
     address: [CONTRACTS_ACTIVE.DealFactory, CONTRACTS_ACTIVE.DemandPool, CONTRACTS_ACTIVE.Settler],
-    topics: [ALL_TOPIC_HASHES],
+    topics:  [ALL_TOPIC_HASHES],
     fromBlock: `0x${from.toString(16)}`,
     toBlock:   `0x${to.toString(16)}`,
   }])
+}
+
+// ── Blockscout explorer API ───────────────────────────────────────────────────
+
+// Explorer item as returned by the Blockscout /api/v2/addresses/{addr}/logs endpoint.
+interface ExplorerLogItem {
+  topics:           (string | null)[]
+  data:             string
+  block_number:     number
+  block_timestamp:  string   // ISO-8601
+  transaction_hash: string
+  index:            number
+}
+
+interface ExplorerPage {
+  items:           ExplorerLogItem[]
+  next_page_params: Record<string, string | number> | null
+}
+
+async function fetchExplorerLogs(contractAddr: string, signal: AbortSignal): Promise<RawLog[]> {
+  const base = `${ARC_NETWORK.explorerBase}/api/v2/addresses/${contractAddr}/logs`
+  const result: RawLog[] = []
+  let params: Record<string, string | number> = {}
+
+  for (;;) {
+    const url = new URL(base)
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v))
+    const resp = await fetch(url.toString(), { signal })
+    if (!resp.ok) throw new Error(`Explorer ${resp.status} for ${contractAddr}`)
+    const page: unknown = await resp.json()
+    if (
+      typeof page !== 'object' || page === null ||
+      !('items' in page) || !Array.isArray((page as ExplorerPage).items)
+    ) {
+      throw new Error('Explorer returned unexpected shape')
+    }
+    const typed = page as ExplorerPage
+    for (const item of typed.items) {
+      // Filter topics: drop nulls, cast to Hex
+      const topics = item.topics
+        .filter((t): t is string => t !== null && typeof t === 'string')
+        .map(t => t as Hex)
+      if (topics.length === 0) continue
+      // Parse block_timestamp → Unix seconds
+      let ts: number | undefined
+      try { ts = Math.floor(new Date(item.block_timestamp).getTime() / 1000) } catch { /* ignore */ }
+      result.push({
+        address:         contractAddr,
+        topics,
+        data:            (item.data || '0x') as Hex,
+        blockNumber:     `0x${item.block_number.toString(16)}`,
+        transactionHash: item.transaction_hash as Hex,
+        logIndex:        `0x${item.index.toString(16)}`,
+        timestamp:       ts,
+      })
+    }
+    if (!typed.next_page_params) break
+    params = Object.fromEntries(
+      Object.entries(typed.next_page_params).map(([k, v]) => [k, v])
+    )
+  }
+  return result
+}
+
+async function fetchAllExplorerLogs(signal: AbortSignal): Promise<RawLog[]> {
+  const [factory, pool, settler] = await Promise.all([
+    fetchExplorerLogs(CONTRACTS_ACTIVE.DealFactory, signal),
+    fetchExplorerLogs(CONTRACTS_ACTIVE.DemandPool,  signal),
+    fetchExplorerLogs(CONTRACTS_ACTIVE.Settler,     signal),
+  ])
+  return [...factory, ...pool, ...settler]
+}
+
+/**
+ * Fetch the latest indexed block height from the explorer's main-page/blocks
+ * endpoint. Returns undefined on any failure — callers fall back to the newest
+ * event block instead.
+ *
+ * Response is an array; first item's `height` is the latest indexed block:
+ *   [{ "height": 28813134, ... }, ...]
+ */
+async function fetchIndexedHeight(signal: AbortSignal): Promise<bigint | undefined> {
+  try {
+    const url  = `${ARC_NETWORK.explorerBase}/api/v2/main-page/blocks`
+    const resp = await fetch(url, { signal })
+    if (!resp.ok) return undefined
+    const data: unknown = await resp.json()
+    if (!Array.isArray(data) || data.length === 0) return undefined
+    const first: unknown = data[0]
+    if (typeof first !== 'object' || first === null || !('height' in first)) return undefined
+    const h = (first as Record<string, unknown>).height
+    if (typeof h !== 'number') return undefined
+    return BigInt(h)
+  } catch {
+    return undefined
+  }
 }
 
 // ── Log decoder ───────────────────────────────────────────────────────────────
@@ -180,16 +235,17 @@ function decodeLog(raw: RawLog): SwarmEvent | null {
 
   try {
     const decoded = decodeEventLog({
-      abi: ALL_ABIS,
-      data: raw.data,
+      abi:    ALL_ABIS,
+      data:   raw.data,
       topics: raw.topics as [Hex, ...Hex[]],
     })
     return {
       type,
       blockNumber: BigInt(raw.blockNumber),
-      txHash: raw.transactionHash,
-      logIndex: Number(raw.logIndex),
-      args: decoded.args,
+      txHash:      raw.transactionHash,
+      logIndex:    Number(raw.logIndex),
+      args:        decoded.args,
+      timestamp:   raw.timestamp,
     }
   } catch {
     return null
@@ -199,112 +255,182 @@ function decodeLog(raw: RawLog): SwarmEvent | null {
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useEventLog() {
-  const [events, setEvents]       = useState<SwarmEvent[]>([])
-  const [scanState, setScanState] = useState<ScanState>('idle')
-  const [progress, setProgress]   = useState({ scanned: 0n, total: 0n, head: 0n })
-  const [error, setError]         = useState('')
-  const abortRef = useRef(false)
+  const [events,       setEvents]       = useState<SwarmEvent[]>([])
+  const [scanState,    setScanState]    = useState<ScanState>('idle')
+  const [progress,     setProgress]     = useState({ scanned: 0n, total: 0n, head: 0n })
+  const [progressText, setProgressText] = useState('')
+  const [error,        setError]        = useState('')
+  const abortRef     = useRef(false)
+  const explorerAbortRef = useRef<AbortController | null>(null)
 
   const scan = useCallback(async () => {
     abortRef.current = false
+    // Abort any in-flight explorer fetch from a previous run
+    explorerAbortRef.current?.abort()
+    const ac = new AbortController()
+    explorerAbortRef.current = ac
+
     setScanState('scanning')
     setEvents([])
     setError('')
+    setProgressText('Loading history…')
 
     try {
       if (!DEPLOYMENT_READY) {
         setScanState('error')
-        setError(
-          `Swarm is not deployed on ${ARC_NETWORK.name}. ` +
-          `Switch to a supported network.`
-        )
+        setError(`Swarm is not deployed on ${ARC_NETWORK.name}. Switch to a supported network.`)
         return
       }
 
       const head  = await getLatestBlock()
       const start = CONTRACTS_ACTIVE.deployBlock
-      const total = head - start
-      setProgress({ scanned: 0n, total, head })
+      setProgress({ scanned: 0n, total: head - start, head })
 
-      let window = SCAN_MAX_WINDOW
-      let rateLimitDelay = RATE_BASE_MS
-      let consecutiveSuccesses = 0
-      let cursor = start
+      // ── Phase 1: Explorer (logs + indexed height, in parallel) ──────────
+      let explorerLogs: RawLog[] = []
+      let explorerHighBlock = start - 1n
+      let explorerOk = false
+      let indexedHeight: bigint | undefined
+
+      try {
+        // Fetch event logs and the explorer's indexed tip at the same time.
+        // fetchIndexedHeight never throws (returns undefined on failure).
+        ;[explorerLogs, indexedHeight] = await Promise.all([
+          fetchAllExplorerLogs(ac.signal),
+          fetchIndexedHeight(ac.signal),
+        ])
+        explorerOk = true
+        for (const l of explorerLogs) {
+          const bn = BigInt(l.blockNumber)
+          if (bn > explorerHighBlock) explorerHighBlock = bn
+        }
+      } catch (e: unknown) {
+        // Aborted by user stop — propagate
+        if (e instanceof DOMException && e.name === 'AbortError') throw e
+        // Any other explorer failure: fall back to full RPC scan
+        explorerOk        = false
+        explorerHighBlock = start - 1n
+        indexedHeight     = undefined
+      }
+
+      if (abortRef.current) return
+
+      // Deduplicate explorer logs by (txHash, logIndex)
+      const seen = new Set<string>()
       const collected: SwarmEvent[] = []
 
-      while (cursor <= head && !abortRef.current) {
-        const to = cursor + window - 1n < head ? cursor + window - 1n : head
+      const addLog = (raw: RawLog) => {
+        const key = `${raw.transactionHash}:${Number(raw.logIndex)}`
+        if (seen.has(key)) return
+        seen.add(key)
+        const ev = decodeLog(raw)
+        if (ev) collected.push(ev)
+      }
 
-        let raw: RawLog[]
-        try {
-          raw = await getLogs(cursor, to)
-        } catch (e: unknown) {
-          if (e instanceof RangeTooLargeError) {
-            consecutiveSuccesses = 0
-            if (window <= SCAN_MIN_WINDOW) {
-              throw new Error(
-                `Block range rejected even at minimum window (${SCAN_MIN_WINDOW} blocks). ` +
-                `Try again later.`
-              )
-            }
-            window = window / 2n
-            if (window < SCAN_MIN_WINDOW) window = SCAN_MIN_WINDOW
-            continue
-          }
-          if (e instanceof RateLimitError) {
-            consecutiveSuccesses = 0
-            await new Promise(r => setTimeout(r, rateLimitDelay))
-            rateLimitDelay = Math.min(rateLimitDelay * 2, RATE_MAX_MS)
-            continue
-          }
-          throw e
-        }
+      for (const l of explorerLogs) addLog(l)
 
-        rateLimitDelay = RATE_BASE_MS
-        consecutiveSuccesses++
-        if (consecutiveSuccesses >= GROW_AFTER && window < SCAN_MAX_WINDOW) {
-          window = growWindow(window)
-        }
-
-        for (const r of raw) {
-          const ev = decodeLog(r)
-          if (ev) collected.push(ev)
-        }
-
+      // Emit explorer results immediately so the page feels responsive
+      if (explorerOk && collected.length > 0) {
         collected.sort((a, b) =>
           a.blockNumber < b.blockNumber ? -1 : a.blockNumber > b.blockNumber ? 1 : a.logIndex - b.logIndex
         )
         setEvents([...collected])
-        setProgress({ scanned: to - start, total, head })
-        cursor = to + 1n
+        setProgress({ scanned: explorerHighBlock - start, total: head - start, head })
       }
 
+      // ── Phase 2: RPC gap-fill ────────────────────────────────────────────
+      // Use the explorer's indexed tip (not just the newest event block) so
+      // the gap-fill window is small even when the contract has been quiet.
+      // Fall back to explorerHighBlock when the indexed-height fetch failed.
+      const explorerCoveredTo = indexedHeight !== undefined && indexedHeight > explorerHighBlock
+        ? indexedHeight
+        : explorerHighBlock
+      const rpcStart = explorerOk ? explorerCoveredTo + 1n : start
+      if (rpcStart <= head) {
+        setProgressText('')
+        let window               = SCAN_MAX_WINDOW
+        let rateLimitDelay       = RATE_BASE_MS
+        let consecutiveSuccesses = 0
+        let cursor               = rpcStart
+
+        while (cursor <= head && !abortRef.current) {
+          const to = cursor + window - 1n < head ? cursor + window - 1n : head
+
+          let raw: RawLog[]
+          try {
+            raw = await getLogsRpc(cursor, to)
+          } catch (e: unknown) {
+            if (e instanceof RangeTooLargeError) {
+              consecutiveSuccesses = 0
+              if (window <= SCAN_MIN_WINDOW) {
+                throw new Error(
+                  `Block range rejected even at minimum window (${SCAN_MIN_WINDOW} blocks). ` +
+                  `Try again later.`
+                )
+              }
+              window = window / 2n
+              if (window < SCAN_MIN_WINDOW) window = SCAN_MIN_WINDOW
+              continue
+            }
+            if (e instanceof RateLimitError) {
+              consecutiveSuccesses = 0
+              await new Promise(r => setTimeout(r, rateLimitDelay))
+              rateLimitDelay = Math.min(rateLimitDelay * 2, RATE_MAX_MS)
+              continue
+            }
+            throw e
+          }
+
+          rateLimitDelay = RATE_BASE_MS
+          consecutiveSuccesses++
+          if (consecutiveSuccesses >= GROW_AFTER && window < SCAN_MAX_WINDOW) {
+            window = growWindow(window)
+          }
+
+          for (const r of raw) addLog(r)
+
+          collected.sort((a, b) =>
+            a.blockNumber < b.blockNumber ? -1 : a.blockNumber > b.blockNumber ? 1 : a.logIndex - b.logIndex
+          )
+          setEvents([...collected])
+          setProgress({ scanned: to - start, total: head - start, head })
+          cursor = to + 1n
+        }
+      } else {
+        // Explorer covered everything up to head
+        setProgress({ scanned: head - start, total: head - start, head })
+      }
+
+      setProgressText('')
       setScanState('done')
     } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === 'AbortError') return
       setError((e as Error).message ?? 'Scan failed')
       setScanState('error')
     }
   }, [])
 
-  const stop = useCallback(() => { abortRef.current = true }, [])
+  const stop = useCallback(() => {
+    abortRef.current = true
+    explorerAbortRef.current?.abort()
+  }, [])
 
-  // ── Derived stats ──────────────────────────────────────────────────────
+  // ── Derived stats ──────────────────────────────────────────────────────────
 
   const stats: ProofStats = (() => {
     const s: ProofStats = {
-      totalCommits:      0n,
-      totalRefunds:      0n,
-      totalClaimed:      0n,
-      totalWithdrawn:    0n,
-      totalExcess:       0n,
-      totalUnitsSold:    0n,
-      totalGoodsClaimed: 0n,
-      distinctBuyers:    new Set(),
-      tierBreaks:        0,
-      deals:             new Map(),
+      totalCommits:        0n,
+      totalRefunds:        0n,
+      totalClaimed:        0n,
+      totalWithdrawn:      0n,
+      totalExcess:         0n,
+      totalUnitsSold:      0n,
+      goodsClaimedByToken: new Map(),
+      distinctBuyers:      new Set(),
+      tierBreaks:          0,
+      deals:               new Map(),
     }
 
-    // Build a lookup from token address (lowercase) → decimals from GOODS_TOKENS
     const knownTokenDecimals = new Map<string, number>(
       GOODS_TOKENS.map(t => [t.address.toLowerCase(), t.decimals])
     )
@@ -339,11 +465,10 @@ export function useEventLog() {
           break
         }
         case 'Committed': {
-          // v2: escrow = paidPerUnit × units (full amount escrowed by this buyer)
           const dealId = String(a.dealId)
           const escrow = BigInt(String(a.escrow))
           getDeal(dealId).commitsIn += escrow
-          s.totalCommits += escrow
+          s.totalCommits            += escrow
           s.distinctBuyers.add(String(a.buyer).toLowerCase())
           break
         }
@@ -359,13 +484,12 @@ export function useEventLog() {
           s.tierBreaks++
           break
         case 'Settled': {
-          // v2: Settled(dealId, clearingPrice, totalUnits, buyerCount, totalRefunds, unitsDelivered)
-          const dealId          = String(a.dealId)
-          const cp              = BigInt(String(a.clearingPrice))
-          const totalUnits      = BigInt(String(a.totalUnits))
-          const evRefunds       = BigInt(String(a.totalRefunds))
-          const unitsDelivered  = BigInt(String(a.unitsDelivered))
-          const deal            = getDeal(dealId)
+          const dealId         = String(a.dealId)
+          const cp             = BigInt(String(a.clearingPrice))
+          const totalUnits     = BigInt(String(a.totalUnits))
+          const evRefunds      = BigInt(String(a.totalRefunds))
+          const unitsDelivered = BigInt(String(a.unitsDelivered))
+          const deal           = getDeal(dealId)
           deal.settled           = true
           deal.supplierCredited  = cp * totalUnits
           deal.refundsOut       += evRefunds
@@ -394,29 +518,24 @@ export function useEventLog() {
         case 'Claimed':
           s.totalClaimed += BigInt(String(a.amount))
           break
-        case 'GoodsClaimed':
-          s.totalGoodsClaimed += BigInt(String(a.amount))
+        case 'GoodsClaimed': {
+          const tokenAddr = (typeof a.token === 'string' ? a.token : '').toLowerCase()
+          const amt       = BigInt(String(a.amount))
+          const prev      = s.goodsClaimedByToken.get(tokenAddr) ?? 0n
+          s.goodsClaimedByToken.set(tokenAddr, prev + amt)
           break
+        }
       }
     }
 
-    // ── Conservation checks ─────────────────────────────────────────────
+    // ── Conservation checks ───────────────────────────────────────────────
     for (const deal of s.deals.values()) {
-      // USDC:
-      //   settled:  commitsIn = supplierCredited + refundsOut
-      //   refunded: commitsIn = refundsOut
       if (deal.settled) {
         deal.usdcConserved = deal.commitsIn === deal.supplierCredited + deal.refundsOut
       } else if (deal.refunded) {
         deal.usdcConserved = deal.commitsIn === deal.refundsOut
       }
 
-      // Goods:
-      //   settled: unitsDelivered was written by the Settled event; we can confirm
-      //            it is positive (and > 0 when units sold > 0). Full goods equation
-      //            requires maxUnits × tokensPerUnit from the deal struct which we
-      //            don't have from events alone, so we report units delivered.
-      //   refunded: all stock returned to supplier (no delivery).
       if (deal.settled) {
         const dec = deal.goodsToken ? knownTokenDecimals.get(deal.goodsToken) : undefined
         const fmt = (v: bigint) => dec !== undefined ? formatTokenAmount(v, dec) : v.toString()
@@ -434,5 +553,5 @@ export function useEventLog() {
     return s
   })()
 
-  return { events, scanState, progress, error, stats, scan, stop }
+  return { events, scanState, progress, progressText, error, stats, scan, stop }
 }

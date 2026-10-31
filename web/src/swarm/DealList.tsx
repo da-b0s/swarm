@@ -8,12 +8,12 @@
  * Logged-out users see the list but not the order actions.
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback } from 'react'
 import { useReadContracts } from 'wagmi'
 import { motion } from 'framer-motion'
 import { Clock, ChevronRight, PlusCircle, Package } from 'lucide-react'
 import { CONTRACTS_ACTIVE, ARC_NETWORK, GOODS_TOKENS, POLL_DEAL_ROOM, POLL_LIST } from './config'
-import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI } from './abis'
+import { DEAL_FACTORY_ABI, DEMAND_POOL_ABI, SETTLER_ABI } from './abis'
 import { useDealCount, useChainNow, useGoodsTokenMeta } from './hooks'
 import { formatUsdcPrice, formatCountdown, computePriceAt } from './utils'
 import { PricePerToken } from './PricePerToken'
@@ -105,6 +105,68 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost, walletA
     query: { enabled: unitsOfCalls.length > 0, refetchInterval: POLL_DEAL_ROOM, refetchIntervalInBackground: false },
   })
 
+  // ── Claimable batch ───────────────────────────────────────────────────────
+  // One call: claimable(wallet)
+  // N calls:  goodsClaimable(token, wallet) for each distinct goods token
+  // Only meaningful when the wallet is connected and there are deals.
+  const claimableCalls = useMemo(() => {
+    if (!walletAddr || dealCount === 0) return []
+    return [
+      {
+        address: CONTRACTS_ACTIVE.Settler,
+        abi: SETTLER_ABI,
+        functionName: 'claimable' as const,
+        args: [walletAddr] as const,
+        chainId: CHAIN_ID,
+      },
+    ]
+  }, [walletAddr, dealCount])
+
+  const goodsClaimableCalls = useMemo(() => {
+    if (!walletAddr || dealCount === 0) return []
+    // Collect distinct token addresses seen so far; fall back to GOODS_TOKENS
+    // if deal data isn't loaded yet.
+    const tokens = new Set(GOODS_TOKENS.map(t => t.address.toLowerCase() as `0x${string}`))
+    return Array.from(tokens).map(token => ({
+      address: CONTRACTS_ACTIVE.Settler,
+      abi: SETTLER_ABI,
+      functionName: 'goodsClaimable' as const,
+      args: [token, walletAddr] as const,
+      chainId: CHAIN_ID,
+    }))
+  }, [walletAddr, dealCount])
+
+  const { data: claimableResults, refetch: refetchClaimable } = useReadContracts({
+    contracts: claimableCalls,
+    query: { enabled: claimableCalls.length > 0, refetchInterval: POLL_DEAL_ROOM, refetchIntervalInBackground: false },
+  })
+  const { data: goodsClaimableResults, refetch: refetchGoodsClaimable } = useReadContracts({
+    contracts: goodsClaimableCalls,
+    query: { enabled: goodsClaimableCalls.length > 0, refetchInterval: POLL_DEAL_ROOM, refetchIntervalInBackground: false },
+  })
+
+  // After a claim anywhere, re-read claimable totals.
+  // (GlobalClaimsBanner fires its own refetch; we mirror it here for DealList.)
+  // Build lookup: token (lowercase) → claimable amount
+  const goodsClaimableMap = useMemo(() => {
+    const m = new Map<string, bigint>()
+    const tokens = Array.from(new Set(GOODS_TOKENS.map(t => t.address.toLowerCase() as `0x${string}`)))
+    tokens.forEach((token, i) => {
+      const raw = goodsClaimableResults?.[i]?.result
+      m.set(token, raw !== undefined ? BigInt(raw) : 0n)
+    })
+    return m
+  }, [goodsClaimableResults])
+
+  const usdcClaimable = useMemo(() => {
+    const raw = claimableResults?.[0]?.result
+    return raw !== undefined ? BigInt(raw) : 0n
+  }, [claimableResults])
+
+  // Expose refetch so callers can trigger it (unused here but available if needed)
+  void refetchClaimable
+  void refetchGoodsClaimable
+
   const deals: DealSummary[] = useMemo(() => {
     if (!dealResults) return []
     return dealResults.map((r, i) => {
@@ -159,6 +221,36 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost, walletA
       })
       .sort((a, b) => Number(b.dealId) - Number(a.dealId))
   }, [deals, walletAddr, myUnitsResults])
+
+  /**
+   * Whether the wallet has something claimable on this deal.
+   * - settled buyer:   goodsClaimable[token] > 0 or usdcClaimable > 0
+   * - refunded buyer:  usdcClaimable > 0
+   * - settled seller:  usdcClaimable > 0 or goodsClaimable[token] > 0 (unsold stock)
+   * - refunded seller: goodsClaimable[token] > 0
+   * We use wallet-level totals (not per-deal), which is correct because `claimable`
+   * and `goodsClaimable` accumulate across deals and drain to 0 after `claim()`.
+   */
+  const hasClaimable = useCallback((deal: DealSummary, i: number): boolean => {
+    if (!walletAddr) return false
+    const walletLower   = walletAddr.toLowerCase()
+    const isSupplier    = deal.supplier.toLowerCase() === walletLower
+    const myUnitsRaw    = myUnitsResults?.[i]?.result
+    const myUnits       = myUnitsRaw !== undefined ? Number(myUnitsRaw) : 0
+    const isBuyer       = myUnits > 0
+    const tokenLower    = deal.goodsToken.toLowerCase()
+    const goodsAmt      = goodsClaimableMap.get(tokenLower) ?? 0n
+
+    if (deal.state === 1) { // settled
+      if (isSupplier) return usdcClaimable > 0n || goodsAmt > 0n
+      if (isBuyer)    return goodsAmt > 0n || usdcClaimable > 0n
+    }
+    if (deal.state === 2) { // refunded
+      if (isSupplier) return goodsAmt > 0n
+      if (isBuyer)    return usdcClaimable > 0n
+    }
+    return false
+  }, [walletAddr, myUnitsResults, usdcClaimable, goodsClaimableMap])
 
   const allShown = activeTab === 'active' ? active : activeTab === 'ended' ? ended : yours
   const shown = activeTab === 'yours' || tokenFilter === 'all'
@@ -284,8 +376,7 @@ export function DealList({ activeTab, onTabChange, onSelectDeal, onPost, walletA
             const myUnitsRaw  = origIdx >= 0 ? myUnitsResults?.[origIdx]?.result : undefined
             const myUnits     = myUnitsRaw !== undefined ? Number(myUnitsRaw) : 0
             roleLabel = isSupplier ? 'Selling' : myUnits > 0 ? `Joined · ${myUnits} unit${myUnits !== 1 ? 's' : ''}` : undefined
-            // Highlight when settled/refunded (state 1 or 2) — claim is likely available
-            highlight = deal.state === 1 || deal.state === 2
+            highlight = origIdx >= 0 ? hasClaimable(deal, origIdx) : false
           }
           return (
             <DealCard

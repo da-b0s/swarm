@@ -10,7 +10,7 @@
  *   refunded: full stock returned to supplier
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Play, Square, ExternalLink, CheckCircle, XCircle } from 'lucide-react'
 import { useEventLog } from './useEventLog'
@@ -21,10 +21,16 @@ import { useGoodsTokenMeta } from './hooks'
 const fadeUp = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.22 } }
 
 export function ProofPage() {
-  const { events, scanState, progress, error, stats, scan, stop } = useEventLog()
+  const { events, scanState, progress, progressText, error, stats, scan, stop } = useEventLog()
   const [dealsShown, setDealsShown] = useState(5)
   const [eventsShown, setEventsShown] = useState(20)
   const dealsNewestFirst = Array.from(stats.deals.values()).sort((a, b) => Number(b.dealId) - Number(a.dealId))
+
+  // Auto-start scan when the page mounts
+  useEffect(() => {
+    void scan()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const pct = progress.total > 0n
     ? Math.min(100, Math.round(Number((progress.scanned * 100n) / progress.total)))
@@ -55,7 +61,7 @@ export function ProofPage() {
         >
           {scanning
             ? <><Square className="size-3.5" /> Stop</>
-            : <><Play className="size-3.5" /> {scanState === 'done' ? 'Rescan' : 'Scan events'}</>}
+            : <><Play className="size-3.5" /> Refresh</>}
         </button>
 
         {scanning && (
@@ -64,12 +70,14 @@ export function ProofPage() {
               <motion.div
                 className="h-full rounded-full"
                 style={{ background: 'var(--accent)' }}
-                animate={{ width: `${pct}%` }}
+                animate={{ width: progressText ? '5%' : `${pct}%` }}
                 transition={{ duration: 0.4 }}
               />
             </div>
             <p className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>
-              {pct}% · {events.length} events · {progress.head.toString()} head
+              {progressText
+                ? progressText
+                : `${pct}% · ${events.length} events · ${progress.head.toString()} head`}
             </p>
           </div>
         )}
@@ -90,19 +98,25 @@ export function ProofPage() {
         >
           {[
             { label: 'USDC paid in (net)',  value: formatUsdcPrice(stats.totalCommits) },
-            { label: 'USDC refunded',         value: formatUsdcPrice(stats.totalRefunds) },
-            { label: 'Excess credited',        value: formatUsdcPrice(stats.totalExcess) },
-            { label: 'USDC claimed',           value: formatUsdcPrice(stats.totalClaimed) },
-            { label: 'Units sold (settled)',   value: stats.totalUnitsSold.toString() },
-            { label: 'Distinct buyers',        value: stats.distinctBuyers.size.toString() },
-            { label: 'Tier breaks',            value: stats.tierBreaks.toString() },
-            { label: 'Items collected', value: stats.totalGoodsClaimed.toString() },
+            { label: 'USDC refunded',       value: formatUsdcPrice(stats.totalRefunds) },
+            { label: 'Excess credited',     value: formatUsdcPrice(stats.totalExcess) },
+            { label: 'USDC claimed',        value: formatUsdcPrice(stats.totalClaimed) },
+            { label: 'Units sold (settled)',value: stats.totalUnitsSold.toString() },
+            { label: 'Distinct buyers',     value: stats.distinctBuyers.size.toString() },
+            { label: 'Tier breaks',         value: stats.tierBreaks.toString() },
           ].map(({ label, value }) => (
             <div key={label} className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
               <p className="text-xs" style={{ color: 'var(--muted)' }}>{label}</p>
               <p className="display text-xl font-bold tabular-nums mt-0.5" style={{ color: 'var(--ink)' }}>{value}</p>
             </div>
           ))}
+          {/* Items collected — one tile, formatted per token */}
+          {stats.goodsClaimedByToken.size > 0 && (
+            <div className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+              <p className="text-xs" style={{ color: 'var(--muted)' }}>Items collected</p>
+              <GoodsClaimedStat map={stats.goodsClaimedByToken} />
+            </div>
+          )}
         </motion.div>
       )}
 
@@ -244,6 +258,33 @@ export function ProofPage() {
       )}
     </div>
   )
+}
+
+// ── GoodsClaimedStat — formatted per-token totals ─────────────────────────────
+//
+// Resolves each token's symbol/decimals (listed tokens from GOODS_TOKENS;
+// unlisted via on-chain reads) and renders "2 EURC · 875 FAZE" style text.
+
+function GoodsClaimedStat({ map }: { map: Map<string, bigint> }) {
+  const entries = Array.from(map.entries())   // [tokenAddr, amount]
+  return (
+    <p className="display text-xl font-bold tabular-nums mt-0.5 leading-snug" style={{ color: 'var(--ink)' }}>
+      {entries.map(([addr, amt], i) => (
+        <GoodsClaimedToken key={addr} addr={addr} amount={amt} sep={i < entries.length - 1} />
+      ))}
+    </p>
+  )
+}
+
+function GoodsClaimedToken({ addr, amount, sep }: { addr: string; amount: bigint; sep: boolean }) {
+  const listed  = GOODS_TOKENS.find(t => t.address.toLowerCase() === addr.toLowerCase())
+  const onChain = useGoodsTokenMeta(listed ? undefined : addr as `0x${string}`)
+  const sym = listed?.symbol ?? onChain?.symbol
+  const dec = listed?.decimals ?? onChain?.decimals
+  const text = sym !== undefined && dec !== undefined
+    ? `${formatTokenAmount(amount, dec)} ${sym}`
+    : `${amount.toString()} (${addr.slice(0, 8)}…)`
+  return <>{text}{sep && <span style={{ color: 'var(--subtle)' }}> · </span>}</>
 }
 
 // ── Event badge ───────────────────────────────────────────────────────────────
