@@ -116,7 +116,7 @@ export default function App() {
           {/* Light/dark toggle */}
           <button onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="hidden sm:flex shrink-0 size-8 items-center justify-center rounded-xl transition-all hover:opacity-70"
+            className="shrink-0 size-8 hidden sm:flex items-center justify-center rounded-xl transition-all hover:opacity-70"
             style={{ border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--muted)' }}>
             {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </button>

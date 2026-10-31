@@ -516,6 +516,10 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   // Track whether the seller has manually edited the stock field yet
   const [stockEdited, setStockEdited] = useState(false)
 
+  // Track whether the seller has manually edited any tier threshold yet.
+  // While false, thresholds stay spread across the current stock automatically.
+  const tiersEditedRef = useRef(false)
+
   // ── Two-step state ───────────────────────────────────────────────────────
   const [step,          setStep]          = useState<PostStep>('idle')
   const [validationErr, setValidationErr] = useState<string | null>(null)
@@ -643,6 +647,33 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
     ? formatTokenAmount(stockAmount, decimals)
     : null
 
+  // ── Auto-adjust tier thresholds when stock changes ───────────────────────
+  // Spreads thresholds evenly across the current stock.
+  // Only runs while the seller has not manually edited any threshold field.
+  useEffect(() => {
+    if (tiersEditedRef.current) return
+    const stock = effectiveMaxUnitsNum
+    if (stock < 1) return
+    setTiers(prev => {
+      const count = prev.length
+      if (count === 0) return prev
+      const raw: number[] = count === 1
+        ? [1]
+        : Array.from({ length: count }, (_, i) =>
+            i === 0 ? 1 : i === count - 1 ? stock : Math.ceil(stock * i / (count - 1))
+          )
+      // Deduplicate while preserving order; fewer unique values means a smaller tier set
+      // (e.g. stock=1 yields only [1], stock=2 with 3 tiers yields [1, 2]).
+      const unique = [...new Set(raw)]
+      return unique.map((v, j) => ({
+        ...prev[j] ?? { pricePerUnit: '' },
+        minUnits: String(v),
+      }))
+    })
+  // effectiveMaxUnitsNum is derived during render — it is safe in the dep array.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveMaxUnitsNum])
+
   // ── Per-token price mode ─────────────────────────────────────────────────
   // When tokensPerUnit is not exactly 1 whole token, sellers enter prices per
   // whole token and we convert to per-unit for the contract.
@@ -737,10 +768,25 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
   }, [marketPricePerUnit])
 
   // ── Tier mutations ───────────────────────────────────────────────────────
-  const addTier    = () => setTiers(t => [...t, { minUnits: '', pricePerUnit: '' }])
-  const removeTier = (i: number) => setTiers(t => t.filter((_, j) => j !== i))
-  const updateTier = (i: number, field: keyof TierInput, val: string) =>
+  const addTier = () => {
+    if (tiers.length >= MAX_TIERS) return
+    tiersEditedRef.current = true
+    setTiers(prev => {
+      const lastMin = parseInt(prev[prev.length - 1]?.minUnits ?? '0') || 0
+      const stock   = effectiveMaxUnitsNum
+      // Propose midpoint between last threshold and stock; if no room, leave blank.
+      const proposed = lastMin < stock ? Math.ceil((lastMin + stock) / 2) : null
+      return [...prev, { minUnits: proposed !== null ? String(proposed) : '', pricePerUnit: '' }]
+    })
+  }
+  const removeTier = (i: number) => {
+    tiersEditedRef.current = true
+    setTiers(t => t.filter((_, j) => j !== i))
+  }
+  const updateTier = (i: number, field: keyof TierInput, val: string) => {
+    if (field === 'minUnits') tiersEditedRef.current = true
     setTiers(t => t.map((tier, j) => j === i ? { ...tier, [field]: val } : tier))
+  }
 
   // ── Contract writes ──────────────────────────────────────────────────────
   const { writeContract } = useWriteContract()
@@ -992,7 +1038,7 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
       {/* ── Token picker ──────────────────────────────────────────────────── */}
       <TokenPickerDropdown
         selected={selectedToken}
-        onSelect={t => { setSelectedToken(t); setStockEdited(false); tpuEditedRef.current = false }}
+        onSelect={t => { setSelectedToken(t); setStockEdited(false); tpuEditedRef.current = false; tiersEditedRef.current = false }}
         balances={allBalancesWithCustom}
         walletAddr={address}
       />
@@ -1100,11 +1146,21 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
                 Use market price
               </button>
             )}
-            <button onClick={addTier} disabled={tiers.length >= MAX_TIERS}
-              className="flex items-center gap-1 text-xs font-semibold rounded-lg px-2.5 py-1 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-30"
-              style={{ background: 'var(--surface-muted)', color: 'var(--accent)' }}>
-              <Plus className="size-3" /> Add tier
-            </button>
+            {(() => {
+              const lastMin  = parseInt(tiers[tiers.length - 1]?.minUnits ?? '0') || 0
+              const atCap    = tiers.length >= MAX_TIERS
+              const lastAtStock = lastMin >= effectiveMaxUnitsNum && effectiveMaxUnitsNum > 0
+              const disabledAdd = atCap || lastAtStock
+              return (
+                <button onClick={addTier} disabled={disabledAdd}
+                  title={lastAtStock ? 'Raise the stock to add another tier.' : undefined}
+                  className="flex items-center gap-1 text-xs font-semibold rounded-lg px-2.5 py-1 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-30 disabled:cursor-not-allowed disabled:scale-100"
+                  style={{ background: 'var(--surface-muted)', color: 'var(--accent)' }}>
+                  <Plus className="size-3" />
+                  {lastAtStock ? 'Raise stock to add tier' : 'Add tier'}
+                </button>
+              )
+            })()}
           </div>
         </div>
 
@@ -1133,59 +1189,86 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
             const tierPPT = tierPricePerUnit !== null && tokensPerUnit !== null && !isMultiUnit
               ? pricePerToken(tierPricePerUnit, tokensPerUnit, decimals)
               : null
+
+            // Threshold-specific helpers
+            const tierMinNum = parseInt(tier.minUnits) || 0
+            const overStock  = tierMinNum > 0 && effectiveMaxUnitsNum > 0 && tierMinNum > effectiveMaxUnitsNum
+            // Token amount this threshold represents (skip when 1 unit = 1 whole token)
+            const thresholdTokenAmt = !overStock && tierMinNum > 0 && tokensPerUnit !== null && isMultiUnit
+              ? formatTokenAmount(BigInt(tierMinNum) * tokensPerUnit, decimals)
+              : null
+
             return (
             <div key={i} className="space-y-1">
-              <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-                <input type="number" min="1"
-                  value={tier.minUnits}
-                  onChange={e => updateTier(i, 'minUnits', e.target.value)}
-                  placeholder="10"
-                  className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
-                  style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
-                />
-                <input type="number" min="0.000001" step="0.0001"
-                  value={tier.pricePerUnit}
-                  onChange={e => updateTier(i, 'pricePerUnit', e.target.value)}
-                  placeholder={isMultiUnit ? `e.g. ${mUsdPerToken ? mUsdPerToken.toFixed(2) : '2200'}` : 'e.g. 1.12'}
-                  className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
-                  style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
-                />
+              <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-start">
+                {/* Threshold column */}
+                <div className="flex flex-col gap-0.5">
+                  <input type="number" min="1"
+                    value={tier.minUnits}
+                    onChange={e => updateTier(i, 'minUnits', e.target.value)}
+                    placeholder="10"
+                    className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
+                    style={{
+                      background: 'var(--surface-muted)',
+                      border: `1px solid ${overStock ? 'var(--danger)' : 'var(--border)'}`,
+                      color: 'var(--ink)',
+                    }}
+                  />
+                  {overStock ? (
+                    <span className="text-xs leading-snug" style={{ color: 'var(--danger)' }}>
+                      Starts at {tier.minUnits} units but stock is {effectiveMaxUnitsNum}. Lower it or raise the stock.
+                    </span>
+                  ) : thresholdTokenAmt !== null ? (
+                    <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                      = {thresholdTokenAmt} {symbol}
+                    </span>
+                  ) : null}
+                </div>
+
+                {/* Price column */}
+                <div className="flex flex-col gap-0.5">
+                  <input type="number" min="0.000001" step="0.0001"
+                    value={tier.pricePerUnit}
+                    onChange={e => updateTier(i, 'pricePerUnit', e.target.value)}
+                    placeholder={isMultiUnit ? `e.g. ${mUsdPerToken ? mUsdPerToken.toFixed(2) : '2200'}` : 'e.g. 1.12'}
+                    className="rounded-xl px-3 py-2 text-sm tabular-nums outline-none"
+                    style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+                  />
+                  {/* Helpers: per-unit equivalent, deviation badge, Set to market */}
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    {isMultiUnit && tierPricePerUnit !== null && (
+                      <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                        = {formatUsdcPrice(tierPricePerUnit)}/unit
+                      </span>
+                    )}
+                    {!isMultiUnit && tierPPT && (
+                      <span className="text-xs" style={{ color: 'var(--muted)' }}>{tierPPT} per {symbol}</span>
+                    )}
+                    {mUsdPerToken !== undefined && tierPriceAsPerToken !== null && tokensPerUnit !== null && (() => {
+                      const refPrice = isMultiUnit ? tierPriceAsPerToken : tierPricePerUnit
+                      if (refPrice === null) return null
+                      const refTpu = isMultiUnit ? oneWholeToken ?? tokensPerUnit : tokensPerUnit
+                      const dev = marketDeviation(refPrice, refTpu, decimals, mUsdPerToken)
+                      if (!dev) return null
+                      const c = dev.severity === 'red' ? 'var(--danger)' : 'var(--warn, #b45309)'
+                      return <span className="text-xs" style={{ color: c }}>({dev.label})</span>
+                    })()}
+                    {marketPricePerUnit && (
+                      <button
+                        onClick={() => updateTier(i, 'pricePerUnit', marketPricePerUnit)}
+                        className="text-xs underline-offset-2 underline transition-opacity hover:opacity-60"
+                        style={{ color: 'var(--accent)' }}>
+                        Set to market
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <button onClick={() => removeTier(i)} disabled={tiers.length <= 1}
-                  className="size-7 flex items-center justify-center rounded-lg disabled:opacity-20 hover:opacity-60"
+                  className="size-7 flex items-center justify-center rounded-lg disabled:opacity-20 hover:opacity-60 mt-1"
                   style={{ color: 'var(--danger)' }}>
                   <Trash2 className="size-3.5" />
                 </button>
-              </div>
-              {/* Per-unit equivalent (multi-unit mode) + market deviation + "Set to market" */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1">
-                {isMultiUnit && tierPricePerUnit !== null && (
-                  <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                    = {formatUsdcPrice(tierPricePerUnit)}/unit
-                  </span>
-                )}
-                {!isMultiUnit && tierPPT && (
-                  <span className="text-xs" style={{ color: 'var(--muted)' }}>{tierPPT} per {symbol}</span>
-                )}
-                {mUsdPerToken !== undefined && tierPriceAsPerToken !== null && tokensPerUnit !== null && (() => {
-                  // Deviation is always in per-token space for comparison.
-                  const refPrice = isMultiUnit
-                    ? tierPriceAsPerToken  // per-token micro-USDC
-                    : tierPricePerUnit     // per-unit micro-USDC (same as per-token when 1:1)
-                  if (refPrice === null) return null
-                  const refTpu = isMultiUnit ? oneWholeToken ?? tokensPerUnit : tokensPerUnit
-                  const dev = marketDeviation(refPrice, refTpu, decimals, mUsdPerToken)
-                  if (!dev) return null
-                  const c = dev.severity === 'red' ? 'var(--danger)' : 'var(--warn, #b45309)'
-                  return <span className="text-xs" style={{ color: c }}>({dev.label})</span>
-                })()}
-                {marketPricePerUnit && (
-                  <button
-                    onClick={() => updateTier(i, 'pricePerUnit', marketPricePerUnit)}
-                    className="text-xs underline-offset-2 underline transition-opacity hover:opacity-60"
-                    style={{ color: 'var(--accent)' }}>
-                    Set to market
-                  </button>
-                )}
               </div>
             </div>
             )
@@ -1388,7 +1471,8 @@ export function SupplierView({ onDealPosted }: { onDealPosted: (id: bigint) => v
             <span>Post deal</span>
           </div>
           <button onClick={handleApprove}
-            disabled={busy || !!tokensPerUnitErr || overBudget || balanceIsZero}
+            disabled={busy || !!tokensPerUnitErr || overBudget || balanceIsZero ||
+              tiers.some(t => { const n = parseInt(t.minUnits); return n > 0 && effectiveMaxUnitsNum > 0 && n > effectiveMaxUnitsNum })}
             className="w-full rounded-2xl py-3.5 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100"
             style={{ background: 'var(--accent)' }}>
             {approveConfirming

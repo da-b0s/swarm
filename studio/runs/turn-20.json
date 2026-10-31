@@ -1,0 +1,318 @@
+{
+  "status": "completed",
+  "appId": "2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "threadId": "a5b6aec9-46c3-4e21-bb9b-d709edf03ff9",
+  "sandboxId": "ibmblayo88i5cbgonwnn2",
+  "finalText": "Reading both files first. Good. Now I have the full picture. Four independent changes:\n\n1. **Auto-adjust tier thresholds** with `tiersEditedRef`, spread across stock, inline over-stock errors, smart \"Add tier\"\n2. **Token amount under each threshold** (= N × tokensPerUnit, formatted)\n3. **\"Set to market\" moves under the price field** (restructure the helper row into two separate rows)\n4. **Header sync** in App.tsx Starting with the state/logic changes, then the render changes.\n\n**Step 1 — state and logic: `tiersEditedRef`, `autoDefaultTiers`, `addTier`, over-stock validation.** Now add the auto-threshold effect right after the `mRateForEffect` effect: `effectiveMaxUnitsNum` is derived during render, not stored in state, so the effect dep won't fire reactively on its own when balance changes. I need to trigger it via a state dep. Let me use `effectiveMaxUnitsNum` via a `useMemo`-derived state equivalent — the simplest fix is to keep a `prevStockRef` inside the effect and put `effectiveMaxUnitsNum` in the dep array directly. That's what I already did, but React won't re-run effects for non-state/non-prop values unless they change between renders. Since `effectiveMaxUnitsNum` IS re-computed every render, any change in `tokenBalance`, `tokensPerUnit`, or `maxUnits` triggers a render which changes this value and re-fires the effect. This is correct — leave it.\n\nNow mark `tiersEditedRef.current = true` when the seller edits a threshold, and reset it when token changes. Also update `addTier` with the smart proposal logic: Also reset `tiersEditedRef` when the token changes (alongside `tpuEditedRef`): Also add `\"Add tier\" disabled when last threshold is at stock` — instead of hiding the button, disable it with a tooltip-like title and show the message in the button area. The spec says show a message instead of adding. I'll keep the button but change its label and disable it when `lastTierAtStock`: Now the **per-tier render loop** — add inline over-stock error under the threshold input, add token amount line under threshold, and move \"Set to market\" under the price input: Also add `overStock` to the Approve button's disabled guard so Post stays blocked: Now **Step 4 — header sync in App.tsx**: Now run the check: The auto-threshold effect fires before `effectiveMaxUnitsNum` is declared (it's derived inline after the effect). Move the effect to after `effectiveMaxUnitsNum` is declared: Now place it after `effectiveMaxUnitsNum` is computed (after the balance checks section): ```\noxlint: Found 0 warnings and 0 errors.\ntsc --noEmit: exit 0\n``` Here is what changed.\n\n**Tier thresholds follow the stock (SupplierView.tsx):**\n- Added `tiersEditedRef` (a `useRef<boolean>(false)`). A `useEffect` keyed on `effectiveMaxUnitsNum` fires whenever the stock changes. While `tiersEditedRef.current` is false it rebuilds the `minUnits` fields: 1 tier gets `[1]`; 2 tiers get `[1, stock]`; 3 tiers get `[1, ceil(stock/2), stock]`. Duplicates are deduplicated so stock=1 collapses to one usable tier, stock=2 with 3 tiers gives `[1, 2]`.\n- `updateTier` sets `tiersEditedRef.current = true` whenever the `minUnits` field is changed. `removeTier` and `addTier` also set it.\n- Selecting a new token resets `tiersEditedRef.current = false` alongside the existing `tpuEditedRef` reset.\n\n**Inline over-stock error:** Each tier row computes `overStock = tierMinNum > effectiveMaxUnitsNum`. When true the threshold input gets a red border and the message \"Starts at N units but stock is M. Lower it or raise the stock.\" appears underneath. The Approve button's `disabled` condition is also extended to block while any tier has an over-stock threshold.\n\n**Smart \"Add tier\":** `addTier` now proposes `ceil((lastMin + stock) / 2)` as the new threshold. When the last threshold is already at or above the stock, `addTier` is disabled and the button label changes to \"Raise stock to add tier\" with a `title` tooltip.\n\n**Token amount under each threshold (item 2):** When `isMultiUnit` and the threshold is valid and not over-stock, a helper line \"= 0.00125 cirBTC\" appears under the threshold input (`threshold × tokensPerUnit` formatted with token decimals). Hidden when 1 unit = 1 whole token (single-unit mode).\n\n**\"Set to market\" under the price field (item 3):** The tier row grid is now `items-start` with each column a `flex flex-col`. The threshold column holds the input plus its error/token-amount note. The price column holds the input plus a helper row containing the per-unit equivalent, deviation badge, and \"Set to market\" button — all under the price input, not under the units input.\n\n**Header sync (App.tsx):** Header row is `gap-2 sm:gap-3`. \"Swarm\" wordmark span is `hidden sm:inline`. Tab container is `flex gap-0 sm:gap-1 ml-0 sm:ml-4`. Each tab button is `px-1.5 sm:px-3`. Theme toggle button is `hidden sm:flex`.",
+  "todos": [
+    {
+      "id": "todo:1. auto-adjust tier thresholds + over-stock inline errors + smart add tier:0",
+      "text": "1. Auto-adjust tier thresholds + over-stock inline errors + smart Add tier",
+      "status": "done"
+    },
+    {
+      "id": "todo:2. token amount under each threshold field + set-to-market under price + over-stock error:0",
+      "text": "2. Token amount under each threshold field + Set-to-market under price + over-stock error",
+      "status": "done"
+    },
+    {
+      "id": "todo:4. header sync in app.tsx:0",
+      "text": "4. Header sync in App.tsx",
+      "status": "done"
+    },
+    {
+      "id": "todo:run check, paste output:0",
+      "text": "Run check, paste output",
+      "status": "done"
+    }
+  ],
+  "filesChanged": [
+    "src/App.tsx",
+    "src/swarm/SupplierView.tsx"
+  ],
+  "fileDiffs": [
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        <div className=\"max-w-6xl mx-auto px-4 h-14 flex items-center gap-3\">\n+        <div className=\"max-w-6xl mx-auto px-4 h-14 flex items-center gap-2 sm:gap-3\">\n           {/* Logo + wordmark */}\n           <button onClick={() => handleTabChange('home')} aria-label=\"Swarm home\"\n             className=\"flex items-center gap-2 shrink-0 min-w-0\">\n             <SwarmLogo size={28} />\n-            <span className=\"display text-base font-bold\" style={{ color: 'var(--ink)' }}>Swarm</span>\n+            <span className=\"hidden sm:inline display text-base font-bold\" style={{ color: 'var(--ink)' }}>Swarm</span>"
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 6,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           {/* Tab bar — left-aligned after logo */}\n-          <div className=\"flex gap-1 ml-4\">\n+          <div className=\"flex gap-0 sm:gap-1 ml-0 sm:ml-4\">\n             {(['deals', 'post', 'proof'] as const).map(id => (\n               <button key={id}\n                 onClick={() => handleTabChange(id)}\n-                className=\"px-3 py-1.5 rounded-xl text-sm font-medium transition-all\"\n+                className=\"px-1.5 sm:px-3 py-1.5 rounded-xl text-sm font-medium transition-all\""
+    },
+    {
+      "path": "src/App.tsx",
+      "action": "edit",
+      "addedLines": 4,
+      "removedLines": 4,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           {/* Light/dark toggle */}\n           <button onClick={toggleTheme}\n             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}\n-            className=\"shrink-0 size-8 flex items-center justify-center rounded-xl transition-all hover:opacity-70\"\n+            className=\"shrink-0 size-8 hidden sm:flex items-center justify-center rounded-xl transition-all hover:opacity-70\""
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 6,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // Track whether the seller has manually edited the stock field yet\n-  const [stockEdited, setStockEdited] = useState(false)\n+  const [stockEdited, setStockEdited] = useState(false)\n+\n+  // Track whether the seller has manually edited any tier threshold yet.\n+  // While false, thresholds stay spread across the current stock automatically.\n+  const tiersEditedRef = useRef(false)"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 28,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // ── Token reads ──────────────────────────────────────────────────────────\n+  // ── Auto-adjust tier thresholds when stock changes ───────────────────────\n+  // Spreads thresholds evenly across the current stock.\n+  // Only runs while the seller has not manually edited any threshold field.\n+  useEffect(() => {\n+    if (tiersEditedRef.current) return\n+    const stock = effectiveMaxUnitsNum\n+    if (stock < 1) return\n+    setTiers(prev => {"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 20,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "   // ── Tier mutations ───────────────────────────────────────────────────────\n-  const addTier    = () => setTiers(t => [...t, { minUnits: '', pricePerUnit: '' }])\n-  const removeTier = (i: number) => setTiers(t => t.filter((_, j) => j !== i))\n-  const updateTier = (i: number, field: keyof TierInput, val: string) =>\n-    setTiers(t => t.map((tier, j) => j === i ? { ...tier, [field]: val } : tier))\n+  const addTier = () => {\n+    if (tiers.length >= MAX_TIERS) return\n+    tiersEditedRef.current = true\n+    setTiers(prev => {\n+      const lastMin = parseInt(prev[prev.length - 1]?.minUnits ?? '0') || 0\n+      const stock   = effectiveMaxUnitsNum\n+      // Propose midpoint between last threshold and stock; if no room, leave blank."
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-        onSelect={t => { setSelectedToken(t); setStockEdited(false); tpuEditedRef.current = false }}\n+        onSelect={t => { setSelectedToken(t); setStockEdited(false); tpuEditedRef.current = false; tiersEditedRef.current = false }}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 15,
+      "removedLines": 5,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-            <button onClick={addTier} disabled={tiers.length >= MAX_TIERS}\n-              className=\"flex items-center gap-1 text-xs font-semibold rounded-lg px-2.5 py-1 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-30\"\n-              style={{ background: 'var(--surface-muted)', color: 'var(--accent)' }}>\n-              <Plus className=\"size-3\" /> Add tier\n-            </button>\n+            {(() => {\n+              const lastMin  = parseInt(tiers[tiers.length - 1]?.minUnits ?? '0') || 0\n+              const atCap    = tiers.length >= MAX_TIERS\n+              const lastAtStock = lastMin >= effectiveMaxUnitsNum && effectiveMaxUnitsNum > 0\n+              const disabledAdd = atCap || lastAtStock\n+              return (\n+                <button onClick={addTier} disabled={disabledAdd}\n+                  title={lastAtStock ? 'Raise the stock to add another tier.' : undefined}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 97,
+      "removedLines": 70,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "         <div className=\"space-y-2\">\n           {tiers.map((tier, i) => {\n             // In multi-unit mode the input is per-token; compute per-unit for display.\n             const tierPricePerUnit = isMultiUnit\n               ? perTokenToPerUnit(tier.pricePerUnit)\n               : parsePriceToMicro(tier.pricePerUnit)\n             const tierPriceAsPerToken = isMultiUnit\n               ? parsePriceToMicro(tier.pricePerUnit)  // raw per-token micro"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 3,
+      "removedLines": 2,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "           <button onClick={handleApprove}\n-            disabled={busy || !!tokensPerUnitErr || overBudget || balanceIsZero}\n+            disabled={busy || !!tokensPerUnitErr || overBudget || balanceIsZero ||\n+              tiers.some(t => { const n = parseInt(t.minUnits); return n > 0 && effectiveMaxUnitsNum > 0 && n > effectiveMaxUnitsNum })}"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 1,
+      "removedLines": 28,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // ── Auto-adjust tier thresholds when stock changes ───────────────────────\n-  // Spreads thresholds evenly across the current stock.\n-  // Only runs while the seller has not manually edited any threshold field.\n-  useEffect(() => {\n-    if (tiersEditedRef.current) return\n-    const stock = effectiveMaxUnitsNum\n-    if (stock < 1) return\n-    setTiers(prev => {\n+  // ── Token reads ──────────────────────────────────────────────────────────"
+    },
+    {
+      "path": "src/swarm/SupplierView.tsx",
+      "action": "edit",
+      "addedLines": 28,
+      "removedLines": 1,
+      "isFragment": true,
+      "truncated": true,
+      "hunk": "-  // ── Per-token price mode ─────────────────────────────────────────────────\n+  // ── Auto-adjust tier thresholds when stock changes ───────────────────────\n+  // Spreads thresholds evenly across the current stock.\n+  // Only runs while the seller has not manually edited any threshold field.\n+  useEffect(() => {\n+    if (tiersEditedRef.current) return\n+    const stock = effectiveMaxUnitsNum\n+    if (stock < 1) return\n+    setTiers(prev => {"
+    }
+  ],
+  "contextFiles": [],
+  "workspaceFiles": [],
+  "deployments": [
+    {
+      "contract": "Settler",
+      "address": "0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9c5cfe0f74cb5902d79a575be1d10d7e453f6a0e",
+      "txHash": "0x0c76e81ef25ed65fbd96c16970b18be76114b80a48ef565f48a7db6a2c98e385",
+      "deployedAt": "2026-10-20T09:25:47.040Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x257d1535778f0621d4ab60922a7b065e8cb61198",
+      "txHash": "0x9914744b637b10a9574c7939a141408b60fda4d261ec660047123b07fec20700",
+      "deployedAt": "2026-10-20T09:25:33.492Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x70e334abbbb827cdb7220f89e20934b0a96a8628",
+      "txHash": "0xf3cea87f918fe72d8e41af05dfe26067fc63b628df24db5983019b7fb5b74f68",
+      "deployedAt": "2026-10-20T09:25:22.051Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xe964f2cc8aefd96cf93481a3a35ca675d67bec72",
+      "txHash": "0xa21f1d59485cf721a096bed7af54655b9727c449b7121e25fd26627f6d50c0a5",
+      "deployedAt": "2026-10-20T09:12:25.829Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd86cc3f371d9d357e0719c36c7f57f8485c4a6e9",
+      "txHash": "0x7f97de146bdea5a69c6cdc07ce5ea2673d8c2da6ccdda2f9fd6dd9d1b80ca103",
+      "deployedAt": "2026-10-20T09:12:14.691Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xcd513c3bd9831dd0b4dd2274b9cfed589822e6d0",
+      "txHash": "0xb36dd31a80cb377ff0c8b5665ed3d841865f1a1ee97205e3e180cfaa6e06f012",
+      "deployedAt": "2026-10-20T09:12:03.898Z"
+    },
+    {
+      "contract": "Settler",
+      "address": "0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x7069f5aef3ec8e3b138cc0381457b846a982d81d",
+      "txHash": "0xe63f480f0d56e33c868a9fcfd6be7c71eaea2a57c477c8235dea66376c9b1027",
+      "deployedAt": "2026-10-19T08:39:27.184Z"
+    },
+    {
+      "contract": "DemandPool",
+      "address": "0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xd9703a5d11de5c1ace35e3bb8e176fea980d3a48",
+      "txHash": "0x6dfee8aefafe7c3883b547bb9509cc55416e27c64bba4174d61bf6760c2c355a",
+      "deployedAt": "2026-10-19T08:39:16.268Z"
+    },
+    {
+      "contract": "DealFactory",
+      "address": "0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "network": "Arc Testnet",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6467ba3447a30b8ff6ad237ec334b554cf82e4f9",
+      "txHash": "0xd5c0e5abdf402b3a5fc6007c0042aadb48f7460b0afe80f89c2e16118b4190fe",
+      "deployedAt": "2026-10-19T08:39:05.550Z"
+    }
+  ],
+  "artifacts": {
+    "contractSources": [
+      "contracts/DealFactory.sol",
+      "contracts/DemandPool.sol",
+      "contracts/Settler.sol",
+      "contracts/SwarmPass.sol",
+      "contracts/SwarmTypes.sol",
+      "contracts/script/Create2Factory.sol",
+      "contracts/script/DeployCreate2.s.sol",
+      "contracts/test-helpers/MockBlocklistedEIP3009USDC.sol",
+      "contracts/test-helpers/MockBlocklistedERC20.sol",
+      "contracts/test-helpers/MockEIP3009USDC.sol",
+      "contracts/test-helpers/MockERC20.sol",
+      "contracts/test-helpers/MockFeeToken.sol",
+      "contracts/test-helpers/MockReentrantERC20.sol",
+      "contracts/test-helpers/MockReentrantGoods.sol",
+      "contracts/test/SwarmV2GaslessTest.t.sol",
+      "contracts/test/SwarmV2PartialWithdrawTest.t.sol",
+      "contracts/test/SwarmV2Smoke.t.sol",
+      "contracts/test/SwarmV2Test.t.sol",
+      "contracts/test/SwarmV2TopUpTest.t.sol"
+    ],
+    "abis": [
+      "contracts/out/Address.sol/Address.json",
+      "contracts/out/Base.sol/CommonBase.json",
+      "contracts/out/Base.sol/ScriptBase.json",
+      "contracts/out/Base.sol/TestBase.json",
+      "contracts/out/Context.sol/Context.json",
+      "contracts/out/Create2.sol/Create2.json",
+      "contracts/out/Create2Factory.sol/Create2Factory.json",
+      "contracts/out/DealFactory.sol/DealFactory.json",
+      "contracts/out/DemandPool.sol/DemandPool.json",
+      "contracts/out/DemandPool.sol/ISettler.json",
+      "contracts/out/DemandPool.sol/IUSDC3009.json",
+      "contracts/out/DeployCreate2.s.sol/DeployCreate2.json",
+      "contracts/out/ERC20.sol/ERC20.json",
+      "contracts/out/Errors.sol/Errors.json",
+      "contracts/out/IERC1363.sol/IERC1363.json",
+      "contracts/out/IERC165.sol/IERC165.json",
+      "contracts/out/IERC20.sol/IERC20.json",
+      "contracts/out/IERC20Metadata.sol/IERC20Metadata.json",
+      "contracts/out/IMulticall3.sol/IMulticall3.json",
+      "contracts/out/MockBlocklistedEIP3009USDC.sol/MockBlocklistedEIP3009USDC.json",
+      "contracts/out/MockBlocklistedERC20.sol/MockBlocklistedERC20.json",
+      "contracts/out/MockEIP3009USDC.sol/MockEIP3009USDC.json",
+      "contracts/out/MockERC20.sol/MockERC20.json",
+      "contracts/out/MockFeeToken.sol/MockFeeToken.json",
+      "contracts/out/MockReentrantERC20.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantERC20.sol/MockReentrantERC20.json",
+      "contracts/out/MockReentrantGoods.sol/ISettlerClaim.json",
+      "contracts/out/MockReentrantGoods.sol/MockReentrantGoods.json",
+      "contracts/out/ReentrancyGuard.sol/ReentrancyGuard.json",
+      "contracts/out/SafeERC20.sol/SafeERC20.json",
+      "contracts/out/Script.sol/Script.json",
+      "contracts/out/Settler.sol/Settler.json",
+      "contracts/out/StdAssertions.sol/StdAssertions.json",
+      "contracts/out/StdChains.sol/StdChains.json",
+      "contracts/out/StdCheats.sol/StdCheats.json",
+      "contracts/out/StdCheats.sol/StdCheatsSafe.json",
+      "contracts/out/StdConstants.sol/StdConstants.json",
+      "contracts/out/StdError.sol/stdError.json",
+      "contracts/out/StdInvariant.sol/StdInvariant.json",
+      "contracts/out/StdJson.sol/stdJson.json",
+      "contracts/out/StdMath.sol/stdMath.json",
+      "contracts/out/StdStorage.sol/stdStorage.json",
+      "contracts/out/StdStorage.sol/stdStorageSafe.json",
+      "contracts/out/StdStyle.sol/StdStyle.json",
+      "contracts/out/StdToml.sol/stdToml.json",
+      "contracts/out/StdUtils.sol/StdUtils.json",
+      "contracts/out/SwarmGaslessTest.t.sol/SwarmGaslessTest.json",
+      "contracts/out/SwarmPass.sol/SwarmPass.json",
+      "contracts/out/SwarmTest.t.sol/SwarmTest.json",
+      "contracts/out/SwarmTypes.sol/SwarmTypes.json",
+      "contracts/out/SwarmV2GaslessTest.t.sol/SwarmV2GaslessTest.json",
+      "contracts/out/SwarmV2PartialWithdrawTest.t.sol/SwarmV2PartialWithdrawTest.json",
+      "contracts/out/SwarmV2Smoke.t.sol/SwarmV2Smoke.json",
+      "contracts/out/SwarmV2Test.t.sol/SwarmV2Test.json",
+      "contracts/out/SwarmV2TopUpTest.t.sol/SwarmV2TopUpTest.json",
+      "contracts/out/Test.sol/Test.json",
+      "contracts/out/Vm.sol/Vm.json",
+      "contracts/out/Vm.sol/VmSafe.json",
+      "contracts/out/console.sol/console.json",
+      "contracts/out/console2.sol/console2.json",
+      "contracts/out/draft-IERC6093.sol/IERC1155Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC20Errors.json",
+      "contracts/out/draft-IERC6093.sol/IERC721Errors.json",
+      "contracts/out/safeconsole.sol/safeconsole.json"
+    ],
+    "metadata": [
+      "contracts/contract-metadata/DealFactory.json",
+      "contracts/contract-metadata/DemandPool.json",
+      "contracts/contract-metadata/Settler.json"
+    ]
+  },
+  "webUrl": "https://studio.arc.io/app/2fe1f645-9652-481c-a05d-bc8d769c63c9",
+  "questions": null,
+  "errorMessage": null,
+  "traceId": null,
+  "budget": null
+}
